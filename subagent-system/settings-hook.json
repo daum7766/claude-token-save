@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/scripts/subagent-usage.js\" --hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/scripts/subagent-retro.js\" --due --session-start",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

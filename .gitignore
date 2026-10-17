@@ -1,0 +1,10 @@
+.DS_Store
+*.bak*
+*~
+*.orig
+node_modules/
+# 키트 폴더에서 스크립트를 돌리면 스크립트 옆에 생기는 사용 기록과 설정(프로젝트 경로, 사용자 메시지 일부가 든다)
+subagent-system/records/
+subagent-system/config.json
+# 개발 중 Claude Code가 mod 폴더를 읽으면 만드는 타입 파일
+agent-meter/.claude-plugin/types/
