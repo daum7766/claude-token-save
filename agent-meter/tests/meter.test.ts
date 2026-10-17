@@ -268,6 +268,31 @@ test('설정에 기본 모드가 없어도 첫 대화 전에는 --dangerously-sk
   expect(margins).toContain(-27)
 })
 
+// 엔진은 표가 힌트 줄을 대신하는 동안 힌트 내용과 상관없이 권한 모드 표시를 왼쪽에 그린다
+for (const [name, hint] of [
+  ['백그라운드 셸이 있어 힌트 줄이 작업 관리 안내로 바뀌어도', '1 shell · ↓ to manage'],
+  ['응답 중이라 힌트 줄이 중단 안내로 바뀌어도', 'esc to interrupt'],
+] as const) {
+  test(`${name} 권한 모드 표시 폭만큼 표를 왼쪽으로 당긴다`, { timeoutMs: 30_000 }, async ($, on) => {
+    baseHandlers(on, { defaultMode: () => 'bypassPermissions' })
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    const margins = (await (await mountHint($, hint)).findAll({ type: 'Box' })).map(b => (b.props as { marginLeft?: number }).marginLeft)
+    expect(margins).toContain(-27)
+  })
+}
+
+for (const [mode, margin] of [
+  ['default', -19],
+  ['dontAsk', -18],
+] as const) {
+  test(`권한 모드가 ${mode}이면 권한 모드 표시 폭(${-margin}칸)만큼 표를 왼쪽으로 당긴다`, { timeoutMs: 30_000 }, async ($, on) => {
+    baseHandlers(on, { defaultMode: () => mode })
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    const margins = (await (await mountHint($)).findAll({ type: 'Box' })).map(b => (b.props as { marginLeft?: number }).marginLeft)
+    expect(margins).toContain(margin)
+  })
+}
+
 const pathCases: [string, string, string, string?][] = [
   ['홈 아래 폴더는 홈 부분을 ~로 줄인다', '/Users/user/Downloads/claude-setup-kit', '~/Downloads/claude-setup-kit'],
   ['홈 자체는 ~로 그린다', '/Users/user', '~'],

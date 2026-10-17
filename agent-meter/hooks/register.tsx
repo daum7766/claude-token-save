@@ -697,6 +697,8 @@ const MODE_PILLS: Record<string, string> = {
   acceptEdits: '⏵⏵ accept edits on',
   plan: '⏸ plan mode on',
   auto: '⏵⏵ auto mode on',
+  default: '⏸ manual mode on',
+  dontAsk: "⏵⏵ don't ask on",
 }
 const PILL_SEPARATOR = ' · '
 
@@ -729,10 +731,10 @@ async function isMeterHidden($: EngineInterface): Promise<boolean> {
   return typeof stored === 'boolean' ? stored : await read($, isHidden)
 }
 
-function pillOffset(mode: string, hint: string): number {
+// 백그라운드 작업이나 응답 중에는 힌트에서 shift+tab 안내가 빠져도 권한 모드 표시는 그대로 그려지므로 힌트 내용은 보지 않는다
+function pillOffset(mode: string): number {
   const pill = MODE_PILLS[mode]
-  if (!pill || !hint.includes('shift+tab')) return 0
-  return cells(pill + PILL_SEPARATOR)
+  return pill ? cells(pill + PILL_SEPARATOR) : 0
 }
 
 export const register: Register = on => {
@@ -854,7 +856,7 @@ export const register: Register = on => {
     const s = await read($, session)
     const width = (e.viewport?.columns ?? 160) - 2
     const t = buildTable(s, await read($, loops), at, width, await isTokensShown($), await isOneMillionDisabled($))
-    const offset = pillOffset(await read($, permissionMode), e.props.hint)
+    const offset = pillOffset(await read($, permissionMode))
 
     return (
       <Box flexDirection="column">
