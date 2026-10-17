@@ -1,6 +1,6 @@
 # Claude Code 설정 묶음
 
-다른 컴퓨터의 Claude Code에 옮겨 쓰는 것들이 들어 있다. macOS, 리눅스, Windows에서 쓴다. Windows는 Git for Windows가 있어야 한다. 이 git 저장소 하나만 받아 쓰면 된다(받는 법은 아래 「공유」). node 18 이상과 Claude Code 2.1.293 이상이 필요하고, Claude Code는 최신 버전을 권한다. 문서와 표, Claude가 따르는 규칙이 모두 한국어라 한국어로 Claude Code를 쓰는 사람을 위한 묶음이다.
+macOS, 리눅스, Windows에서 쓴다. Windows는 Git for Windows가 있어야 한다. 이 git 저장소 하나만 받아 쓰면 된다(받는 법은 아래 「공유」). node 18 이상과 Claude Code 2.1.293 이상이 필요하고, Claude Code는 최신 버전을 권한다. 문서와 표, Claude가 따르는 규칙이 모두 한국어라 한국어로 Claude Code를 쓰는 사람을 위한 묶음이다.
 
 ## 목표
 
