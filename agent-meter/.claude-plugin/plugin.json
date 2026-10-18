@@ -1,6 +1,7 @@
 {
   "name": "agent-meter",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "메인과 서브에이전트의 모델, effort, 문맥, 토큰, 어림 비용, 캐시 남은 시간을 입력창 아래에 보여 준다",
   "types": "./types/index.d.ts"
 }
