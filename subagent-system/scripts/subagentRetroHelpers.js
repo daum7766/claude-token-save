@@ -62,7 +62,7 @@ const isResend = (prevText, text) => {
 };
 
 const toNumber = (v) => (v !== undefined && /^-?\d+(\.\d+)?$/.test(String(v).trim()) ? Number(v) : null);
-const stripAnnex = (kind) => kind.replace(/\s*[(（][^()（）]*[)）]\s*$/, '').trim();
+export const stripAnnex = (kind) => kind.replace(/\s*[(（][^()（）]*[)）]\s*$/, '').trim();
 
 // 사용 기록 안의 표시 줄은 정의 열(세 번째)에 이 값이 들어 있고 데이터 줄이 아니다.
 export const RETRO_MARK = '회고';

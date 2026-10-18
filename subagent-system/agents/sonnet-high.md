@@ -1,6 +1,6 @@
 ---
 name: sonnet-high
-description: 여러 곳을 빠짐없이 챙겨야 하거나 오래 걸리는 일. 여러 문서 갱신과 누락 점검, 오래 걸리는 일(긴 구현 계획 실행, 많은 파일의 같은 변경, 긴 재현 실행), 큰 diff의 코드 정리 검토(20파일 넘음), 긴 측정 실행(결과 해석은 메인이 하거나 Opus로). (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
+description: 여러 곳을 빠짐없이 챙겨야 하거나 오래 걸리는 일. 여러 문서 갱신과 누락 점검, 오래 걸리는 일(긴 구현 계획 실행, 많은 파일의 같은 변경, 긴 재현 실행), 큰 diff의 코드 정리 검토(20파일 넘음), 긴 측정 실행(결과 해석은 메인이 하거나 Opus로), 계획이 정한 무조건 Opus 영역 단계 구현. (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
 model: sonnet
 effort: high
 ---

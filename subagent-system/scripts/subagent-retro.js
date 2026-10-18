@@ -19,7 +19,7 @@
  *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
  *   node scripts/subagent-retro.js --slash "<인자>"                   슬래시 커맨드 인자(상태 보기, auto, ask, now, 그 밖은 사용법)와 같은 동작. 스킬은 인자가 auto, ask, now 중 하나와 정확히 같을 때만 부름. 항상 종료 코드 0
  *   node scripts/subagent-retro.js --kinds                            기록 전체에서 표에 없는 일 이름, 건수, 마지막 날짜만 찍음(새 일 이름을 짓기 전에 봄). config.json의 removedKinds에 든 이름에는 (사용자가 뺐거나 회고가 쪼갠 옛 이름)을, 표에 <이름>[기준] 꼴 칸이 있으면 (회고가 쪼갠 옛 이름)을 붙임
- *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 네 칸의 일(회고 정정 분류, 자동 회고, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 여섯 가지 일(회고 정정 분류, 자동 회고, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --restore-kind "<일 이름>"          사용자가 다시 넣으라고 한 일 이름을 removedKinds에서 뺌(비면 키를 지움). 다른 키는 그대로
  *   node scripts/subagent-retro.js --record-kit-hashes                키트가 통째로 바꾸는 설치본 파일(스크립트 폴더 전체, RETRO.md, GUIDE의 사용자 구역 밖, 정의의 description과 글쓰기 줄 밖, /retro 스킬)의 sha256을 config.json의 kitFileHashes에 적음(전체를 새로 씀). 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --check-kit-hashes [--kit <키트 폴더>]  설치본 파일을 kitFileHashes와 견줘 기록과 다른 파일(손으로 고쳤을 수 있음)과 없어진 파일을 찍음. removedDefs에 든 정의가 없는 것은 회고가 지운 것이라 따로 찍음. --kit을 주면 다른 파일 가운데 그 키트 폴더(subagent-system이 든 폴더)의 새 키트와 같은 파일에 표시를 붙임(업데이트가 이미 놓은 파일. 스킬은 $HOME/.claude를 절대 경로로 풀어 쓴 꼴도 같게 봄). 기록이 없으면 그렇다고 찍음. 아무것도 쓰지 않고 항상 종료 코드 0
@@ -120,8 +120,8 @@ const SPLIT_MARK = '(회고가 쪼갠 옛 이름)';
 // 섞인 칸 쪼개기는 옛 이름을 removedKinds에 남기고 `<옛 이름>[<기준>]` 꼴의 새 칸 둘을 넣는다. 사용자가 뺀 이름과 같은 배열에 남아 구별되지 않으므로 표에 그 꼴 칸이 있는지로 가린다.
 const isSplitOld = (name, known) => Boolean(known) && [...known].some((k) => k.startsWith(`${name}[`));
 const removedMark = (name, known) => (isSplitOld(name, known) ? SPLIT_MARK : REMOVED_MARK);
-// 체계가 표에서 이 일이 든 칸의 정의를 찾아 서브에이전트를 보내므로(회고, 자동 회고, 무조건 Opus 영역 구현, 올리기), 표에서 빠지면 보낼 정의를 못 찾는다.
-const RETRO_OWN_KINDS = ['회고 정정 분류', '자동 회고', '무조건 Opus 영역 구현', 'high로도 안 풀려 다시 보내는 일'];
+// 체계가 표에서 이 일이 든 칸의 정의를 찾아 서브에이전트를 보내므로(회고, 자동 회고, 무조건 Opus 영역의 판단과 구현, 올리기), 표에서 빠지면 보낼 정의를 못 찾는다.
+const RETRO_OWN_KINDS = ['회고 정정 분류', '자동 회고', '무조건 Opus 영역 판단', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현', 'high로도 안 풀려 다시 보내는 일'];
 
 // removedKinds에 든 이름의 표시를 풀어 쓴다. 표시마다 한 번만 찍는다.
 function printRemovedNotes(kinds, known, indent, forKinds = false) {
@@ -633,7 +633,7 @@ function changeRemovedKind(raw, add) {
   if (raw === undefined || raw.startsWith('--')) fail(`${flag}에는 일 이름이 필요합니다: ${flag} "<일 이름>"`);
   const name = kindNameOf(raw);
   if (!name) fail(`${flag}의 일 이름이 비어 있습니다: ${raw}`);
-  if (add && RETRO_OWN_KINDS.includes(name)) fail(`「${name}」: 체계가 쓰는 네 칸의 일이라 표에서 빼지 않습니다. 사용자가 빼 달라고 했으면 그렇다고 알리세요.`);
+  if (add && RETRO_OWN_KINDS.includes(name)) fail(`「${name}」: 체계가 쓰는 여섯 가지 일이라 표에서 빼지 않습니다. 사용자가 빼 달라고 했으면 그렇다고 알리세요.`);
   const text = readIfExists(CONFIG_FILE);
   const kinds = readConfig().removedKinds;
   const has = kinds.includes(name);

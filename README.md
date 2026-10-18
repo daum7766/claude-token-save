@@ -136,6 +136,7 @@ CLAUDE.md에 넣는 규칙은 `<!-- subagent-system 시작 -->`과 `<!-- subagen
   | 그 밖 | 사용법을 보인다. `auto`, `ask`, `now`와 글자 하나까지 같은 인자만 실행한다 |
 
 - 회고 표를 직접 보려면 어느 폴더에서나 `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js"`를 실행한다. 기록 폴더 위치는 같은 명령에 `--where`를 붙이면 나오고, 자주 반복되는 지시와 작업은 `--repeats`를 붙이면 나온다([`RETRO.md`](subagent-system/docs/RETRO.md)의 「반복 찾기」).
+- 서브에이전트가 시간을 어디에 쓰는지는 `node "$HOME/.claude/subagent-system/scripts/agent-time-breakdown.js" --since YYYY-MM-DD`, 메인 세션 비용과 서브에이전트 비용의 비교는 같은 폴더의 `main-session-cost.js --since YYYY-MM-DD`로 본다. 회고가 두 스크립트를 부르고([`RETRO.md`](subagent-system/docs/RETRO.md)의 「속도와 비용 보기」), 오래 걸리는 일이 생기면 메인이 앞의 것을 부른다([`SUBAGENT_GUIDE.md`](subagent-system/docs/SUBAGENT_GUIDE.md)의 「오래 걸릴 때」).
 - 서브에이전트가 끝날 때 쓰는 사용 기록 한 줄은 `--log` 명령으로 적는다. Git Bash와 PowerShell 어느 쪽에서도 같은 줄이 나와 한글이 깨지지 않는다. 적는 방법은 [`SUBAGENT_GUIDE.md`](subagent-system/docs/SUBAGENT_GUIDE.md)의 「기록과 회고」에 있다.
 
 ## 비용 어림값

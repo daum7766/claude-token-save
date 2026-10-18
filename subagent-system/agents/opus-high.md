@@ -1,6 +1,6 @@
 ---
 name: opus-high
-description: 놓쳐도 신호가 없는 일. 설계와 구현 계획 종합 검토, 최종 코드 리뷰, 원인 찾기(이슈 분석), 무조건 Opus 영역 구현. (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
+description: 놓쳐도 신호가 없는 일. 설계와 구현 계획 종합 검토, 최종 코드 리뷰, 원인 찾기(이슈 분석), 무조건 Opus 영역 판단, 무조건 Opus 영역 구현. (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
 model: opus
 effort: high
 ---
