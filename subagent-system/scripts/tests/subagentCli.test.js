@@ -1408,38 +1408,6 @@ describe('subagent-retro.js 대화 기록 보존 기간 실행', () => {
     const fresh = run(['--status'], setup([data('2026-08-01', 'a0'), mark, data('2026-10-12', 'a1')]));
     assert.match(fresh.stdout, /기간 기준: 보존 기간 30일, 2026-09-17부터 25일째인 2026-10-12에 묻습니다\(지금 26일 지남\)\n/);
   });
-
-  describe('--session-start', () => {
-    const old = [data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 17, 12).toISOString()), data('2026-10-12', 'a1')];
-
-    it('wait이면 아무것도 출력하지 않고 종료 코드 0이다', () => {
-      const r = run(['--due', '--session-start'], setup([data('2026-10-12', 'a0')]));
-      assert.deepEqual([r.status, r.stdout, r.stderr], [0, '', '']);
-    });
-
-    it('ask이면 [subagent-retro] 머리 아래에 판정과 설명 줄을 낸다', () => {
-      const r = run(['--due', '--session-start'], setup(old));
-      const out = r.stdout.trim().split('\n');
-      assert.equal(r.status, 0);
-      assert.deepEqual(out.slice(0, 2), ['[subagent-retro]', 'ask']);
-      assert.match(out.at(-1), /보존 기간\(30일\)/);
-    });
-
-    it('물을 것만 있고 wait이면 그 한 줄만 낸다', () => {
-      const e = setup([data('2026-10-12', 'a0')]);
-      fs.writeFileSync(path.join(e.dir, 'retro-pending.md'), '## 항목 하나\n내용\n');
-      assert.equal(run(['--due', '--session-start'], e).stdout, '[subagent-retro]\n물을 것 1건\n');
-    });
-
-    it('기록이 깨져도 종료 코드 0이고 출력이 없다', () => {
-      const e = setup([data('2026-10-12', 'a0')]);
-      fs.mkdirSync(path.join(e.dir, 'subagent-usage.tsv.d'));
-      fs.rmSync(path.join(e.dir, 'subagent-usage.tsv'));
-      fs.mkdirSync(path.join(e.dir, 'subagent-usage.tsv'));
-      const r = run(['--due', '--session-start'], e);
-      assert.deepEqual([r.status, r.stdout], [0, '']);
-    });
-  });
 });
 
 describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', () => {

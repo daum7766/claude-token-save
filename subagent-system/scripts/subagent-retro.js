@@ -11,7 +11,6 @@
  *   node scripts/subagent-retro.js --where                            기록 폴더의 절대 경로만 찍음(어느 폴더에서 실행해도 같음)
  *   node scripts/subagent-retro.js --count                            지난 회고 뒤 사용 기록 줄 수만 찍음
  *   node scripts/subagent-retro.js --due                              회고를 물을 때인지 `ask`, `auto`(자동 회고 방식), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상)이면 ask이고 그 칸은 둘째 줄에 찍음)
- *   node scripts/subagent-retro.js --due --session-start              세션 시작 훅용. wait이면 출력 없음, ask나 auto이면 `[subagent-retro]` 머리 아래에 --due 출력, 물을 것만 있으면 그 한 줄. 오류는 삼키고 항상 종료 코드 0
  *   node scripts/subagent-retro.js --snooze                           사용자가 회고를 미뤘다는 표시 줄을 사용 기록에 덧붙임(그 뒤 기준의 절반만큼, 최대 20줄 쌓일 때까지 --due가 wait. 올림이 쌓인 칸은 올림이 붙은 에이전트가 1명 더 생겨 조건을 다시 채울 때까지 묻지 않음. 그때 걸린 기준만 미루고, 기간 기준이 걸렸을 때만 기간 셈을 오늘부터 다시 함)
  *   node scripts/subagent-retro.js --retro-mode [auto|ask]            회고 방식(config.json)을 찍거나 바꿈. 인자가 없으면 지금 값만 찍고, 설정 파일이 없거나 깨졌으면 ask
  *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 전체 줄 수가 200줄을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
@@ -774,18 +773,6 @@ function printDue() {
   console.log(dueLines().lines.join('\n'));
 }
 
-// 세션 시작 훅용이다. 훅 출력은 문맥에 그대로 들어가므로 판정이 wait이면 비우고, 어떤 오류도 세션 시작을 막지 않게 삼킨다.
-// 물을 것만 있으면 메인이 작업을 마칠 때 물어야 하므로 그 한 줄만 낸다.
-function printDueForSessionStart() {
-  try {
-    const { head, lines, pending } = dueLines();
-    const out = head !== 'ask' && head !== 'auto' ? (pending ? [`물을 것 ${pending}건`] : []) : lines;
-    if (out.length) console.log(['[subagent-retro]', ...out].join('\n'));
-  } catch {
-    // 출력 없이 끝낸다.
-  }
-}
-
 function printStatus() {
   const { d, lock, mode, pending } = dueState();
   const head = dueHead(d, { mode, lockLive: lock === 'live' });
@@ -881,7 +868,7 @@ function main() {
   if (args.includes('--status')) return printStatus();
   if (args.includes('--log')) return logUsage(args);
   if (args.includes('--snooze')) return snooze();
-  if (args.includes('--due')) return args.includes('--session-start') ? printDueForSessionStart() : printDue();
+  if (args.includes('--due')) return printDue();
   const opts = parseArgs(args);
   if (opts.where) return console.log(RECORDS_DIR);
   if (opts.check) return printCheck();
