@@ -332,19 +332,17 @@ for (const [name, cwd, shown, home = '/Users/user'] of pathCases) {
   })
 }
 
-for (const [name, value, isWarmed] of [
-  ['끈 값 0', '0', false],
-  ['끈 값 false', 'false', false],
-  ['끈 값 OFF(대소문자 무시)', 'OFF', false],
-  ['그 밖의 값 1', '1', true],
-  ['값 없음', undefined, true],
+for (const [name, options, isWarmed] of [
+  ['꺼 두면', { keep_alive: false }, false],
+  ['켜 두면', { keep_alive: true }, true],
+  ['정하지 않아 기본값이면', {}, true],
 ] as const) {
-  test(`서브에이전트가 도는 중 AGENT_METER_KEEPALIVE가 ${name}이면 ${isWarmed ? '메인 캐시를 연장한다' : '연장 요청 없이 알림만 낸다'}`, { timeoutMs: 30_000 }, async ($, on) => {
+  test(`서브에이전트가 도는 중 keep_alive를 ${name} ${isWarmed ? '메인 캐시를 연장한다' : '연장 요청 없이 알림만 낸다'}`, { timeoutMs: 30_000, options }, async ($, on) => {
     const clock = mock.clock(on)
     const toasts: string[] = []
     let forks = 0
     on('agent.list', () => ({ value: [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] }))
-    on('env.get', (_$, e) => ({ value: (e as { name?: string }).name === 'AGENT_METER_KEEPALIVE' ? value : undefined }) as never)
+    on('env.get', () => ({ value: undefined }) as never)
     on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
     on('settings.read', () => ({ value: {} }) as never)
@@ -725,7 +723,7 @@ type CompactCase = {
   trigger?: string
   agentId?: string
   isAgentRunning?: boolean
-  keepAlive?: string
+  keepAlive?: boolean
   idleMinutes?: number
   tokens?: number
   breakdown?: { rawMaxTokens: number; autoCompactThreshold?: number } | null
@@ -737,7 +735,7 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
   const hasTokens = 'tokens' in c ? c.tokens : 300_000
   const breakdown = 'breakdown' in c ? c.breakdown : { rawMaxTokens: 400_000, autoCompactThreshold: 380_000 }
   on('agent.list', () => ({ value: c.isAgentRunning === false ? [] : [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] }))
-  on('env.get', (_$, e) => ({ value: (e as { name?: string }).name === 'AGENT_METER_KEEPALIVE' ? c.keepAlive : undefined }) as never)
+  on('env.get', () => ({ value: undefined }) as never)
   on('session.usage', () => ({
     value: { startedAt: 0, context: { window: 1_000_000, tokens: hasTokens, percent: 30, ...(breakdown ? { breakdown } : {}) }, rateLimits: [], cost: { usd: 1.5 } },
   }) as never)
@@ -777,7 +775,7 @@ for (const [name, c, isSkipped] of [
   ['메인이 51분 유휴이고 서브에이전트가 도는 중 대화가 임계 기준보다 작은 auto 압축', {}, true],
   ['같은 조건의 precompute 압축', { trigger: 'precompute' }, true],
   ['서브에이전트가 없으면', { isAgentRunning: false }, false],
-  ['AGENT_METER_KEEPALIVE가 꺼져 있으면', { keepAlive: 'off' }, false],
+  ['keep_alive가 꺼져 있으면', { keepAlive: false }, false],
   ['서브에이전트 자신의 압축(agentId 있음)이면', { agentId: 'a1' }, false],
   ['유휴가 50분 미만이면', { idleMinutes: 49 }, false],
   ['사람이 직접 누른 manual 압축이면', { trigger: 'manual' }, false],
@@ -785,7 +783,7 @@ for (const [name, c, isSkipped] of [
   ['대화 크기(tokens)가 없으면', { tokens: undefined }, false],
   ['압축 기준(breakdown)을 읽을 수 없으면', { breakdown: null }, false],
 ] as [string, CompactCase, boolean][]) {
-  test(`${name} 유휴 압축을 ${isSkipped ? '건너뛰고 알린다' : '막지 않는다'}`, { timeoutMs: 30_000 }, async ($, on) => {
+  test(`${name} 유휴 압축을 ${isSkipped ? '건너뛰고 알린다' : '막지 않는다'}`, { timeoutMs: 30_000, options: { keep_alive: c.keepAlive ?? true } }, async ($, on) => {
     const { result, toasts } = await compactAfterIdle($, on, c)
     if (isSkipped) {
       expect(result.skip).toBeDefined()

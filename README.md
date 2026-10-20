@@ -10,7 +10,7 @@ Claude Code에서는 메인 세션(내가 대화하는 Claude)이 일을 서브�
 
 | 폴더 | 내용 | 까는 법 |
 |:---|:---|:---|
-| `agent-meter/` | 입력창 아래에 메인과 서브에이전트의 모델, effort, 문맥, 토큰, 어림 비용, 프롬프트 캐시(같은 대화 앞부분을 싸게 다시 읽게 해 주는 저장)가 만료되기까지 남은 시간을 보여 주는 mod(Claude Code 화면에 붙이는 확장) | 2번 문장을 Claude에게 말하면 Claude가 함께 깔지 묻는다. agent-meter만 직접 깔 때는 1번 스크립트 한 번 실행 |
+| `agent-meter/` | 입력창 아래에 메인과 서브에이전트의 모델, effort, 문맥, 토큰, 어림 비용, 프롬프트 캐시(같은 대화 앞부분을 싸게 다시 읽게 해 주는 저장)가 만료되기까지 남은 시간을 보여 주는 mod(Claude Code 화면에 붙이는 확장) | 2번 문장을 Claude에게 말하면 Claude가 함께 깔지 묻는다. agent-meter만 직접 깔 때는 1번 명령 한 줄(이 저장소가 플러그인 마켓플레이스) |
 | `subagent-system/` | 서브에이전트 라우팅(모델과 effort 정의 10개, 선택 표, 직군별 출발 표), 지시문 체크리스트, 토큰과 비용 기록, 회고(묻기 또는 자동)와 `/retro` 커맨드, 업데이트(`VERSION`으로 판단). `docs/ROUTING_PRESETS.md`(직군별 출발 표)와 `BACKGROUND.md`(모델 선택 규칙의 근거)는 설치하지 않고 키트에서 읽는 문서 | 2번 문장을 Claude에게 말함 |
 | `extras/` | 늘 지키는 규칙(CLAUDE.md에 넣을 줄), git 명령 확인 목록, 글쓰기 줄(CLAUDE.md와 정의에 넣을 줄) | 2번 설치 때 Claude가 묻고 고른 것만 넣음 |
 
@@ -18,23 +18,28 @@ Claude Code에서는 메인 세션(내가 대화하는 Claude)이 일을 서브�
 
 ## 1. agent-meter만 직접 설치
 
-```
-cd <이 폴더>
-node install-agent-meter.mjs
-```
-
-macOS와 리눅스에서는 `./install-agent-meter.sh`로도 된다. 같은 폴더의 `.mjs`를 `node`로 부르는 래퍼이고 인자도 그대로 넘긴다. keep-alive를 묻지 않고 정하려면 인자를 붙인다.
+이 저장소가 플러그인 마켓플레이스(`claude-token-save`)이고 agent-meter가 그 안의 플러그인이다. Claude Code 2.1.292 이상에서 터미널에 한 줄이면 마켓플레이스 등록과 설치가 함께 된다.
 
 ```
-node install-agent-meter.mjs --no-keepalive
+claude plugin install agent-meter --marketplace daum7766/claude-token-save
 ```
+
+Claude Code 안에서는 `/plugin install agent-meter --marketplace daum7766/claude-token-save`로도 된다. keep-alive를 끄고 싶으면 설치할 때 `--config keep_alive=false`를 붙이거나, 깐 뒤 Claude Code 안에서 `/config`의 agent-meter 줄(또는 `/plugin configure agent-meter@claude-token-save`)로 바꾼다. 셸에서 `claude plugin configure agent-meter@claude-token-save --values-stdin`으로 바꾸면 Claude Code를 다시 열어야 적용된다고 안내가 찍힌다. `/config`로 바꾼 값이 바로 적용되는지는 확인하지 못했다.
 
 Claude Code를 새로 열면 입력창 아래에 사용량 표가 보인다. `/meter`로 표를 켜고 끄고, `/meter tokens`로 토큰 열(입력, 출력, 캐시 읽기, 캐시 쓰기)만 켜고 끈다. 토큰 열은 처음에는 보인다. 정한 상태(표를 숨긴 것 포함)는 새 세션에서도 이어진다.
 
-스크립트가 하는 일:
-- `agent-meter/`에서 시험 파일(`tests/`)과 `tsconfig.json`을 뺀 나머지를 `~/.claude/mods/agent-meter`에 복사한다. Windows에서는 `%USERPROFILE%\.claude` 아래이고, `CLAUDE_CONFIG_DIR`를 정해 두었으면 그 폴더 아래다. 이미 깔린 mod가 있으면 새것으로 바꾼다. 그 mod가 이 키트의 것과 다르면(손으로 고친 파일 등) 지우지 않고 `~/.claude/agent-meter-backup-날짜-시각`으로 옮기고 그 경로를 출력한다. 새 mod를 옆 폴더에 다 복사한 뒤 맞바꾸므로 복사가 실패해도 기존 mod와 `settings.json`은 그대로 남는다.
-- 설정 폴더의 `settings.json`에서 `env.CLAUDE_CODE_PLUGIN_DIRS`에 그 폴더를 더한다. 다른 설정과 파일 권한은 그대로 두고, 파일이 이미 있으면 고치기 전 파일을 `settings.json.bak-agent-meter-날짜-시각`으로 남긴다. `settings.json`이 심볼릭 링크(dotfiles 저장소 등)면 링크는 그대로 두고 링크가 가리키는 실제 파일에 쓴다. 실행할 때마다 새 이름이라 이전 백업을 덮어쓰지 않고, 만든 백업 경로를 출력한다.
-- 여러 번 실행해도 설정 줄은 한 번만 들어간다. 이미 `~/.claude/mods/agent-meter`처럼 적혀 있어도 같은 폴더면 더하지 않는다.
+설치가 하는 일:
+- 이 저장소를 마켓플레이스 `claude-token-save`로 등록한다. 사용자 `settings.json`의 `extraKnownMarketplaces`에 들어간다. 이미 등록돼 있으면 그대로 쓴다.
+- agent-meter를 사용자 범위로 깔고 `enabledPlugins`에 켠 표시를 남긴다. 플러그인 파일은 `~/.claude/plugins/` 아래 캐시에 놓이고, 이 키트의 옛 설치 스크립트가 쓰던 `~/.claude/mods/`와 `env.CLAUDE_CODE_PLUGIN_DIRS`는 쓰지 않는다.
+
+업데이트와 제거:
+- 사용자가 추가한 마켓플레이스는 자동 업데이트가 기본으로 꺼져 있다. 새 버전은 `claude plugin marketplace update claude-token-save`로 목록을 새로 받고 `claude plugin update agent-meter@claude-token-save`로 올린다. 새 버전은 다음 세션부터 읽힌다. agent-meter의 `.claude-plugin/plugin.json`에 `version`이 적혀 있어서 그 값이 바뀌어야 새 버전으로 본다.
+- 지우려면 `claude plugin uninstall agent-meter@claude-token-save`(저장된 옵션도 함께 지워진다)와 `claude plugin marketplace remove claude-token-save`다.
+
+예전 설치 스크립트(`install-agent-meter.mjs`)로 깐 컴퓨터는 2번의 문장을 말하면 업데이트가 마켓플레이스 설치로 옮기고 옛것을 치운다. 직접 옮기려면 위 설치 명령을 먼저 돌리고, 확인한 뒤 이렇게 정리한다. 옛 항목이 남으면 `CLAUDE_CODE_PLUGIN_DIRS`로 읽힌 폴더가 같은 이름의 마켓플레이스 복사본을 조용히 대신해 새 버전이 읽히지 않는다.
+- 설정 폴더의 `settings.json`에서 `env.CLAUDE_CODE_PLUGIN_DIRS`의 agent-meter 폴더(`~/.claude/mods/agent-meter`) 항목만 뺀다. 다른 항목은 그대로 두고, 비면 키를 지운다.
+- `env.AGENT_METER_KEEPALIVE`가 `"0"`이었다면 새 설정에서도 끈다(위 `--config`나 `/config`). 그 뒤 키를 지운다. `env`가 비면 `env` 키도 지운다.
+- `~/.claude/mods/agent-meter`는 지우지 않고 `mods/` 밖(예: `~/.claude/agent-meter-backup-날짜`)으로 옮겨 둔다.
 
 알아 둘 것:
 - `jq`가 없으면 resume(`claude --resume`으로 지난 대화를 다시 연 것)한 세션의 지난 사용량을 되살리는 기능만 빠진다. 설치는 macOS `brew install jq`, Windows `winget install jqlang.jq`, 리눅스는 배포판 패키지 관리자(`sudo apt install jq` 등)로 한다.
@@ -42,11 +47,9 @@ Claude Code를 새로 열면 입력창 아래에 사용량 표가 보인다. `/m
 - 요율은 `~/.claude/subagent-system/rates.json`(`CLAUDE_CONFIG_DIR`을 정해 두었으면 그 폴더 아래)을 읽고, 파일의 수정 시각이 바뀌면 5초 안에 다시 읽는다. 파일이 없거나 깨졌을 때만 mod에 든 내장 요율(`register.tsx`의 `BUILTIN_RATES`)을 쓴다. 파일에 없는 모델은 비용이 `?`로 보인다. 그래서 요율은 `rates.json` 하나만 고치면 되고, agent-meter를 다시 설치해도 그 값이 유지된다.
 - 한 요청 안에 5분 캐시 쓰기와 1시간 캐시 쓰기가 섞이면 한쪽 요율로 계산한다(엔진이 둘을 가르는 값을 주지 않는다). 그 요청의 어림 비용은 조금 어긋날 수 있다.
 - 표의 「캐시」 열은 프롬프트 캐시가 만료되기까지 남은 시간이고, 「재캐시」 열은 만료된 뒤 다음 요청이 대화 전체를 캐시에 다시 쓸 때 드는 어림 비용이며, 「캐시만료」 열은 지금까지 캐시가 만료된 횟수와 그때 든 비용이다.
-- 설치할 때 keep-alive(아래 설명)를 켤지 묻는다. Enter만 치면 지금 값을 그대로 둔다(처음 설치는 켬이라 `[Y/n]`, 꺼 두었으면 `[y/N]`). 질문은 아무것도 바꾸기 전에 해서, 답하다 Ctrl-C로 멈춰도 바뀐 것이 없다. `--no-keepalive`나 `--keepalive`를 붙이면 묻지 않는다. `--keepalive`와 `--no-keepalive`를 함께 주면 오류로 멈춘다. 모르는 인자를 주면 설치하지 않고 쓰는 법을 찍는다(`--help`나 `-h`는 쓰는 법만 찍는다). 터미널이 아닌 곳(Claude의 셸 등)에서 인자 없이 실행하면 묻지 않고 `settings.json`의 기존 값을 그대로 둔다.
-- 서브에이전트가 도는 동안 메인 캐시가 곧 만료되면(1시간 캐시는 3분 전, 5분 캐시는 1분 전), 메인 요청을 한 번 더 보내 만료 시각을 늘린다(keep-alive). 돌아와서 대화 전체를 캐시에 다시 쓰는 것보다 싸지만 이 요청도 돈이 들고, 들어간 비용은 알림으로 보여 준다. 끄려면 설치할 때 `--no-keepalive`를 주거나 `settings.json`의 `env`에 `AGENT_METER_KEEPALIVE`를 `"0"`으로 둔다(지우면 켠다). 끄거나 서브에이전트가 돌지 않을 때는 연장하지 않고, 알림만 낸다(1시간 캐시는 만료 5분 전, 5분 캐시는 1분 전). 연장 요청이 캐시를 읽지 못하면 연장 알림 대신 만료 알림이 나가고, 그 요청에 든 비용도 메인 비용에 더한다.
+- 서브에이전트가 도는 동안 메인 캐시가 곧 만료되면(1시간 캐시는 3분 전, 5분 캐시는 1분 전), 메인 요청을 한 번 더 보내 만료 시각을 늘린다(keep-alive). 돌아와서 대화 전체를 캐시에 다시 쓰는 것보다 싸지만 이 요청도 돈이 들고, 들어간 비용은 알림으로 보여 준다. 기본은 켬이고, 끄려면 플러그인 설정 `keep_alive`를 끈다(설치할 때 `--config keep_alive=false`, 깐 뒤에는 `/config`. 바꾼 값은 Claude Code를 다시 열면 확실히 적용된다). 끄거나 서브에이전트가 돌지 않을 때는 연장하지 않고, 알림만 낸다(1시간 캐시는 만료 5분 전, 5분 캐시는 1분 전). 연장 요청이 캐시를 읽지 못하면 연장 알림 대신 만료 알림이 나가고, 그 요청에 든 비용도 메인 비용에 더한다.
 - agent-meter는 캐시 수명 확인에 `grep`을, 권한 모드 표시 폭 맞춤에 `sh`와 `ps`를 부른다. Git for Windows 기본 설치는 이 명령들을 PATH에 넣지 않아 Windows에서는 그 두 기능이 빠질 수 있다(확인하지 못했다). 표는 그대로 뜬다.
-- 조직의 관리 설정에 따라 표만 안 뜨거나(`allowManagedModsOnly`, `allowManagedHooksOnly`, 관리 설정의 `disableAllHooks`. 뒤 둘은 서브에이전트 체계의 훅인 비용 기록도 멈춘다) Claude Code가 아예 시작하지 않을 수 있다. `disableSideloadFlags`가 켜진 곳은 `env`의 `CLAUDE_CODE_PLUGIN_DIRS`에 폴더가 있으면 Claude Code가 오류를 내고 시작하지 않는다. 2번의 설치는 이 설정이 관리 설정 파일에 있으면 미리 가려 agent-meter를 깔지 않고, 서버나 MDM(기기 관리 도구)으로 내려오는 설정이면 깐 뒤 바로 확인해 되돌린다. 이 스크립트를 직접 돌릴 때는 가리지 않는다. 시작하지 않으면 Claude Code가 열리지 않아 Claude에게 부탁할 수 없으니, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에서 agent-meter 경로를 직접 지운 뒤 Claude Code를 열고(2번 설치 도중이었으면 같은 폴더에서 `claude --continue`로 그 대화를 이어 열고) Claude에게 「<이 폴더>/subagent-system/APPLY_GUIDE.md 의 「제거」 절을 읽고, 시작 오류 때문에 agent-meter 지워줘」라고 말한다(아래 「제거」. mod 폴더와 거절 기록, statusLine 되돌리기 질문을 Claude가 처리하고, 설치나 업데이트가 끝나지 않았으면 남은 확인을 이어 할지 묻는다).
-- `settings.json`이 깨진 JSON이면 mod 폴더를 바꾸기 전에 설치가 멈춘다. 파일을 고친 뒤 다시 실행한다.
+- 조직의 관리 설정에 따라 표만 안 뜨거나(`allowManagedModsOnly`, `allowManagedHooksOnly`, 관리 설정의 `disableAllHooks`. 뒤 둘은 서브에이전트 체계의 훅인 비용 기록도 멈춘다) 설치 명령이 거절될 수 있다. 마켓플레이스 출처를 제한하는 `strictKnownMarketplaces`(허용 목록)에 이 저장소가 없거나 `blockedMarketplaces`(차단 목록)가 이 저장소를 막으면 마켓플레이스 등록이 거절된다. 2번의 설치는 이 설정이 관리 설정 파일에 있으면 미리 가려 agent-meter를 깔지 않고, 서버나 MDM(기기 관리 도구)으로 내려오는 설정이면 설치 명령의 거절로 가려 깔지 않는다.
 
 ## 2. 서브에이전트 체계 적용
 
@@ -62,7 +65,7 @@ Claude는 먼저 전제(Claude Code 버전, node, Windows면 Git for Windows)를
 - **주로 하는 일**: 백엔드, 프론트엔드와 앱, 데이터, 인프라와 운영, QA와 테스트, 기획과 문서 가운데 고른다. 여러 개 골라도 되고, 고른 직군의 표를 합친다. 지시문 체크리스트(서브에이전트에 일을 보내기 전에 대조하는 목록)도 직군과 상관없는 공통 줄에 고른 직군의 줄을 더해 시작하고, 그 뒤로는 회고가 기록을 근거로 줄을 더해 간다. 하나도 고르지 않으면 기획과 문서 표와 공통 체크리스트로 시작하고, 직군은 나중에 더할 수 있다. 고른 직군은 `~/.claude/subagent-system/config.json`에 남아 업데이트가 읽는다.
 - **표에 없는 자주 하는 일**: 합친 표를 보여 주면 빠진 일을 말한다. Claude가 알맞은 칸에 넣고 어디에 넣었는지 알린다. 없으면 넘어간다.
 - **「무조건 Opus」 영역**: 작업 크기와 상관없이 가장 신중하게 다룰 영역. 고른 직군의 기본안(백엔드라면 DB 스키마와 마이그레이션, 결제와 환불, 인증과 권한, 동시성, 외부 API 계약)에서 고르거나 고친다.
-- **함께 넣을 것**: `extras/`의 세 가지와 agent-meter를 하나씩 묻는다. 항목마다 넣을 내용을 먼저 보여 주고 「넣을까요?」를 따로 묻고, 하나도 안 넣어도 된다. agent-meter에 「넣는다」로 답하면 keep-alive를 켤지도 이어서 묻는다. 이미 깔려 있으면(1번으로 직접 깐 경우 등) agent-meter는 묻지 않고 새 것으로 다시 깐다(keep-alive는 지금 값 그대로). 조직 설정이 막고 있으면 묻지 않고 깔지 않는다. 서브에이전트 체계는 이 넷 없이도 돈다.
+- **함께 넣을 것**: `extras/`의 세 가지와 agent-meter를 하나씩 묻는다. 항목마다 넣을 내용을 먼저 보여 주고 「넣을까요?」를 따로 묻고, 하나도 안 넣어도 된다. agent-meter에 「넣는다」로 답하면 keep-alive를 켤지도 이어서 묻는다. 이미 깔려 있으면(1번으로 직접 깐 경우 등) agent-meter는 묻지 않고 최신으로 갱신한다(keep-alive는 지금 값 그대로). 조직 설정이 마켓플레이스 출처를 막고 있으면 묻지 않고 깔지 않는다. 서브에이전트 체계는 이 넷 없이도 돈다.
 - **회고 방식**: 묻기(기본)와 자동 가운데 고른다. 묻기는 회고할 때가 되면 메인이 물어보고, 자동은 회고할지는 묻지 않고 회고 서브에이전트가 백그라운드로 돌아 표와 정의를 고친다(다만 `~/.claude` 파일을 고칠 때 권한 확인 창이 뜰 수 있다. 아래 「쓰는 동안 할 일」). 나중에 `/retro auto`와 `/retro ask`로 바꿀 수 있다.
 
 다 답하지 못해도 된다. 표에 없는 일은 쓰면서 기록되고 회고 때 표에 들어가, 표가 각자 하는 일에 맞게 바뀐다.
@@ -71,7 +74,7 @@ Claude는 먼저 전제(Claude Code 버전, node, Windows면 Git for Windows)를
 - **늘 지키는 규칙**: 멈추고 묻는 경우 둘, 질문은 한 번에 하나, 답 없는 항목은 다시 묻기, 커밋과 푸시는 지시 때만, 여러 git 단계를 한 번에 지시받으면 빠짐없이 하고 단계마다 보고, 조사는 전수 실측, 주석은 왜만, 작업을 마친 뒤 보고는 첫 줄 요약과 「결정할 것」, 「알아 둘 것」으로, 필요한 말만 쓰고 확인하지 못한 것은 그렇다고 적기. 백엔드, 데이터, 인프라와 운영 가운데 하나라도 골랐으면 멈추고 묻는 작업에 DB 마이그레이션 적용과 운영 DB 데이터 변경이, 전수 실측에 DB 스키마와 운영 설정을 확인하는 줄이 더해진다.
 - **git 명령 확인 목록**: 실행 전에 확인을 받는 명령이다. 기준은 둘이다. 하나는 끝나지 않은 작업이 커밋되거나 사용자가 정하고 싶은 커밋 메시지를 Claude가 마음대로 정하는 것을 막는 것이다(commit, push, merge, rebase). 다른 하나는 복구할 수 없는 일을 막는 것이다(reset, restore, checkout, switch, clean, rm, stash 계열, `branch -D`, `branch -d`, `branch --delete`). cherry-pick과 revert는 사용자가 되돌릴 수 있어 넣지 않는다. `~/.claude/settings.json`에 넣는다. CLAUDE.md가 브랜치 이동에 `git switch`, 파일 복원에 `git restore`를 쓰라고 하면, 그 둘은 목록에서 뺄지 먼저 묻는다. 같은 명령이 `PowerShell(...)` 규칙으로도 들어 있어, Windows에서 PowerShell 도구로 도는 git도 확인을 받는다.
 - **글쓰기 줄**: 줄표(—)와 가운뎃점(·)을 쓰지 않는 줄을 두 곳에 더한다. CLAUDE.md에 한 줄(메인의 응답과 문서, 서브에이전트에게 쓰는 지시문에 걸린다), 서브에이전트 정의 10개 본문 끝에 한 줄(서브에이전트의 보고에 걸린다)이다. 한국어 글쓰기 취향이라 안 맞는 사람도 있다.
-- **agent-meter**: 위 표의 mod를 `install-agent-meter.mjs`로 깐다. 인자로 keep-alive 답을 넘기고, 설정 파일을 모두 고친 뒤 마지막에 깐다. 깐 뒤 `statusLine`(화면에 모델과 비용 같은 것을 한 줄로 보여 주는 설정)이 있으면 agent-meter 표와 겹치는 항목을 보여 주고 겹치는 항목만 빼기(추천), 그대로 두기, `statusLine` 키 지우기 가운데 고르게 하고, 고치기 전에 백업한다. 고치는 것은 사용자 설정 폴더의 `settings.json`과 그것이 부르는 스크립트뿐이고, 프로젝트 저장소 쪽 `statusLine`은 겹치는 항목만 알린다. 이 정리는 한 번 하고, 고른 답을 `config.json`에 남겨 업데이트가 다시 묻지 않는다(고칠 수 있는 `statusLine`이 없었으면 기록을 남기지 않아, 나중에 사용자 설정 폴더에 더하면 다음 업데이트가 정리를 묻는다. 하나도 없거나 프로젝트 쪽, 플러그인, 조직 관리 것만 있어 알리기만 한 경우다). agent-meter만 지우면서 `statusLine`을 되돌렸으면 그 기록이 지워져, 다시 깐 뒤 다음 업데이트가 다시 묻는다.
+- **agent-meter**: 위 표의 mod를 `claude plugin install agent-meter --marketplace daum7766/claude-token-save`로 깐다. keep-alive를 끄기로 했으면 `--config keep_alive=false`를 붙이고, 설정 파일을 모두 고친 뒤 마지막에 깐다. 깐 뒤 `statusLine`(화면에 모델과 비용 같은 것을 한 줄로 보여 주는 설정)이 있으면 agent-meter 표와 겹치는 항목을 보여 주고 겹치는 항목만 빼기(추천), 그대로 두기, `statusLine` 키 지우기 가운데 고르게 하고, 고치기 전에 백업한다. 고치는 것은 사용자 설정 폴더의 `settings.json`과 그것이 부르는 스크립트뿐이고, 프로젝트 저장소 쪽 `statusLine`은 겹치는 항목만 알린다. 이 정리는 한 번 하고, 고른 답을 `config.json`에 남겨 업데이트가 다시 묻지 않는다(고칠 수 있는 `statusLine`이 없었으면 기록을 남기지 않아, 나중에 사용자 설정 폴더에 더하면 다음 업데이트가 정리를 묻는다. 하나도 없거나 프로젝트 쪽, 플러그인, 조직 관리 것만 있어 알리기만 한 경우다). agent-meter만 지우면서 `statusLine`을 되돌렸으면 그 기록이 지워져, 다시 깐 뒤 다음 업데이트가 다시 묻는다.
 
 CLAUDE.md에 넣는 규칙은 `<!-- subagent-system 시작 -->`과 `<!-- subagent-system 끝 -->` 사이에, extras의 늘 지키는 규칙과 글쓰기 줄의 CLAUDE.md 줄은 `<!-- claude-setup-kit extras 시작 -->`과 `<!-- claude-setup-kit extras 끝 -->` 사이에 둔다. 지울 때 그 사이만 지우려는 표시라 지우거나 고치지 않는다. 구역 문장을 바꾸려면 구역 밖에 「구역: A 대신 B」 한 줄을 적는다(업데이트가 지킨다).
 
@@ -97,7 +100,7 @@ CLAUDE.md에 넣는 규칙은 `<!-- subagent-system 시작 -->`과 `<!-- subagen
 - 키트가 통째로 바꾸는 파일(스크립트, `RETRO.md`, `SUBAGENT_GUIDE.md`의 사용자 구역 밖, 정의의 description과 글쓰기 줄 밖, `/retro` 스킬)은 설치나 지난 업데이트 때 남긴 해시(`config.json`)와 다른 것만 손으로 고친 것으로 보고, 고친 줄을 지켜질 곳으로 옮길지 묻는다. 스크립트처럼 옮길 곳이 없는 차이는 보여 주고, 덮어쓰면 사라진다고 알린다.
 - 지시문 체크리스트는 통째로 바꾸지 않는다. 고르지 않은 직군의 줄로 보이는 설치본 줄은 표로 모아 지울지 묻고, 키트의 공통 줄과 고른 직군의 줄 가운데 설치본에 없는 줄은 나뉜 줄, 표현만 다른 줄, 새 줄 순서로 보여 주고 넣을지 묻는다. 회고나 사용자가 더한 줄은 건드리지 않는다. 넣지 않기로 한 줄은 `config.json`에 남아 다음 업데이트에서 다시 묻지 않는다.
 - 설치본 git 확인 목록에 빠진 키트 항목을 보여 주고 승인한 것만 더한다(거절한 항목은 기억해 다시 묻지 않는다).
-- agent-meter는 설치본에 `~/.claude/mods/agent-meter`가 있으면 묻지 않고 다시 깔고(keep-alive는 지금 값 그대로), 없으면 처음 설치의 질문을 한 번 묻는다(업데이트에서 거절했거나 agent-meter만 지웠거나 조직 설정 때문에 되돌렸으면 묻지 않는다). 순서는 `APPLY_GUIDE.md`의 「업데이트 순서」 7번이다.
+- agent-meter는 이미 깔려 있으면(마켓플레이스로 깐 것이나 옛 설치 스크립트로 깐 `~/.claude/mods/agent-meter`) 묻지 않고 갱신하고(keep-alive는 지금 값 그대로), 옛 설치 스크립트로 깐 것은 마켓플레이스 설치로 옮기고 옛것을 치운다(`env.CLAUDE_CODE_PLUGIN_DIRS`의 agent-meter 항목과 `AGENT_METER_KEEPALIVE`를 빼고 mod 폴더는 백업 폴더로 옮긴다). 깔려 있지 않으면 처음 설치의 질문을 한 번 묻는다(업데이트에서 거절했거나 agent-meter만 지웠거나 조직 설정 때문에 깔지 못했으면 묻지 않는다). 순서는 `APPLY_GUIDE.md`의 「업데이트 순서」 7번이다.
 - 설치본에 `docs/ROUTING_PRESETS.md`가 있으면 키트 파일이라 지운다(백업에 남는다).
 - 정의에 글쓰기 줄이 있던 설치본은 키트 정의 복사본에 그 줄을 다시 더한 뒤 놓는다(CLAUDE.md의 글쓰기 줄은 extras 구역 안이라 위 규칙대로 차이를 보여 주고 묻는다).
 - `SUBAGENT_GUIDE.md`는 사용자 칸을 되넣은 뒤에 한 번에 놓는다.
@@ -161,7 +164,7 @@ git clone <저장소 주소>
 cd <받은 폴더>
 ```
 
-받은 폴더에서 위 2번(서브에이전트 체계 적용)을 그대로 한다. 키트가 새로 올라왔을 때는 그 폴더에서 `git pull`을 한 뒤 2번의 같은 문장을 다시 말하면 Claude가 `VERSION`을 비교해 업데이트한다(위 「이미 깔린 컴퓨터」. agent-meter 처리도 같은 목록에 있다). 1번으로 직접 깔았고 2번을 하지 않을 때는 `node install-agent-meter.mjs`를 다시 실행하면 다시 깔린다(터미널에서 인자 없이 실행하면 keep-alive를 다시 묻는다).
+받은 폴더에서 위 2번(서브에이전트 체계 적용)을 그대로 한다. 키트가 새로 올라왔을 때는 그 폴더에서 `git pull`을 한 뒤 2번의 같은 문장을 다시 말하면 Claude가 `VERSION`을 비교해 업데이트한다(위 「이미 깔린 컴퓨터」. agent-meter 처리도 같은 목록에 있다). 1번으로 직접 깔았고 2번을 하지 않을 때는 1번의 「업데이트와 제거」 명령으로 올린다.
 
 ## 제거
 
@@ -175,5 +178,5 @@ Claude가 삭제와 설정 변경마다 무엇을 바꿀지 보여 주고 확인
 
 - 서브에이전트 체계: `settings.json`에서 이 키트의 SubagentStop 훅과, 옛 버전이 놓은 SessionStart 훅이 남아 있으면 그 훅만 빼고(git 확인 목록을 넣었거나 `/retro` 권한 확인 대비책으로 allow 규칙을 더했으면 그 규칙만 뺄지 묻는다), 정의 10개를 지우고 백업에 같은 이름의 원본이 있으면 되돌린다. `/retro` 스킬(`~/.claude/skills/<이름>/`)을 지우고, CLAUDE.md의 표시 주석 사이를 지우고, `~/.claude/subagent-system/`(`config.json` 포함)을 지운다. 사용 기록(`records/`)은 지우기 전에 따로 묻고, 남기려면 옮길 경로를 묻는다. `records/` 안의 회고 잠금과 물을 것(`retro-pending.md`)도 같이 묻는다.
 - 서브에이전트 체계를 지워도 agent-meter는 내장 요율로 돈다.
-- agent-meter: `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에서 agent-meter 경로만 빼고(다른 항목은 그대로, 비면 키를 지운다), `env`에 `AGENT_METER_KEEPALIVE`가 있으면 그 키도 지운다(`env`가 비면 `env` 키도 지운다). 그 뒤 `~/.claude/mods/agent-meter`를 지운다. statusLine을 정리했으면 되돌릴지 묻는다. 서브에이전트 체계를 남기면 다음 업데이트가 agent-meter를 다시 권하지 않는다(다시 깔려면 위 「1. agent-meter만 직접 설치」로 깐다. statusLine 정리는 다음 업데이트 때 `config.json`에 정리 기록이 없으면 묻는다).
+- agent-meter: 마켓플레이스로 깔았으면 `claude plugin uninstall agent-meter@claude-token-save`로 지우고(저장된 옵션도 함께 지워진다), 마켓플레이스 등록(`claude-token-save`)도 뺄지 묻는다. 옛 설치 스크립트로 깐 흔적이 있으면 `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에서 agent-meter 경로만 빼고(다른 항목은 그대로, 비면 키를 지운다), `env`에 `AGENT_METER_KEEPALIVE`가 있으면 그 키도 지우고(`env`가 비면 `env` 키도 지운다), `~/.claude/mods/agent-meter`를 지운다. statusLine을 정리했으면 되돌릴지 묻는다. 서브에이전트 체계를 남기면 다음 업데이트가 agent-meter를 다시 권하지 않는다(다시 깔려면 위 「1. agent-meter만 직접 설치」로 깐다. statusLine 정리는 다음 업데이트 때 `config.json`에 정리 기록이 없으면 묻는다).
 - 지운 훅은 보통 파일 감시가 바로 읽는다(공식 문서 https://code.claude.com/docs/en/hooks). 그래도 열린 세션이 지운 정의를 들고 있을 수 있어 Claude Code를 다시 열고 새 세션에서 확인한다. 설치 전에 만든 백업 폴더는 지우지 않고 남긴다.

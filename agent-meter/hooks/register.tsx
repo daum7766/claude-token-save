@@ -470,16 +470,18 @@ async function isOneMillionDisabled($: EngineInterface): Promise<boolean> {
   return ['1', 'true', 'yes', 'on'].includes((v ?? '').trim().toLowerCase())
 }
 
-// 기본은 켬. 연장 요청은 유료라 AGENT_METER_KEEPALIVE로 끌 수 있다.
-async function isKeepAliveOn($: EngineInterface): Promise<boolean> {
-  const v = await $.env.get('AGENT_METER_KEEPALIVE').catch(() => undefined)
-  return !['0', 'false', 'off'].includes((v ?? '').trim().toLowerCase())
+// 기본은 켬. 연장 요청은 유료라 userConfig의 keep_alive로 끌 수 있다.
+// 옵션은 register에만 오고 아래 함수들은 모듈 수준이라 여기에 담아 둔다. 옵션이 바뀌면 플러그인이 다시 로드되어 register가 다시 돈다
+let isKeepAliveEnabled = true
+
+function isOffOption(v: unknown): boolean {
+  return v === false || ['0', 'false', 'off'].includes(String(v ?? '').trim().toLowerCase())
 }
 
 // 서브에이전트가 도는 동안 메인 캐시를 연장하는지. 연장 요청과 유휴 압축 건너뛰기가 같은 판정을 쓴다
 async function isWarmingMain($: EngineInterface): Promise<boolean> {
   const isAgentRunning = (await $.agent.list().catch(() => [])).some(a => a.status === 'running')
-  return isAgentRunning && (await isKeepAliveOn($))
+  return isAgentRunning && isKeepAliveEnabled
 }
 
 // context.window는 모델 원래 창이라 settings의 autoCompactWindow로 낮춘 기준이 반영되지 않는다.
@@ -737,7 +739,8 @@ function pillOffset(mode: string): number {
   return pill ? cells(pill + PILL_SEPARATOR) : 0
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  isKeepAliveEnabled = !isOffOption(options?.keep_alive)
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'meter',

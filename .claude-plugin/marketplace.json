@@ -1,0 +1,14 @@
+{
+  "name": "claude-token-save",
+  "owner": {
+    "name": "daum7766"
+  },
+  "description": "Claude Code에서 서브에이전트와 토큰 사용을 줄이고 눈으로 확인하는 도구 묶음",
+  "plugins": [
+    {
+      "name": "agent-meter",
+      "source": "./agent-meter",
+      "description": "메인과 서브에이전트의 모델, effort, 문맥, 토큰, 어림 비용, 캐시 남은 시간을 입력창 아래에 보여 준다"
+    }
+  ]
+}

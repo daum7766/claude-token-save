@@ -2,7 +2,16 @@
 
 버전마다 바뀐 것. 업데이트할 때 Claude가 설치본 버전보다 새 항목을 사용자에게 보여 준다.
 
-키트를 고칠 때는 `VERSION`을 바꾸고(같은 날 두 번째 이후 변경은 `YYYY.M.D.N`으로 넷째 자리를 붙인다), 이 설명 문단 바로 아래(이전 항목들 위)에 그 버전 항목을 더한다. 새 항목이 위에 온다. 항목 머리줄은 `## <VERSION과 같은 값>` 한 줄이고, 그 아래에 바뀐 것을 `- ` 목록으로 적는다. 업데이트는 이 머리줄의 버전을 읽어 설치본보다 새 항목을 고른다.
+키트를 고칠 때는 `VERSION`을 바꾸고(같은 날 두 번째 이후 변경은 `YYYY.M.D.N`으로 넷째 자리를 붙인다), 이 설명 문단 바로 아래(이전 항목들 위)에 그 버전 항목을 더한다. 새 항목이 위에 온다. 항목 머리줄은 `## <VERSION과 같은 값>` 한 줄이고, 그 아래에 바뀐 것을 `- ` 목록으로 적는다. 업데이트는 이 머리줄의 버전을 읽어 설치본보다 새 항목을 고른다. agent-meter를 고칠 때는 `agent-meter/.claude-plugin/plugin.json`의 `version`도 올린다. 마켓플레이스 설치는 이 값이 바뀌어야 사용자에게 업데이트가 가기 때문이다.
+
+## 2026.10.21
+
+- agent-meter를 키트 폴더의 설치 스크립트가 아니라 플러그인 마켓플레이스로 깐다. 이 저장소(GitHub `daum7766/claude-token-save`)가 마켓플레이스 `claude-token-save`이고 agent-meter가 그 안의 플러그인이다. 설치는 `claude plugin install agent-meter --marketplace daum7766/claude-token-save` 한 줄이고, `install-agent-meter.mjs`와 `install-agent-meter.sh`는 없어졌다. 처음 설치와 업데이트가 이 명령을 대신 돌린다.
+- 옛 설치 스크립트로 agent-meter를 깐 컴퓨터는 업데이트가 마켓플레이스 설치로 옮긴다. 묻지 않고 하며, 새 플러그인이 `✔ enabled`로 확인된 뒤에만 옛것을 치운다. 치우는 것은 `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에서 agent-meter 폴더 항목(다른 항목은 그대로)과 `env.AGENT_METER_KEEPALIVE` 키이고, 고치기 전 `settings.json`이 `.bak-agent-meter-<날짜-시각>`으로 남는다. `~/.claude/mods/agent-meter` 폴더는 지우지 않고 `~/.claude/agent-meter-backup-<날짜-시각>/`으로 옮긴다. 옛 항목이 남으면 옛 폴더가 마켓플레이스 복사본을 대신해 새 버전이 읽히지 않아서다. 업데이트가 끝나면 Claude Code를 다시 열어야 새 방식으로 읽힌다.
+- keep-alive 설정이 `env.AGENT_METER_KEEPALIVE`에서 플러그인 설정 `keep_alive`(기본 켬)로 바뀌었다. 옛 값이 끔이었으면 업데이트가 새 설정으로 옮긴다. 이제 Claude Code 안에서 `/config`의 agent-meter 줄(또는 `/plugin configure agent-meter@claude-token-save`)로 바꾸고, 바꾼 뒤에는 Claude Code를 다시 연다.
+- 사용자가 추가한 마켓플레이스는 자동 업데이트가 꺼져 있다. agent-meter 새 버전은 이 키트를 업데이트할 때 함께 올라가고, 키트 업데이트 없이 올리려면 `claude plugin marketplace update claude-token-save`와 `claude plugin update agent-meter@claude-token-save`를 돌린다.
+- 조직 설정 검사가 바뀌었다. 예전에는 `disableSideloadFlags`가 켜진 컴퓨터에 agent-meter를 깔지 않았지만, 이제는 마켓플레이스 출처를 제한하는 `strictKnownMarketplaces`(허용 목록)와 `blockedMarketplaces`(차단 목록)가 이 저장소를 막는지를 본다. 마켓플레이스로 깐 agent-meter는 `CLAUDE_CODE_PLUGIN_DIRS`를 쓰지 않으므로 `disableSideloadFlags`가 켜져 있어도 깔린다. 그래서 `CLAUDE_CODE_PLUGIN_DIRS` 시작 오류 때문에 agent-meter를 지우는 안내도 없어졌다.
+- 제거도 바뀌었다. 마켓플레이스로 깐 agent-meter는 `claude plugin uninstall`로 지우고(저장된 옵션도 함께 지워진다) 마켓플레이스 등록도 뺄지 묻는다. 옛 설치 스크립트로 깐 흔적은 이전처럼 `env`와 mod 폴더에서 치운다.
 
 ## 2026.10.20
 
