@@ -1,6 +1,6 @@
 ---
 name: opus-medium
-description: 깊은 판단이 필요하되 범위가 좁은 일. 여러 출처를 비교해 결론을 내는 조사, 영향 범위 조사, 문서 검수 2차, 자동 회고. (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
+description: 깊은 판단이 필요하되 범위가 좁은 일. 여러 출처를 비교해 결론을 내는 조사, 영향 범위 조사, 문서 검수 2차, 자동 회고, 작업 기록 병목 분석. (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
 model: opus
 effort: medium
 ---

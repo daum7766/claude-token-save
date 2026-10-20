@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 /**
  * 서브에이전트가 걸린 시간이 모델 생각, 도구 실행, 그 밖 중 어디에 드는지 일 종류별로 쪼갠다.
- * 사용: node "$HOME/.claude/subagent-system/scripts/agent-time-breakdown.js" --since <ISO 시각 또는 YYYY-MM-DD> [--top 3] [--kind "<일 종류>"]
+ * 사용: node "$HOME/.claude/subagent-system/scripts/agent-time-breakdown.js" [--since <ISO 시각 또는 YYYY-MM-DD>] [--top 3] [--kind "<일 종류>"]
+ * --since와 --kind가 모두 없으면 사용 기록의 마지막 회고 줄 뒤 기록을 본다.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { RECORDS_DIR, PROJECTS_ROOT, readJsonl, splitLines } from './claudeProjectPaths.js';
-import { stripAnnex } from './subagentRetroHelpers.js';
+import { RECORDS_DIR, PROJECTS_ROOT, splitLines } from './claudeProjectPaths.js';
+import { stripAnnex, parseUsage } from './subagentRetroHelpers.js';
+import { analyzeTranscript } from './transcriptTiming.js';
+import { sameAgent, agentIdOf } from './speedReviewHelpers.js';
 
-const USAGE = '사용: node "$HOME/.claude/subagent-system/scripts/agent-time-breakdown.js" --since <ISO 시각 또는 YYYY-MM-DD> [--top 3] [--kind "<일 종류>"]';
+const USAGE = '사용: node "$HOME/.claude/subagent-system/scripts/agent-time-breakdown.js" [--since <ISO 시각 또는 YYYY-MM-DD>] [--top 3] [--kind "<일 종류>"]';
 
 function parseArgs(argv) {
   const o = { since: null, top: 3, kind: null };
@@ -18,7 +21,6 @@ function parseArgs(argv) {
     else if (argv[i] === '--kind') o.kind = argv[++i];
     else return null;
   }
-  if (!o.since && !o.kind) return null;
   if (!Number.isInteger(o.top) || o.top < 1) return null;
   let from = 0;
   if (o.since) {
@@ -35,7 +37,6 @@ if (!opts) {
   process.exit(1);
 }
 
-const ts = (s) => new Date(s).getTime() / 1000;
 const localDay = (ms) => {
   const d = new Date(ms);
   const p = (n) => String(n).padStart(2, '0');
@@ -49,12 +50,20 @@ if (!fs.existsSync(USAGE_FILE)) {
   console.error(`사용 기록이 없습니다: ${USAGE_FILE}`);
   process.exit(1);
 }
-const usage = splitLines(fs.readFileSync(USAGE_FILE, 'utf8'))
-  .map((l) => l.split('\t'))
-  .filter((c) => c.length >= 9 && c[0] !== '회고' && c[0] !== '미룸' && /^\d{4}-/.test(c[0]) && c[0] >= fromDay)
-  // 회고처럼 일 종류 끝의 괄호 부연은 떼고 묶는다.
-  .filter((c) => !opts.kind || stripAnnex(c[3]) === stripAnnex(opts.kind))
-  .map((c, i) => ({ def: c[2], kind: stripAnnex(c[3]), sec: c[6] !== '-' && c[6] !== '' && Number.isFinite(Number(c[6])) ? Number(c[6]) : null, agentId: (c[8] || '').split(/\s+/)[0] || `행${i}` }));
+const usageText = fs.readFileSync(USAGE_FILE, 'utf8');
+const toRow = (c, i) => ({ def: c[2], kind: stripAnnex(c[3]), sec: c[6] !== '-' && c[6] !== '' && Number.isFinite(Number(c[6])) ? Number(c[6]) : null, agentId: agentIdOf((c[8] || '').split(/\s+/)[0]) || `행${i}` });
+// 기간도 일 종류도 안 주면 회고 줄 위치로 가른다. 날짜로 자르면 같은 날 회고 앞뒤 기록이 섞인다.
+const byRetro = !opts.since && !opts.kind;
+const usageAll = byRetro
+  ? parseUsage(usageText).target.map((r, i) => ({ def: r.def, kind: r.kind, sec: r.seconds, agentId: agentIdOf(r.agentId) || `행${i}` }))
+  : splitLines(usageText)
+      .map((l) => l.split('\t'))
+      .filter((c) => c.length >= 9 && c[0] !== '회고' && c[0] !== '미룸' && /^\d{4}-/.test(c[0]) && c[0] >= fromDay)
+      .map((c, i) => toRow(c, i));
+// 일 종류는 끝 괄호 부연을 떼고 거른다. 이름이 정확히 같은 줄이 있으면 그 줄만 보고, 없을 때만 부분 일치로 찾는다.
+const kindWanted = opts.kind ? stripAnnex(opts.kind) : null;
+const exactKind = kindWanted ? usageAll.filter((u) => u.kind === kindWanted) : [];
+const usage = !kindWanted ? usageAll : exactKind.length ? exactKind : usageAll.filter((u) => u.kind.includes(kindWanted));
 
 // agentId로 대화 기록을 찾기 위해 모든 프로젝트의 서브에이전트 폴더를 한 번 훑는다.
 const index = new Map();
@@ -71,6 +80,14 @@ for (const proj of fs.existsSync(PROJECTS_ROOT) ? fs.readdirSync(PROJECTS_ROOT) 
       if (m) index.set(m[1], path.join(sub, f));
     }
   }
+}
+
+// 사용 기록 메모의 agentId는 앞 8자만 적힌 경우가 있어 앞부분이 맞는 기록을 찾는다.
+// 맞는 파일이 둘 이상이면 어느 쪽인지 알 수 없으므로 찾지 못한 것으로 둔다.
+function findAgentFile(id) {
+  if (index.has(id)) return index.get(id);
+  const hits = [...index].filter(([key]) => sameAgent(id, key));
+  return hits.length === 1 ? hits[0][1] : undefined;
 }
 
 const groups = new Map();
@@ -97,91 +114,10 @@ const picked = [...groups.values()]
   .sort((a, b) => b.avg - a.avg)
   .slice(0, opts.top);
 
-const union = (iv) => {
-  const s = [...iv].sort((a, b) => a[0] - b[0]);
-  const out = [];
-  for (const [a, b] of s) {
-    if (out.length && a <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], b);
-    else out.push([a, b]);
-  }
-  return out;
-};
-const measure = (u) => u.reduce((s, [a, b]) => s + (b - a), 0);
-// 구간 [a,b] 가운데 union v와 겹치지 않는 길이.
-const outside = (a, b, v) => {
-  let cur = a;
-  let r = 0;
-  for (const [c, d] of v) {
-    if (d <= cur || c >= b) continue;
-    if (c > cur) r += c - cur;
-    cur = Math.max(cur, d);
-    if (cur >= b) break;
-  }
-  return cur < b ? r + b - cur : r;
-};
-
-const TESTRE = /(npm (run )?test|vitest|playwright|jest|pytest|node --test|npm run e2e|npx tsc|npm run build)/;
-const TESTSEG = /(npx vitest[^;&|>]*|npm (?:run )?test[^;&|>]*|npx playwright[^;&|>]*|npm run e2e[^;&|>]*|node --test[^;&|>]*|pytest[^;&|>]*|npm run build[^;&|>]*|npx tsc[^;&|>]*)/g;
-const norm = (c) => c.trim().replace(/\s+/g, ' ').slice(0, 80);
-// 앞의 cd 구간을 떼고 첫 두 단어로 묶어 같은 종류의 명령을 한데 센다.
-const bashKey = (cmd) => cmd.trim().replace(/^(cd [^;&|]+(&&|;)\s*)/, '').split(/\s+/).slice(0, 2).join(' ');
-
-function analyze(file) {
-  const rows = readJsonl(file).filter((d) => (d.type === 'user' || d.type === 'assistant') && d.timestamp && d.message);
-  if (rows.length === 0) return null;
-  const t0 = ts(rows[0].timestamp);
-  const t1 = ts(rows.at(-1).timestamp);
-  let lastUser = t0;
-  const turns = new Map();
-  const uses = new Map();
-  for (const r of rows) {
-    const t = ts(r.timestamp);
-    const c = r.message.content;
-    if (r.type === 'user') {
-      lastUser = t;
-      if (Array.isArray(c)) {
-        for (const x of c) {
-          if (x.type === 'tool_result' && uses.has(x.tool_use_id) && uses.get(x.tool_use_id).end === undefined) uses.get(x.tool_use_id).end = t;
-        }
-      }
-    } else {
-      const mid = r.message.id || r.uuid;
-      if (!turns.has(mid)) turns.set(mid, [lastUser, t]);
-      turns.get(mid)[1] = t;
-      if (Array.isArray(c)) for (const x of c) if (x.type === 'tool_use') uses.set(x.id, { name: x.name, start: t, input: x.input || {} });
-    }
-  }
-  const ev = [...uses.values()].filter((u) => u.end !== undefined);
-  const TU = union(ev.map((u) => [u.start, u.end]));
-  const perTurn = [...turns.values()].map(([a, b]) => outside(a, b, TU));
-  const MU = union([...turns.values()]);
-  const model = MU.reduce((s, [a, b]) => s + outside(a, b, TU), 0);
-  const tool = measure(TU);
-
-  // 겹친 도구 구간은 같은 시간대의 도구가 똑같이 나눠 가진다.
-  const pts = [...new Set(ev.flatMap((u) => [u.start, u.end]))].sort((a, b) => a - b);
-  const bash = new Map();
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [a, b] = [pts[i], pts[i + 1]];
-    const act = ev.filter((u) => u.start <= a && u.end >= b);
-    for (const u of act) if (u.name === 'Bash') bash.set(bashKey(u.input.command || ''), (bash.get(bashKey(u.input.command || '')) || 0) + (b - a) / act.length);
-  }
-  const tests = new Map();
-  let testTime = 0;
-  for (const u of ev) {
-    const cmd = u.input.command || '';
-    if (u.name === 'Bash' && TESTRE.test(cmd) && !cmd.includes('<<')) {
-      for (const m of cmd.matchAll(TESTSEG)) tests.set(norm(m[0]), (tests.get(norm(m[0])) || 0) + 1);
-      testTime += u.end - u.start;
-    }
-  }
-  return { total: t1 - t0, model, tool, testTime, bash, tests, longTurns: perTurn.filter((x) => x > 60).length };
-}
-
 const pct = (a, b) => (b > 0 ? `${Math.round((100 * a) / b)}%` : '0%');
 const min = (s) => (s / 60).toFixed(1);
 
-console.log(`기준: ${opts.since ?? '전체'} 이후${opts.kind ? `, 일 종류 "${opts.kind}"` : ''}. 사용 기록 ${usage.length}줄, ${minAgents}건 이상 묶음 ${[...groups.values()].filter((g) => g.agents >= minAgents).length}개 중 평균 초가 긴 ${picked.length}개\n`);
+console.log(`기준: ${opts.since ?? (byRetro ? '마지막 회고 줄' : '전체')} 이후${opts.kind ? `, 일 종류 "${opts.kind}"` : ''}. 사용 기록 ${usage.length}줄, ${minAgents}건 이상 묶음 ${[...groups.values()].filter((g) => g.agents >= minAgents).length}개 중 평균 초가 긴 ${picked.length}개\n`);
 if (picked.length === 0) console.log('조건에 맞는 묶음이 없습니다.');
 
 for (const g of picked) {
@@ -189,8 +125,13 @@ for (const g of picked) {
   const found = [];
   let missing = 0;
   for (const id of ids) {
-    const file = index.get(id);
-    const a = file ? analyze(file) : null;
+    const file = findAgentFile(id);
+    let a = null;
+    try {
+      a = file ? analyzeTranscript(file) : null;
+    } catch {
+      // 읽다 실패한 기록은 기록 없음으로 센다.
+    }
     if (a) found.push({ id, ...a });
     else missing++;
   }
@@ -205,12 +146,21 @@ for (const g of picked) {
   const model = sum('model');
   const tool = sum('tool');
   const testTime = sum('testTime');
-  console.log(`  합 ${min(total)}분: 모델 ${min(model)}분 (${pct(model, total)}), 도구 ${min(tool)}분 (${pct(tool, total)}), 그 밖 ${min(total - model - tool)}분 (${pct(total - model - tool, total)})`);
+  const userWait = sum('userWait');
+  const other = total - model - tool - userWait;
+  console.log(`  합 ${min(total)}분: 모델 ${min(model)}분 (${pct(model, total)}), 도구 ${min(tool)}분 (${pct(tool, total)}), 그 밖 ${min(other)}분 (${pct(other, total)}), 사용자 기다림 ${min(userWait)}분`);
   console.log(`  도구 중 테스트 실행 ${min(testTime)}분 (${pct(testTime, tool)})`);
   const bash = new Map();
   for (const a of found) for (const [k, v] of a.bash) bash.set(k, (bash.get(k) || 0) + v);
+  const sample = new Map();
+  for (const a of found) for (const [k, v] of a.bashSample) if (!sample.has(k)) sample.set(k, v);
   const top = [...bash].sort((a, b) => b[1] - a[1]).slice(0, 3);
-  console.log(`  시간이 큰 Bash 명령: ${top.map(([k, v]) => `"${k.slice(0, 40)}" ${min(v)}분`).join(', ') || '없음'}`);
+  const oneLine = (c) => {
+    const t = c.replace(/\s+/g, ' ').trim();
+    return t.length > 120 ? `${t.slice(0, 120)}…` : t;
+  };
+  console.log(`  시간이 큰 Bash 명령:${top.length ? '' : ' 없음'}`);
+  for (const [k, v] of top) console.log(`    "${k}" ${min(v)}분: ${oneLine(sample.get(k) ?? '')}`);
   const rep = found
     .map((a) => ({ id: a.id, n: [...a.tests.values()].reduce((s, c) => s + Math.max(0, c - 1), 0), cmd: [...a.tests].sort((x, y) => y[1] - x[1])[0] }))
     .filter((r) => r.n > 0)

@@ -1466,13 +1466,13 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
     assert.doesNotMatch(run(root, ['--remove-kind', '표 정리']).stdout, /표에 아직/);
   });
 
-  it('체계가 쓰는 여섯 가지 일(회고 정정 분류, 자동 회고, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)은 표시와 부연을 붙여도 --remove-kind가 거절하고 설정 파일을 바꾸지 않는다', () => {
+  it('체계가 쓰는 일곱 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)은 표시와 부연을 붙여도 --remove-kind가 거절하고 설정 파일을 바꾸지 않는다', () => {
     const root = setup({ config: JSON.stringify({ retroMode: 'ask' }) });
     const before = fs.readFileSync(configOf(root), 'utf8');
-    for (const name of ['회고 정정 분류', '회고 정정 분류 「(고정)」', '자동 회고(회고 서브에이전트)', '무조건 Opus 영역 판단(결론, 설계) 「(고정)」', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현 「(고정)」', 'high로도 안 풀려 다시 보내는 일']) {
+    for (const name of ['회고 정정 분류', '회고 정정 분류 「(고정)」', '자동 회고(회고 서브에이전트)', '작업 기록 병목 분석', '작업 기록 병목 분석 「(고정)」', '무조건 Opus 영역 판단(결론, 설계) 「(고정)」', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현 「(고정)」', 'high로도 안 풀려 다시 보내는 일']) {
       const r = run(root, ['--remove-kind', name]);
       assert.equal(r.status, 1, name);
-      assert.match(r.stderr, /체계가 쓰는 여섯 가지 일이라 표에서 빼지 않습니다/);
+      assert.match(r.stderr, /체계가 쓰는 일곱 가지 일이라 표에서 빼지 않습니다/);
       assert.equal(fs.readFileSync(configOf(root), 'utf8'), before, name);
     }
     assert.equal(run(root, ['--remove-kind', '번역']).status, 0);

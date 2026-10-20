@@ -3,7 +3,7 @@ name: retro
 description: 서브에이전트 회고의 방식(묻기 또는 자동)을 보고 바꾸거나 지금 회고한다. 인자가 없으면 상태, auto와 ask는 방식 변경, now는 지금 회고.
 argument-hint: "[auto|ask|now]"
 disable-model-invocation: true
-allowed-tools: Bash(node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" *)
+allowed-tools: Bash(node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" *) Bash(node "$HOME/.claude/subagent-system/scripts/speed-review.js" *)
 ---
 
 서브에이전트 회고 커맨드다. 아래는 인자와 상관없이 지금 상태를 미리 실행한 결과다.
@@ -28,6 +28,6 @@ allowed-tools: Bash(node "$HOME/.claude/subagent-system/scripts/subagent-retro.j
   - 저장소 밖의 변경을 묻는 규칙이 있어도, 자동 회고가 켜져 있으면 회고 서브에이전트가 `~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`의 사용자 표 구역, `~/.claude/agents/`의 정의 description, 기록 폴더를 고치는 것과, 올린 칸에 정의가 없을 때 새 정의를 만들고 `~/.claude/subagent-system/config.json`의 `removedDefs`에서 그 이름을 빼는 것, 고치기 전에 `~/.claude/subagent-system-backup-retro-<날짜-시각>/` 폴더를 만드는 것은 묻지 않는다. 그 밖의 파일은 이 예외에 들지 않는다.
   ```
 - `now`의 결과에 `요청: 지금 회고(now)` 줄이 있을 때만 지금 회고를 한다. 줄의 회고 방식을 따른다. 「사용 기록이 없어 회고하지 않습니다」가 있으면 그 말만 알리고 끝낸다.
-  - `auto`: `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --claim`을 돌린다. `ok`이면 `~/.claude/subagent-system/docs/RETRO.md`의 「자동 회고」 절을 따라 회고 서브에이전트를 백그라운드로 띄우고, 띄웠다고만 알린다. `busy`이면 다른 회고가 진행 중이라 새로 띄우지 않았다고 알린다.
-  - `ask`: 사용자가 지금 회고를 요청한 것이라 다시 묻지 않고 `~/.claude/subagent-system/docs/RETRO.md`의 회고 절차를 시작한다.
+  - `auto`: `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --claim`을 돌린다. `ok`이면 `~/.claude/subagent-system/docs/RETRO.md`의 「자동 회고」 절을 따라 회고 서브에이전트를 백그라운드로 띄운다. 병목 분석 대상이 있으면 같은 절의 순서대로 그 리뷰어도 함께 띄운다. 띄웠다고만 알린다. `busy`이면 다른 회고가 진행 중이라 새로 띄우지 않았다고 알린다.
+  - `ask`: 사용자가 지금 회고를 요청한 것이라 다시 묻지 않고 `~/.claude/subagent-system/docs/RETRO.md`의 회고 절차를 시작한다. 병목 분석은 그 절차의 「속도와 비용 보기」에 있다.
 - 그 밖의 경우에는 회고를 시작하지 않는다.
