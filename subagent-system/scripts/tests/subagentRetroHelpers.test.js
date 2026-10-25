@@ -1658,9 +1658,16 @@ describe('표 안정 판정', () => {
 
 describe('회고 방식 설정', () => {
   it('값이 auto일 때만 auto이고, 없거나 깨졌거나 모르는 값이면 ask이며 commandName은 기본 retro다', () => {
-    assert.deepEqual(parseConfig('{"retroMode":"auto"}'), { retroMode: 'auto', commandName: 'retro', retroFailures: 0, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {} });
-    assert.deepEqual(parseConfig('{"retroMode":"ask","commandName":"huigo","retroFailures":1}'), { retroMode: 'ask', commandName: 'huigo', retroFailures: 1, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {} });
+    assert.deepEqual(parseConfig('{"retroMode":"auto"}'), { retroMode: 'auto', commandName: 'retro', retroFailures: 0, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {}, autoApplyRules: true });
+    assert.deepEqual(parseConfig('{"retroMode":"ask","commandName":"huigo","retroFailures":1}'), { retroMode: 'ask', commandName: 'huigo', retroFailures: 1, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {}, autoApplyRules: true });
     for (const text of [undefined, '', '{깨짐', 'null', '[]', '"auto"', '{"retroMode":"AUTO"}', '{}']) assert.equal(parseConfig(text).retroMode, 'ask', String(text));
+  });
+
+  it('autoApplyRules는 키가 없을 때만 true이고 값이 true가 아니면 false이며 파일이 없거나 깨졌어도 false다', () => {
+    assert.equal(parseConfig('{}').autoApplyRules, true);
+    assert.equal(parseConfig('{"autoApplyRules":true}').autoApplyRules, true);
+    for (const bad of ['false', '"yes"', '0', 'null']) assert.equal(parseConfig(`{"autoApplyRules":${bad}}`).autoApplyRules, false, bad);
+    for (const text of [undefined, '', '{깨짐', 'null', '[]']) assert.equal(parseConfig(text).autoApplyRules, false, String(text));
   });
 
   it('removedDefs는 문자열 배열만 읽고, 그 밖의 값이나 없는 키는 빈 배열이다', () => {
@@ -2875,5 +2882,258 @@ describe('extractSkillUses', () => {
   it('since보다 앞의 호출은 세지 않는다', () => {
     const lines = [skillCall('2026-10-10T00:00:00Z', 'old'), skillCall('2026-10-12T00:00:00Z', 'new')];
     assert.deepEqual(extractSkillUses(lines, new Date('2026-10-11T00:00:00Z')), ['new']);
+  });
+});
+
+import { agentIdOf, memoMarks, parseFixes, fixLineFromArgs, judgeFixes, fixItemLine, similarTags, FIX_HEADER, mergedLabelRows } from '../subagentRetroHelpers.js';
+
+describe('agentId 꼬리 떼기', () => {
+  it('괄호 꼬리만 떼고 이름이 붙은 agentId는 그대로 둔다', () => {
+    assert.equal(agentIdOf('add4fa4fc4b15a337(이어서)'), 'add4fa4fc4b15a337');
+    assert.equal(agentIdOf('acab-qr-1d6679cb720078db'), 'acab-qr-1d6679cb720078db');
+    assert.equal(agentIdOf('acab-qr-1d6679cb720078db(이어서)'), 'acab-qr-1d6679cb720078db');
+    assert.equal(agentIdOf(null), null);
+  });
+});
+
+describe('사용 기록 메모의 모자람과 개선 표시', () => {
+  it('모자람은 태그를 쉼표로 여럿 받고 개선은 태그 하나를 받으며 태그 앞뒤 공백은 지운다', () => {
+    assert.deepEqual(memoMarks('a1 모자람(a, b): x'), [{ kind: '모자람', tags: ['a', 'b'] }]);
+    assert.deepEqual(memoMarks('a1 개선(c): y'), [{ kind: '개선', tags: ['c'] }]);
+  });
+
+  it('옛 꼴 모자람 콜론은 태그 없는 모자람으로 읽는다', () => {
+    assert.deepEqual(memoMarks('a1 모자람: z'), [{ kind: '모자람', tags: [] }]);
+  });
+
+  it('닫는 괄호 바로 뒤에 콜론과 공백이 없으면 표시가 아니고, 말 중간의 개선 단어는 표시가 아니다', () => {
+    assert.deepEqual(memoMarks('a1 랜딩 성능 개선(이미지) 지연'), []);
+    assert.deepEqual(memoMarks('a1 모자람(a)x: y'), []);
+    assert.deepEqual(memoMarks('a1 이름개선(a): y'), []);
+  });
+});
+
+describe('고침 기록 파싱과 줄 만들기', () => {
+  const row = () => ['2026-10-25T00:00:00.000Z', '/p', '프로젝트', '정정', '태그', 'CLAUDE.md#절', '문장', '10', '메모'].join('\t');
+
+  it('머리줄과 열이 모자라거나 집합 밖인 줄은 건너뛰고 아홉 열을 읽는다', () => {
+    const text = [FIX_HEADER, row(), '깨진 줄', ['2026-10-25T00:00:00.000Z', '/p', '프로젝트', '정정', '태그', 'x', '없는방식', '10', 'm'].join('\t')].join('\n');
+    const fixes = parseFixes(text);
+    assert.equal(fixes.length, 1);
+    assert.deepEqual(fixes[0], { at: '2026-10-25T00:00:00.000Z', project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'CLAUDE.md#절', how: '문장', anchor: 10, memo: '메모' });
+  });
+
+  const args = ['--fix', '--project', '/home/u/proj/.claude/worktrees/w1', '--signal', '정정', '--label', '태그', '--where', 'docs/A.md#절', '--how', '문장', '--memo', '메모'];
+  const NOW = new Date('2026-10-25T01:02:03.000Z');
+
+  it('시각, 범위, 기준점을 채우고 프로젝트의 워크트리 꼬리를 뗀다', () => {
+    const { line } = fixLineFromArgs(args, { now: NOW, lineCount: 42, claudeDir: '/home/u/.claude' });
+    assert.deepEqual(line.split('\t'), ['2026-10-25T01:02:03.000Z', '/home/u/proj', '프로젝트', '정정', '태그', 'docs/A.md#절', '문장', '42', '메모']);
+  });
+
+  it('설치본 아래 경로는 틸드 꼴의 전역이고, 프로젝트 안 절대경로는 워크트리 꼬리를 뗀 상대경로다', () => {
+    const swap = (where) => args.map((a) => (a === 'docs/A.md#절' ? where : a));
+    const g = fixLineFromArgs(swap('/home/u/.claude/subagent-system/docs/SUBAGENT_GUIDE.md#기록'), { now: NOW, claudeDir: '/home/u/.claude' }).line.split('\t');
+    assert.deepEqual([g[2], g[5]], ['전역', '~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md#기록']);
+    assert.equal(fixLineFromArgs(swap('~/.claude/CLAUDE.md#a'), { now: NOW }).line.split('\t')[2], '전역');
+    const p = fixLineFromArgs(swap('/home/u/proj/.claude/worktrees/w1/docs/A.md#절'), { now: NOW, claudeDir: '/home/u/.claude' }).line.split('\t');
+    assert.deepEqual([p[2], p[5]], ['프로젝트', 'docs/A.md#절']);
+  });
+
+  it('필수 인자가 빠지거나 값이 집합 밖이거나 이름표에 쉼표와 괄호가 있으면 오류다', () => {
+    const without = (key) => args.filter((a, i) => a !== `--${key}` && args[i - 1] !== `--${key}`);
+    for (const key of ['project', 'signal', 'label', 'where', 'how', 'memo']) assert.ok(fixLineFromArgs(without(key), { now: NOW }).error.includes(`--${key}`), key);
+    const swap = (from, to) => args.map((a) => (a === from ? to : a));
+    assert.ok(fixLineFromArgs(swap('정정', '불만'), { now: NOW }).error);
+    assert.ok(fixLineFromArgs(swap('문장', '고침'), { now: NOW }).error);
+    assert.ok(fixLineFromArgs(swap('태그', 'a,b'), { now: NOW }).error);
+    assert.ok(fixLineFromArgs(swap('/home/u/proj/.claude/worktrees/w1', 'proj'), { now: NOW }).error);
+  });
+
+  it('방식 무관을 받고 읽는다', () => {
+    const { line } = fixLineFromArgs(args.map((a) => (a === '문장' ? '무관' : a)), { now: NOW });
+    assert.equal(parseFixes(line)[0].how, '무관');
+  });
+});
+
+describe('judgeFixes 판정', () => {
+  const T0 = '2026-10-20T00:00:00.000Z';
+  const fix = (over = {}) => ({ at: T0, project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: 5, memo: '', ...over });
+  let n = 0;
+  const use = (memo, over = {}) => ({ line: ++n, date: '2026-10-21', project: '/p', def: 'sonnet-low', kind: '일', result: 'ok', memo, agentId: memo.split(/\s+/)[0], ...over });
+  const cor = (session, time, over = {}) => ({ date: '2026-10-21', project: '/p', session, time, label: '태그', ...over });
+  const run = (o) => judgeFixes({ lineCount: 1000, ...o });
+  const classes = (r) => r.items.map((i) => `${i.cls} ${i.tag}`);
+
+  it('쌓임은 고침이 없는 태그에 서로 다른 에이전트 둘이 모자람을 달아야 하고 같은 에이전트의 두 줄은 아니다', () => {
+    const same = run({ usage: [use('a1 모자람(태그): x', { line: 1 }), use('a1 모자람(태그): y', { line: 2 })] });
+    assert.deepEqual(classes(same), []);
+    const two = run({ usage: [use('a1 모자람(태그): x', { line: 1 }), use('b2 모자람(태그): y', { line: 2 })] });
+    assert.deepEqual(classes(two), ['쌓임 태그']);
+    assert.equal(two.items[0].next, '문장 또는 체크리스트');
+  });
+
+  it('태그의 공백은 지우고 견주며 옛 꼴 모자람은 판정에 들지 않는다', () => {
+    const r = run({ usage: [use('a1 모자람(지시 문장): x', { line: 1 }), use('b2 모자람(지시문장): y', { line: 2 }), use('c3 모자람: z', { line: 3 }), use('d4 모자람: z', { line: 4 })] });
+    assert.deepEqual(classes(r), ['쌓임 지시 문장']);
+  });
+
+  it('개선은 한 건이면 되고 다음 방식은 문장 또는 체크리스트다', () => {
+    const r = run({ usage: [use('a1 개선(태그): x', { line: 1 })] });
+    assert.deepEqual(classes(r), ['개선 태그']);
+    assert.equal(r.items[0].next, '문장 또는 체크리스트');
+  });
+
+  it('재발은 고친 뒤 사용 기록의 서로 다른 에이전트 둘이어야 하고 기준점 앞의 줄은 세지 않는다', () => {
+    const fixes = [fix({ anchor: 3 })];
+    const before = run({ fixes, usage: [use('a1 모자람(태그): x', { line: 2 }), use('b2 모자람(태그): y', { line: 3 }), use('c3 모자람(태그): z', { line: 4 })] });
+    assert.deepEqual(classes(before), []);
+    const after = run({ fixes, usage: [use('a1 모자람(태그): x', { line: 4 }), use('b2 모자람(태그): y', { line: 5 })] });
+    assert.deepEqual(classes(after), ['재발 태그']);
+    assert.equal(after.items[0].next, '스크립트 또는 훅');
+  });
+
+  it('재발의 다음 방식은 마지막 방식이 스크립트나 훅이면 바깥 자료 조사다', () => {
+    const usage = [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7 })];
+    for (const how of ['스크립트', '훅']) assert.equal(run({ fixes: [fix({ how })], usage }).items[0].next, '바깥 자료 조사', how);
+  });
+
+  it('메모 첫 낱말의 이어서 꼬리는 떼고 견주며 근거에는 꼬리 없는 agentId가 보인다', () => {
+    const tail = run({ usage: [use('a1 모자람(태그): x', { line: 1 }), use('a1(이어서) 모자람(태그): y', { line: 2 })] });
+    assert.deepEqual(classes(tail), []);
+    const two = run({ usage: [use('a1 모자람(태그): x', { line: 1 }), use('b2(이어서) 모자람(태그): y', { line: 2 })] });
+    assert.deepEqual(two.items[0].parts, [{ name: '모자람', who: 'agentId', n: 2, ids: ['a1', 'b2'] }]);
+  });
+
+  it('이름이 붙은 서로 다른 agentId는 앞 16진수가 같아도 서로 다른 에이전트로 센다', () => {
+    const r = run({ usage: [use('acab-qr-1d66 모자람(태그): x', { line: 1 }), use('acab-wide-4fb2 모자람(태그): y', { line: 2 })] });
+    assert.deepEqual(classes(r), ['쌓임 태그']);
+    assert.deepEqual(r.items[0].parts[0].ids, ['acab-qr-1d66', 'acab-wide-4fb2']);
+  });
+
+  it('재발은 정정 기록이면 고친 시각 뒤 서로 다른 세션 둘이어야 한다', () => {
+    const one = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s1', '2026-10-22T00:00:00Z')] });
+    assert.deepEqual(classes(one), []);
+    const old = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-19T00:00:00Z'), cor('s2', '2026-10-19T01:00:00Z')] });
+    assert.deepEqual(classes(old), []);
+    const two = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z')] });
+    assert.deepEqual(classes(two), ['재발 태그']);
+  });
+
+  it('물음, 유지, 되돌림으로 닫은 뒤에는 그 기록 뒤의 줄로 다시 판정한다', () => {
+    for (const how of ['물음', '유지', '되돌림']) {
+      const usage = [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7 }), use('c3 모자람(태그): x', { line: 12 }), use('d4 모자람(태그): y', { line: 13 })];
+      const fixes = [fix({ how, anchor: 10 })];
+      assert.deepEqual(classes(run({ fixes, usage: usage.slice(0, 2) })), [], how);
+      assert.deepEqual(classes(run({ fixes, usage })), ['쌓임 태그'], how);
+    }
+  });
+
+  it('프로젝트를 주지 않아도 마지막 고침의 범위가 프로젝트이면 그 프로젝트의 사용 기록과 정정 기록만 센다', () => {
+    const usage = [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7, project: '/q' })];
+    const corrections = [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z', { project: '/q' })];
+    assert.deepEqual(classes(run({ fixes: [fix()], usage, corrections })), []);
+    assert.deepEqual(classes(run({ fixes: [fix({ scope: '전역' })], usage, corrections })), ['재발 태그']);
+  });
+
+  it('무관 기록은 이름표 판정에서 없는 기록처럼 건너뛴다', () => {
+    const fixes = [fix({ anchor: 3 }), fix({ how: '무관', anchor: 10, at: '2026-10-22T00:00:00.000Z' })];
+    const r = run({ fixes, usage: [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7 })] });
+    assert.deepEqual(classes(r), ['재발 태그']);
+    assert.equal(r.table[0].fixes, 1);
+    assert.equal(r.table[0].last.how, '문장');
+  });
+
+  it('고침 기록도 처리할 것도 없는 이름표는 효과 표에서 뺀다', () => {
+    const r = run({ fixes: [fix({ label: '닫힘', how: '물음' })], usage: [use('a1 모자람(지켜봄): x', { line: 1 })] });
+    assert.deepEqual(r.table.map((t) => t.tag), ['닫힘']);
+    assert.equal(r.tags.length, 2);
+  });
+
+  it('처리할 것 줄은 모자람과 정정을 나눠 건수와 근거를 적는다', () => {
+    const r = run({ fixes: [fix()], usage: [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7 })], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z')] });
+    assert.equal(fixItemLine(r.items[0]), `- 재발 태그: 모자람 2건(agentId a1, b2), 정정 2건(세션 s1, s2), 마지막 고침 ${T0} 문장 A.md#절, 다음 방식 스크립트 또는 훅`);
+    const only = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z')] });
+    assert.match(fixItemLine(only.items[0]), /^- 재발 태그: 정정 2건\(세션 s1, s2\), 마지막 고침/);
+  });
+
+  it('프로젝트를 주면 그 프로젝트의 줄과 범위가 전역인 고침만 센다', () => {
+    const fixes = [fix({ project: '/q', label: '남의것' }), fix({ project: '/q', scope: '전역', label: '공통' })];
+    const usage = [use('a1 개선(남의것): x', { project: '/q' }), use('a1 개선(내것): x')];
+    const r = run({ fixes, usage, project: '/p' });
+    assert.deepEqual(r.table.map((t) => t.tag).sort(), ['공통', '내것']);
+  });
+
+  it('기준점이 사용 기록 줄 수보다 큰 고침은 경고 건수에 든다', () => {
+    assert.equal(judgeFixes({ fixes: [fix({ anchor: 50 }), fix({ anchor: 3 })], lineCount: 10 }).warn, 1);
+  });
+
+  describe('나빠짐 의심', () => {
+    const bad = (i, over = {}) => use(`a${i} 모자람(다른): x`, { result: 'ok', ...over });
+    const series = (count, badEvery, start) => Array.from({ length: count }, (_, i) => (badEvery && i % badEvery === 0 ? bad(start + i, { line: start + i }) : use(`z${start + i} ok`, { line: start + i })));
+    const worse = (r) => classes(r).filter((c) => c.startsWith('나빠짐'));
+    const f = (over = {}) => fix({ label: '고침', anchor: 50, ...over });
+
+    it('뒤 비율이 앞 비율의 1.5배를 넘으면 걸리고 정확히 1.5배면 걸리지 않는다', () => {
+      const lines = (preBad, postBad) => [...series(50, 0, 1).map((r, i) => (i < preBad ? bad(i, { line: r.line }) : r)), ...series(50, 0, 51).map((r, i) => (i < postBad ? bad(i + 100, { line: r.line }) : r))];
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(10, 16) })), ['나빠짐 의심 고침']);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(10, 15) })), []);
+    });
+
+    it('뒤 줄이 30줄 미만이면 판정하지 않고 30줄이면 판정한다', () => {
+      const lines = (post) => [...series(50, 0, 1).map((r, i) => (i < 1 ? bad(i, { line: r.line }) : r)), ...series(post, 1, 51)];
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(29) })), []);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(30) })), ['나빠짐 의심 고침']);
+    });
+
+    it('뒤가 50줄 미만이면 앞도 같은 줄 수만 견준다', () => {
+      const usage = [...series(40, 0, 1).map((r, i) => (i < 5 || i >= 37 ? bad(i, { line: r.line }) : r)), ...series(30, 0, 41).map((r, i) => (i < 6 ? bad(i + 100, { line: r.line }) : r))];
+      assert.deepEqual(worse(run({ fixes: [f({ anchor: 40 })], usage })), ['나빠짐 의심 고침']);
+    });
+
+    it('같은 고친 곳에 되돌림이나 유지 기록이 뒤따르면 닫히고 다음 방식은 되돌리기 검토다', () => {
+      const usage = [...series(50, 0, 1), ...series(40, 1, 51)];
+      const r = run({ fixes: [f()], usage });
+      assert.equal(r.items.find((i) => i.cls === '나빠짐 의심').next, '되돌리기 검토');
+      for (const how of ['되돌림', '유지', '무관']) assert.deepEqual(worse(run({ fixes: [f(), f({ how, anchor: 100 })], usage })), [], how);
+    });
+
+    it('뒤쪽 나쁜 줄이 3건 미만이면 비율이 몇 배로 늘어도 걸리지 않는다', () => {
+      const lines = (postBad) => [...series(50, 0, 1), ...series(30, 0, 51).map((r, i) => (i < postBad ? bad(i + 100, { line: r.line }) : r))];
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(2) })), []);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(3) })), ['나빠짐 의심 고침']);
+    });
+
+    it('뒤 비율이 앞 비율보다 0.1 이상 늘어야 걸리고 0.1 미만이면 걸리지 않는다', () => {
+      const lines = (preBad, postBad) => [...series(50, 0, 1).map((r, i) => (i < preBad ? bad(i, { line: r.line }) : r)), ...series(50, 0, 51).map((r, i) => (i < postBad ? bad(i + 100, { line: r.line }) : r))];
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(1, 4) })), [], '4/50 - 1/50 = 0.06');
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(2, 8) })), ['나빠짐 의심 고침'], '8/50 - 2/50 = 0.12');
+      assert.deepEqual(worse(run({ fixes: [f()], usage: lines(0, 5) })), ['나빠짐 의심 고침'], '5/50 - 0 = 0.1');
+    });
+  });
+
+  it('효과 표는 뒤 줄이 30줄 미만이면 판정 기다림, 이상이면 유지다', () => {
+    const rows = (count) => Array.from({ length: count }, (_, i) => use(`z${i} ok`, { line: 6 + i }));
+    assert.equal(run({ fixes: [fix()], usage: rows(29) }).table[0].cls, '판정 기다림');
+    assert.equal(run({ fixes: [fix()], usage: rows(30) }).table[0].cls, '유지');
+  });
+});
+
+describe('비슷한 태그 찾기', () => {
+  it('공백을 뺀 문자열이 서로를 포함하거나 편집 거리가 2 이하이면 비슷하다', () => {
+    assert.deepEqual(similarTags('지시문 목표', ['지시문 목표줄', '전혀 다른 이름']), ['지시문 목표줄']);
+    assert.deepEqual(similarTags('abcdef', ['abcxyf', 'abcxyz']), ['abcxyf']);
+  });
+
+  it('공백을 뺀 값이 같으면 같은 태그라 비슷한 태그로 치지 않는다', () => {
+    assert.deepEqual(similarTags('지시문 목표', ['지시문목표']), []);
+  });
+});
+
+describe('정정 이름표 목록에 합치기', () => {
+  it('고침 기록 이름표와 사용 기록 태그를 정정 이름표와 공백을 뺀 기준으로 한 이름에 합친다', () => {
+    const rows = mergedLabelRows([{ label: '지시 문장', date: 'd', message: 'm' }], [{ at: '2026-10-01T00:00:00Z', label: '지시문장' }], [{ memo: 'a1 모자람(지시  문장): x' }]);
+    assert.equal(new Set(rows.map((r) => r.label)).size, 1);
+    assert.equal(rows.length, 3);
   });
 });

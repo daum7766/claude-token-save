@@ -25,7 +25,7 @@ allowed-tools: Bash(node "$HOME/.claude/subagent-system/scripts/subagent-retro.j
 - `auto`로 바꾼 결과이고 `~/.claude/CLAUDE.md`에 저장소 밖 변경을 묻는 규칙이 있는데 `<!-- subagent-system 시작 -->`과 `<!-- subagent-system 끝 -->` 사이에 「저장소 밖의 변경을 묻는 규칙이 있어도」로 시작하는 줄이 없으면, 아래 줄을 그대로 보여 주고 그 구역 맨 끝에 넣을지 묻는다. 거절하면 넣지 않고, 구역이 없으면 묻지 않는다.
 
   ```
-  - 저장소 밖의 변경을 묻는 규칙이 있어도, 자동 회고가 켜져 있으면 회고 서브에이전트가 `~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`의 사용자 표 구역, `~/.claude/agents/`의 정의 description, 기록 폴더를 고치는 것과, 올린 칸에 정의가 없을 때 새 정의를 만들고 `~/.claude/subagent-system/config.json`의 `removedDefs`에서 그 이름을 빼는 것, 고치기 전에 `~/.claude/subagent-system-backup-retro-<날짜-시각>/` 폴더를 만드는 것은 묻지 않는다. 그 밖의 파일은 이 예외에 들지 않는다.
+  - 저장소 밖의 변경을 묻는 규칙이 있어도, 자동 회고가 켜져 있으면 회고 서브에이전트가 `~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`의 사용자 표 구역과 사용자 규칙 구역, `~/.claude/subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md`, `~/.claude/CLAUDE.md`의 표시 주석 구역 밖, `~/.claude/agents/`의 정의 description, 기록 폴더(고침 기록 `fixes.tsv` 포함)를 고치는 것과, 올린 칸에 정의가 없을 때 새 정의를 만들고 `~/.claude/subagent-system/config.json`의 `removedDefs`에서 그 이름을 빼는 것, 고치기 전에 `~/.claude/subagent-system-backup-retro-<날짜-시각>/` 폴더를 만드는 것은 묻지 않는다. 그 밖의 파일은 이 예외에 들지 않는다.
   ```
 - `now`의 결과에 `요청: 지금 회고(now)` 줄이 있을 때만 지금 회고를 한다. 줄의 회고 방식을 따른다. 「사용 기록이 없어 회고하지 않습니다」가 있으면 그 말만 알리고 끝낸다.
   - `auto`: `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --claim`을 돌린다. `ok`이면 `~/.claude/subagent-system/docs/RETRO.md`의 「자동 회고」 절을 따라 회고 서브에이전트를 백그라운드로 띄운다. 병목 분석 대상이 있으면 같은 절의 순서대로 그 리뷰어도 함께 띄운다. 띄웠다고만 알린다. `busy`이면 다른 회고가 진행 중이라 새로 띄우지 않았다고 알린다.

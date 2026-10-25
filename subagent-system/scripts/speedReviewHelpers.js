@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sessionCwd, projectRoot } from './claudeProjectPaths.js';
 import { analyzeTranscript, readMessageRows } from './transcriptTiming.js';
-import { UP_MIN_COUNT, UP_MIN_RATIO } from './subagentRetroHelpers.js';
+import { UP_MIN_COUNT, UP_MIN_RATIO, agentIdOf } from './subagentRetroHelpers.js';
+
+export { agentIdOf };
 
 // Agent 호출은 거의 모두 백그라운드라 호출 시작끼리만 재면 긴 단계 뒤에서 회차가 잘못 갈린다. 그래서 앞 호출들이 끝난 시각(서브에이전트 활동 끝 포함)부터 잰다.
 export const RUN_GAP_SEC = 3600;
@@ -182,9 +184,6 @@ export const EXCLUDED_KINDS = ['자동 회고', '회고 정정 분류', '작업 
 
 // 전 문제 건수는 적용 전 기록에서 올림, 재지시, 정정이 붙은 건수다. 절차의 대화 기록은 보존 기간이 지나면 사라져 나중에 다시 셀 수 없으므로 적용할 때 남긴다.
 export const SPEED_LOG_HEADER = '시각\t종류\t대상\t무엇\t전 평균 초\t전 건수\t사용 기록 줄 수\t내용\t전 문제 건수';
-
-// 메모 첫 낱말에 `add4fa4fc4b15a337(이어서)`처럼 꼬리가 붙을 수 있어 앞의 16진수 글자만 agentId로 쓴다.
-export const agentIdOf = (word) => (word ? /^[0-9a-f]+/.exec(word)?.[0] ?? word : word);
 
 // 같은 agentId의 줄은 재지시 구간마다 초가 따로 적혀 있으므로 더해 한 에이전트로 센다. 초를 적지 않은 에이전트는 평균을 흐리므로 뺀다.
 export function cellCandidates(usageRows) {

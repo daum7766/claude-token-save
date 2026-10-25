@@ -2105,3 +2105,203 @@ describe('subagent-retro.js claudeMdLimitLines', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { claudeMdLimitLines: 100, claudeMdKeptLines: 230 });
   });
 });
+
+describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
+  const HEAD = ['시각', '프로젝트', '범위', '신호', '이름표', '고친 곳', '방식', '기준점', '메모'].join('\t');
+  const setup = () => {
+    const root = tmpDir();
+    const dir = path.join(root, 'records');
+    fs.mkdirSync(dir);
+    return { dir, config: path.join(root, 'config.json'), usage: path.join(dir, 'subagent-usage.tsv'), fixes: path.join(dir, 'fixes.tsv'), corrections: path.join(dir, 'subagent-corrections.tsv') };
+  };
+  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
+  const use = (memo, project = '/p') => ['2026-10-12', project, 'sonnet-low', '번역', '1', '2', '3', 'ok', memo].join('\t');
+  const fixRow = (over = {}) => {
+    const v = { at: '2026-10-20T00:00:00.000Z', project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: '0', memo: 'm', ...over };
+    return [v.at, v.project, v.scope, v.signal, v.label, v.where, v.how, v.anchor, v.memo].join('\t');
+  };
+  const fixArgs = ['--fix', '--project', '/p/.claude/worktrees/w', '--signal', '정정', '--label', '태그', '--where', 'docs/A.md#절', '--how', '문장', '--memo', '메모'];
+
+  describe('--fix', () => {
+    it('머리줄과 아홉 열 한 줄을 쓰고 범위, 시각, 기준점을 채우며 출력은 두 줄이다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, [use('a1 x'), use('a2 y'), use('a3 z')].join('\n') + '\n');
+      const r = run(fixArgs, e);
+      assert.equal(r.status, 0, r.stderr);
+      const out = r.stdout.trim().split('\n');
+      assert.equal(out.length, 2);
+      assert.equal(out[0], `고침 기록에 한 줄 덧붙였습니다(${e.fixes})`);
+      const lines = fs.readFileSync(e.fixes, 'utf8').trim().split('\n');
+      assert.equal(lines[0], HEAD);
+      assert.equal(out[1], lines[1]);
+      const c = lines[1].split('\t');
+      assert.equal(c.length, 9);
+      assert.ok(!Number.isNaN(Date.parse(c[0])));
+      assert.deepEqual(c.slice(1), ['/p', '프로젝트', '정정', '태그', 'docs/A.md#절', '문장', '3', '메모']);
+    });
+
+    it('두 번째 호출은 머리줄을 다시 쓰지 않고 줄만 덧붙인다', () => {
+      const e = setup();
+      run(fixArgs, e);
+      run(fixArgs, e);
+      assert.equal(fs.readFileSync(e.fixes, 'utf8').trim().split('\n').filter((l) => l === HEAD).length, 1);
+      assert.equal(fs.readFileSync(e.fixes, 'utf8').trim().split('\n').length, 3);
+    });
+
+    it('필수 인자가 빠지거나 값이 집합 밖이면 종료 코드 1이고 파일을 만들지 않는다', () => {
+      const e = setup();
+      const without = (key) => fixArgs.filter((a, i) => a !== `--${key}` && fixArgs[i - 1] !== `--${key}`);
+      for (const key of ['project', 'signal', 'label', 'where', 'how', 'memo']) assert.equal(run(without(key), e).status, 1, key);
+      assert.equal(run(fixArgs.map((a) => (a === '문장' ? '고침' : a)), e).status, 1);
+      assert.equal(run(fixArgs.map((a) => (a === '정정' ? '불만' : a)), e).status, 1);
+      assert.equal(fs.existsSync(e.fixes), false);
+    });
+  });
+
+  describe('--fixes', () => {
+    const items = (r) => r.stdout.split('\n').filter((l) => l.startsWith('- ') && l.includes('다음 방식'));
+
+    it('첫 줄이 처리할 것 건수이고 이어 처리할 것 줄, 효과 표, 태그 목록을 찍는다', () => {
+      const e = setup();
+      fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
+      fs.writeFileSync(e.usage, [use('a1 모자람(태그): x'), use('b2 모자람(태그): y')].join('\n') + '\n');
+      const r = run(['--fixes'], e);
+      assert.equal(r.status, 0, r.stderr);
+      const out = r.stdout.split('\n');
+      assert.equal(out[0], '1');
+      assert.match(out[1], /^- 재발 태그: 모자람 2건\(agentId a1, b2\), 마지막 고침 2026-10-20T00:00:00.000Z 문장 A\.md#절, 다음 방식 스크립트 또는 훅$/);
+      assert.ok(r.stdout.includes('효과 표'));
+      assert.match(r.stdout, /이름표\s+고침\s+마지막 고침/);
+      assert.match(r.stdout, /태그\s+1\s+2026-10-20 문장\s+2\s+2\s+재발/);
+      assert.match(r.stdout, /태그 목록\n- 태그: 3건, 마지막 2026-10-20/);
+      assert.ok(!r.stdout.includes('경고'));
+    });
+
+    it('고침 기록이 없고 모자람 표시도 없으면 0이다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, use('a1 x') + '\n');
+      assert.equal(run(['--fixes'], e).stdout.split('\n')[0], '0');
+    });
+
+    it('정정 기록의 이름표도 재발로 센다', () => {
+      const e = setup();
+      fs.writeFileSync(e.fixes, [HEAD, fixRow()].join('\n') + '\n');
+      const corr = (session, time) => ['2026-10-21', '/p', session, time, '메인', '-', '-', '-', '태그', '메시지'].join('\t');
+      fs.writeFileSync(e.corrections, ['날짜\t프로젝트\t세션\t시각\t대상\tagentId\t정의\t일 종류\t이름표\t메시지', corr('s1', '2026-10-21T00:00:00Z'), corr('s2', '2026-10-22T00:00:00Z')].join('\n') + '\n');
+      const r = run(['--fixes'], e);
+      assert.equal(r.stdout.split('\n')[0], '1');
+      assert.match(items(r)[0], /재발 태그: 정정 2건\(세션 s1, s2\)/);
+    });
+
+    it('기준점이 사용 기록 줄 수보다 큰 고침이 있으면 맨 끝에 경고를 찍는다', () => {
+      const e = setup();
+      fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '99' })].join('\n') + '\n');
+      fs.writeFileSync(e.usage, use('a1 x') + '\n');
+      const lines = run(['--fixes'], e).stdout.trim().split('\n');
+      assert.equal(lines.at(-1), '경고: 기준점이 사용 기록보다 큰 고침 1건(사용 기록이 지워졌거나 옮겨졌을 수 있음)');
+    });
+
+    it('효과 표는 고침 기록도 처리할 것도 없는 이름표를 빼고 태그 목록에는 남긴다', () => {
+      const e = setup();
+      fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
+      fs.writeFileSync(e.usage, use('a1 모자람(지켜봄): x') + '\n');
+      const out = run(['--fixes'], e).stdout;
+      const [table, tags] = out.split('태그 목록');
+      assert.ok(!table.includes('지켜봄'));
+      assert.ok(tags.includes('- 지켜봄: 1건'));
+    });
+
+    it('--project는 절대경로가 아니면 종료 코드 1이다', () => {
+      const e = setup();
+      assert.equal(run(['--fixes', '--project', 'proj'], e).status, 1);
+      assert.equal(run(['--due', '--project', 'proj'], e).status, 1);
+    });
+
+    it('--project는 그 프로젝트의 줄과 범위가 전역인 고침만 센다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, [use('a1 개선(내것): x', '/p'), use('a2 개선(남의것): x', '/q')].join('\n') + '\n');
+      assert.equal(run(['--fixes'], e).stdout.split('\n')[0], '2');
+      const r = run(['--fixes', '--project', '/p/.claude/worktrees/w'], e);
+      assert.equal(r.stdout.split('\n')[0], '1');
+      assert.match(items(r)[0], /개선 내것/);
+    });
+  });
+
+  describe('--due', () => {
+    const lines = (n) => Array.from({ length: n }, (_, i) => use(`a${i} 줄`)).join('\n') + '\n';
+
+    it('처리할 것이 있으면 마지막 줄에 그 자리에서 고칠 것 건수가 붙고 첫 줄 판정은 그대로다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, lines(3) + [use('a1 개선(태그): x')].join('\n') + '\n');
+      const r = run(['--due', '--project', '/p'], e);
+      const out = r.stdout.trim().split('\n');
+      assert.match(out[0], /^wait \d+$/);
+      assert.match(out.at(-1), /그 자리에서 고칠 것 1건$/);
+    });
+
+    it('처리할 것이 없으면 기존 출력과 같다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, lines(3));
+      const withProject = run(['--due', '--project', '/p'], e).stdout;
+      assert.equal(withProject, run(['--due'], e).stdout);
+      assert.ok(!withProject.includes('그 자리에서 고칠 것'));
+    });
+  });
+
+  describe('--log의 새 태그 알림', () => {
+    const logArgs = (memo) => ['--log', '--project', '/p', '--def', 'sonnet-low', '--kind', '번역', '--result', 'ok', '--memo', memo];
+
+    it('처음 보는 태그는 비슷한 기존 태그와 함께 끝 줄로 알리고 이미 있는 태그는 알리지 않는다', () => {
+      const e = setup();
+      fs.writeFileSync(e.fixes, [HEAD, fixRow({ label: '지시문 목표줄' })].join('\n') + '\n');
+      const first = run(logArgs('a1 모자람(지시문 목표, 완전새것): x'), e);
+      const out = first.stdout.trim().split('\n');
+      assert.equal(out[2], '새 태그 지시문 목표(비슷한 기존 태그 지시문 목표줄)');
+      assert.equal(out[3], '새 태그 완전새것');
+      const again = run(logArgs('a2 모자람(지시문목표): y'), e);
+      assert.equal(again.stdout.trim().split('\n').length, 2);
+    });
+
+    it('태그가 없는 메모는 출력이 두 줄이다', () => {
+      const e = setup();
+      assert.equal(run(logArgs('a1 모자람: 옛 꼴'), e).stdout.trim().split('\n').length, 2);
+    });
+  });
+
+  describe('--shortfalls', () => {
+    it('옛 꼴 모자람 콜론과 새 꼴 모자람 괄호를 모두 고른다', () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, [use('a 모자람: 옛'), use('b 모자람(태그): 새'), use('c 개선(태그): 다름'), use('d 없음')].join('\n') + '\n');
+      const out = run(['--shortfalls'], e).stdout.trim().split('\n');
+      assert.equal(out.length, 3);
+      assert.match(out[1], /a 모자람: 옛/);
+      assert.match(out[2], /b 모자람\(태그\): 새/);
+    });
+  });
+
+  describe('--extract의 이름표 목록', () => {
+    it('정정 이름표에 고침 기록 이름표와 사용 기록 태그가 공백을 뺀 기준으로 합쳐진다', () => {
+      const e = setup();
+      const root = path.dirname(e.dir);
+      fs.writeFileSync(e.usage, [use('a1 모자람(지시 문장): x')].join('\n') + '\n');
+      fs.writeFileSync(e.fixes, [HEAD, fixRow({ label: '지시문장' })].join('\n') + '\n');
+      fs.writeFileSync(e.corrections, ['날짜\t프로젝트\t세션\t시각\t대상\tagentId\t정의\t일 종류\t이름표\t메시지', ['2026-10-21', '/p', 's1', '2026-10-21T00:00:00Z', '메인', '-', '-', '-', '지시 문장', 'm'].join('\t')].join('\n') + '\n');
+      const r = spawnSync(process.execPath, [RETRO, '--extract', path.join(root, 'out.tsv')], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, CLAUDE_CONFIG_DIR: path.join(root, 'claude') }, encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      const names = r.stdout.split('지금까지의 이름표(많이 나온 순)\n')[1].trim().split('\n');
+      assert.equal(names.length, 1);
+      assert.match(names[0], /\(3\)$/);
+    });
+  });
+
+  describe('--status', () => {
+    it('autoApplyRules 값을 보인다', () => {
+      const e = setup();
+      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 끔/);
+      fs.writeFileSync(e.config, '{"retroMode":"ask"}');
+      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 켬/);
+      fs.writeFileSync(e.config, '{"autoApplyRules":false}');
+      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 끔/);
+    });
+  });
+});

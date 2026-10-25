@@ -173,6 +173,15 @@ describe('agent-time-breakdown.js 실행', () => {
     assert.match(r.stdout, /건수 1, 평균 2\.0분/);
   });
 
+  it('이름이 붙은 서로 다른 agentId는 앞 16진수가 같아도 에이전트 둘로 센다', () => {
+    const { records, env } = setup();
+    const row = (id) => ['2026-10-10', '/work/proj', 'sonnet-high', '이름 붙은 일', '-', '-', '60', 'ok', `${id} 메모`].join('\t');
+    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('acab-qr-1d6679cb720078db'), row('acab-wide-mock-4fb2a6f9d81863d8')].join('\n') + '\n');
+    const r = run(TIME, ['--kind', '이름 붙은 일'], env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /건수 2, 평균 1\.0분/);
+  });
+
   it('사용 기록 메모에 agentId 앞 8자만 있어도 전체 ID 대화 기록을 찾는다', () => {
     const { proj, records, env } = setup();
     const full = 'abcd1234efgh5678i';

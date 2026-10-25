@@ -1350,7 +1350,7 @@ const LOG_REQUIRED = ['project', 'def', 'kind', 'result', 'memo'];
 const LOG_NUMBERS = ['tokens', 'tools', 'secs'];
 // 탭과 줄바꿈은 열과 줄 경계라 값 안에 있으면 기록이 깨지므로 공백으로 바꾼다.
 const flatCell = (v) => v.replace(/[\t\r\n]/g, ' ').trim();
-const isAbsolutePath = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
+export const isAbsolutePath = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
 
 // `--log`의 이름 붙은 인자로 사용 기록 한 줄(9열)을 만든다. 열 순서는 날짜, 프로젝트, 정의, 일 종류, 토큰, 도구 호출, 걸린 초, 결과, 메모다.
 // 프로젝트를 생략할 수 없는 까닭: 열의 값은 세션을 시작한 폴더인데, 이 스크립트가 아는 cwd는 세션 중 cd로 바뀌어 있을 수 있어
@@ -1408,6 +1408,8 @@ export function parseConfig(text) {
     claudeMdKeptLines: Number.isInteger(o?.claudeMdKeptLines) && o.claudeMdKeptLines >= 0 ? o.claudeMdKeptLines : null,
     claudeMdLimitLines: Number.isInteger(o?.claudeMdLimitLines) && o.claudeMdLimitLines > 0 ? o.claudeMdLimitLines : CLAUDE_MD_LIMIT_LINES,
     docReviewHashes: docReviewHashesOf(o),
+    // 키가 없을 때만 켠다. 설정 파일이 깨졌거나 사용자가 끈 값은 끈 대로 둬 규칙을 멋대로 고치지 않으려는 것이다.
+    autoApplyRules: o ? !('autoApplyRules' in o) || o.autoApplyRules === true : false,
   };
 }
 
@@ -1619,4 +1621,209 @@ export function judgeFableModel({ model, defaultFableModel = null, overrides = {
   const other = { def: 'opus-xhigh', memoNote: model };
   if (!model.includes('claude-')) return { ...other, label: 'Fable 확인 못함', notice: 'Fable인지 확인하지 못했다(조직 관리 설정의 modelOverrides는 읽지 못함)' };
   return { ...other, label: 'Fable 아님', notice: 'Fable 결과가 아니다' };
+}
+
+// 사용 기록 메모의 표시 `모자람(<태그>[,<태그>…]): <요지>`, `개선(<태그>): <요지>`를 읽는다. 닫는 괄호 바로 뒤에 `: `가 올 때만 표시다.
+// 옛 꼴 `모자람: <요지>`는 태그가 없어 판정에는 들지 않는다.
+export const normTag = (t) => String(t).replace(/\s+/g, '');
+export function memoMarks(memo) {
+  const marks = [];
+  const tagged = /(?:^|\s)(모자람|개선)\(([^()]*)\):(?: |$)/g;
+  let m;
+  while ((m = tagged.exec(memo ?? '')) !== null) {
+    const tags = m[2].split(',').map((t) => t.trim()).filter(Boolean);
+    if (tags.length) marks.push({ kind: m[1], tags });
+  }
+  if (/(?:^|\s)모자람:/.test(memo ?? '')) marks.push({ kind: '모자람', tags: [] });
+  return marks;
+}
+export const hasShortfall = (memo) => memoMarks(memo).some((m) => m.kind === '모자람');
+const marksOf = (r, kind) => memoMarks(r.memo).filter((m) => m.kind === kind).flatMap((m) => m.tags.map(normTag));
+
+export const FIX_HEADER = ['시각', '프로젝트', '범위', '신호', '이름표', '고친 곳', '방식', '기준점', '메모'].join('\t');
+export const FIX_SIGNALS = ['정정', '모자람', '개선', '재발'];
+export const FIX_HOWS = ['문장', '체크리스트', '스크립트', '훅', '되돌림', '물음', '유지', '무관'];
+const FIX_EFFECTIVE = ['문장', '체크리스트', '스크립트', '훅'];
+const FIX_KEYS = ['project', 'signal', 'label', 'where', 'how', 'memo'];
+const HOME_CLAUDE = '~/.claude/';
+
+export function parseFixes(text) {
+  return splitLines(text ?? '').flatMap((raw) => {
+    const c = raw.split('\t');
+    if (c[0] === '시각' || c.length < 9) return [];
+    const anchor = /^\d+$/.test(c[7]) ? Number(c[7]) : null;
+    const ok = !Number.isNaN(Date.parse(c[0])) && ['전역', '프로젝트'].includes(c[2]) && FIX_SIGNALS.includes(c[3]) && c[4] && FIX_HOWS.includes(c[6]) && anchor !== null;
+    return ok ? [{ at: c[0], project: c[1], scope: c[2], signal: c[3], label: c[4], where: c[5], how: c[6], anchor, memo: c.slice(8).join('\t') }] : [];
+  });
+}
+
+// 고친 곳의 경로를 설치본이면 `~/.claude/...`(범위 전역), 아니면 프로젝트 루트 기준 상대경로(범위 프로젝트)로 맞춘다.
+function fixWhere(where, project, claudeDir) {
+  const slash = (p) => p.replace(/\\/g, '/');
+  const w = slash(where);
+  const dir = slash(claudeDir).replace(/\/$/, '');
+  if (w.startsWith(HOME_CLAUDE)) return { where: w, scope: '전역' };
+  if (dir && w.startsWith(`${dir}/`)) return { where: HOME_CLAUDE + w.slice(dir.length + 1), scope: '전역' };
+  const root = slash(project);
+  const rest = w.startsWith(`${root}/`) ? w.slice(root.length + 1).replace(/^\.claude\/worktrees\/[^/]+\//, '') : w;
+  return { where: rest, scope: '프로젝트' };
+}
+
+// `--fix`의 이름 붙은 인자로 고침 기록 한 줄(9열)을 만든다. 시각, 범위, 기준점은 여기서 채운다.
+export function fixLineFromArgs(argv, { now = new Date(), lineCount = 0, claudeDir = '' } = {}) {
+  const opts = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--fix') continue;
+    const key = arg.startsWith('--') ? arg.slice(2) : null;
+    if (!FIX_KEYS.includes(key)) return { error: `알 수 없는 인자입니다: ${arg}(값에 공백이 있으면 큰따옴표로 감싸야 합니다)` };
+    const value = argv[++i];
+    if (value === undefined || (value.startsWith('--') && FIX_KEYS.includes(value.slice(2)))) return { error: `--${key}에 값이 없습니다` };
+    if (key in opts) return { error: `--${key}를 두 번 줬습니다` };
+    opts[key] = flatCell(value);
+  }
+  for (const key of FIX_KEYS) if (!opts[key]) return { error: `--${key}가 필요합니다` };
+  if (!FIX_SIGNALS.includes(opts.signal)) return { error: `--signal은 ${FIX_SIGNALS.join(', ')} 중 하나여야 합니다: ${opts.signal}` };
+  if (!FIX_HOWS.includes(opts.how)) return { error: `--how는 ${FIX_HOWS.join(', ')} 중 하나여야 합니다: ${opts.how}` };
+  if (!isAbsolutePath(opts.project)) return { error: `--project는 세션을 시작한 폴더의 절대 경로여야 합니다: ${opts.project}` };
+  if (/[(),]/.test(opts.label)) return { error: `--label에는 쉼표와 괄호를 쓰지 않습니다: ${opts.label}` };
+  const project = projectRoot(opts.project);
+  const { where, scope } = fixWhere(opts.where, project, claudeDir);
+  return { line: [now.toISOString(), project, scope, opts.signal, opts.label, where, opts.how, lineCount, opts.memo].join('\t') };
+}
+
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// 공백을 뺀 문자열이 서로를 포함하거나 편집 거리가 2 이하이면 비슷한 태그다. 공백을 뺀 값이 같으면 같은 태그라 뺀다.
+export function similarTags(tag, known) {
+  const t = normTag(tag);
+  const seen = new Set();
+  return known.filter((k) => {
+    const n = normTag(k);
+    if (n === t || seen.has(n)) return false;
+    seen.add(n);
+    return n.includes(t) || t.includes(n) || editDistance(n, t) <= 2;
+  });
+}
+
+// 고침 기록 이름표, 사용 기록 태그, 정정 이름표를 공백을 뺀 기준으로 묶는다.
+export function tagUniverse({ fixes = [], usage = [], corrections = [] }) {
+  const map = new Map();
+  const add = (name, date) => {
+    const key = normTag(name);
+    if (!key || key === '-') return;
+    const e = map.get(key) ?? { key, names: new Map(), count: 0, last: '' };
+    e.names.set(name, (e.names.get(name) ?? 0) + 1);
+    e.count++;
+    if (date > e.last) e.last = date;
+    map.set(key, e);
+  };
+  for (const f of fixes) add(f.label, f.at.slice(0, 10));
+  for (const r of usage) for (const m of memoMarks(r.memo)) for (const t of m.tags) add(t, r.date ?? '');
+  for (const c of corrections) add(c.label, c.date ?? '');
+  for (const e of map.values()) e.name = [...e.names].sort((a, b) => b[1] - a[1])[0][0];
+  return map;
+}
+
+const NEXT_AFTER = { 문장: '스크립트 또는 훅', 체크리스트: '스크립트 또는 훅', 스크립트: '바깥 자료 조사', 훅: '바깥 자료 조사' };
+// 쌓임과 재발로 볼 서로 다른 에이전트나 세션 수, 유지로 볼 뒤 줄 수, 나빠짐을 견주는 줄 수와 조건.
+// 나빠짐은 비율이 배율을 넘게 늘고, 뒤쪽 나쁜 줄이 최소 건수 이상이며, 비율 차가 최소 차 이상일 때만 걸린다(줄이 적을 때의 잡음을 거르려는 것이다).
+export const FIX_LATER_MIN = 2;
+export const FIX_JUDGE_LINES = 30;
+export const FIX_COMPARE_LINES = 50;
+export const FIX_WORSE_RATIO = 1.5;
+export const FIX_WORSE_MIN_HITS = 3;
+export const FIX_WORSE_MIN_GAP = 0.1;
+const uniq = (a) => [...new Set(a)];
+// 메모 첫 낱말에 `add4fa4(이어서)`처럼 괄호 꼬리가 붙을 수 있어 꼬리만 떼고 agentId로 쓴다. `afinal-qr-1d66`처럼 이름이 붙은 agentId는 그대로 둔다.
+export const agentIdOf = (word) => (word ? word.replace(/\(.*$/, '') : word);
+const idsOf = (rows) => uniq(rows.map((r) => agentIdOf(r.agentId)).filter(Boolean));
+
+// 고침 기록, 사용 기록, 정정 기록으로 이름표마다 고친 뒤의 효과를 가린다. project를 주면 그 프로젝트의 줄과 범위가 전역인 고침 줄만 센다.
+// 주지 않아도 마지막 고침의 범위가 프로젝트이면 그 프로젝트의 사용 기록과 정정 기록만 센다. 무관 기록은 없는 것처럼 건너뛴다.
+export function judgeFixes({ fixes = [], usage = [], corrections = [], lineCount = 0, project = null }) {
+  const fx = project ? fixes.filter((f) => f.project === project || f.scope === '전역') : fixes;
+  const rows = project ? usage.filter((r) => r.project === project) : usage;
+  const cor = project ? corrections.filter((c) => c.project === project) : corrections;
+  const universe = tagUniverse({ fixes: fx, usage: rows, corrections: cor });
+  const items = [];
+  const table = [];
+  for (const e of universe.values()) {
+    const mine = fx.filter((f) => normTag(f.label) === e.key && f.how !== '무관');
+    const last = mine.at(-1) ?? null;
+    const lastAt = last ? Date.parse(last.at) : -Infinity;
+    const scoped = project ?? (last?.scope === '프로젝트' ? last.project : null);
+    const inScope = (x) => !scoped || x.project === scoped;
+    const after = rows.filter((r) => inScope(r) && r.line > (last?.anchor ?? 0));
+    const shortfall = idsOf(after.filter((r) => marksOf(r, '모자람').includes(e.key)));
+    const improved = after.filter((r) => marksOf(r, '개선').includes(e.key));
+    const sessions = uniq(cor.filter((c) => inScope(c) && normTag(c.label) === e.key && Date.parse(c.time) > lastAt).map((c) => c.session));
+    const effective = last && FIX_EFFECTIVE.includes(last.how);
+    const shortPart = { name: '모자람', who: 'agentId', n: shortfall.length, ids: shortfall };
+    const sessionPart = { name: '정정', who: '세션', n: sessions.length, ids: sessions };
+    const found = [];
+    if (!effective && shortfall.length >= FIX_LATER_MIN) found.push({ cls: '쌓임', parts: [shortPart], next: '문장 또는 체크리스트' });
+    if (improved.length) found.push({ cls: '개선', parts: [{ name: '개선', who: 'agentId', n: improved.length, ids: idsOf(improved) }], next: '문장 또는 체크리스트' });
+    const recur = effective && (shortfall.length >= FIX_LATER_MIN || sessions.length >= FIX_LATER_MIN);
+    if (recur) found.push({ cls: '재발', parts: [shortPart, sessionPart].filter((p) => p.n), next: NEXT_AFTER[last.how] });
+    for (const f of found) items.push({ ...f, tag: e.name, last });
+    const sameProject = effective ? after.filter((r) => r.project === (project ?? last.project)).length : 0;
+    const settled = effective && !recur;
+    const cls = found.length ? found.map((f) => f.cls).join('+') : settled ? (sameProject >= FIX_JUDGE_LINES ? '유지' : '판정 기다림') : '-';
+    if (cls !== '-' || mine.length) table.push({ tag: e.name, fixes: mine.length, last, later: after.length, recurrences: recur ? shortfall.length + sessions.length : 0, cls });
+  }
+  items.push(...worseItems(fx, rows, project));
+  const warn = fx.filter((f) => f.anchor > lineCount).length;
+  return { items, table, tags: [...universe.values()], warn };
+}
+
+// 고친 곳마다 마지막 고침의 기준점 앞뒤 사용 기록을 견준다. 재지시이거나 모자람이 붙은 줄의 비율이 배율을 넘게 늘면 나빠짐이 의심된다.
+// 뒤쪽 나쁜 줄이 적거나 비율 차가 작으면 우연으로 보고 걸지 않는다. 그 뒤 같은 고친 곳에 되돌림, 유지, 무관 기록이 있으면 닫힌다.
+function worseItems(fixes, rows, project) {
+  const items = [];
+  for (const where of uniq(fixes.map((f) => f.where))) {
+    const mine = fixes.filter((f) => f.where === where);
+    const at = mine.findLastIndex((f) => FIX_EFFECTIVE.includes(f.how));
+    if (at < 0 || mine.slice(at + 1).some((f) => ['되돌림', '유지', '무관'].includes(f.how))) continue;
+    const fix = mine[at];
+    const same = rows.filter((r) => r.project === (project ?? fix.project));
+    const post = same.filter((r) => r.line > fix.anchor).slice(0, FIX_COMPARE_LINES);
+    if (post.length < FIX_JUDGE_LINES) continue;
+    const pre = same.filter((r) => r.line <= fix.anchor).slice(-post.length);
+    if (!pre.length) continue;
+    const bad = (r) => r.result === '재지시' || hasShortfall(r.memo);
+    const hit = post.filter(bad);
+    const preBad = pre.filter(bad).length;
+    const grew = hit.length * pre.length > FIX_WORSE_RATIO * preBad * post.length;
+    const gap = (hit.length * pre.length - preBad * post.length) / (pre.length * post.length);
+    if (grew && hit.length >= FIX_WORSE_MIN_HITS && gap >= FIX_WORSE_MIN_GAP) {
+      items.push({ cls: '나빠짐 의심', parts: [{ name: '나쁜 줄', who: 'agentId', n: hit.length, ids: idsOf(hit) }], next: '되돌리기 검토', tag: fix.label, last: fix });
+    }
+  }
+  return items;
+}
+
+const fixText = (f) => (f ? `${f.at} ${f.how} ${f.where}` : '없음');
+const fixPartText = (p) => `${p.name} ${p.n}건(${p.who} ${p.ids.slice(0, 5).join(', ') || '없음'})`;
+export function fixItemLine(i) {
+  return `- ${i.cls} ${i.tag}: ${i.parts.map(fixPartText).join(', ')}, 마지막 고침 ${fixText(i.last)}, 다음 방식 ${i.next}`;
+}
+export const fixTableRows = (table) => [['이름표', '고침', '마지막 고침', '뒤 줄', '재발', '분류'], ...table.map((t) => [t.tag, t.fixes, t.last ? `${t.last.at.slice(0, 10)} ${t.last.how}` : '없음', t.later, t.recurrences, t.cls])];
+export const fixTagLine = (e) => `- ${e.name}: ${e.count}건, 마지막 ${e.last || '없음'}`;
+export const fixWarnLine = (n) => `경고: 기준점이 사용 기록보다 큰 고침 ${n}건(사용 기록이 지워졌거나 옮겨졌을 수 있음)`;
+
+// 정정 이름표 목록에 고침 기록 이름표와 사용 기록 태그를 합쳐 하나의 이름 집합으로 만든다.
+export function mergedLabelRows(history, fixes, usage) {
+  const names = tagUniverse({ fixes, usage, corrections: history });
+  const canon = (label) => names.get(normTag(label))?.name ?? label;
+  const extra = [...fixes.map((f) => f.label), ...usage.flatMap((r) => memoMarks(r.memo).flatMap((m) => m.tags))];
+  return [...history.map((r) => ({ ...r, label: canon(r.label) })), ...extra.map((label) => ({ label: canon(label), date: '', message: '' }))];
 }

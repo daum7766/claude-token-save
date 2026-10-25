@@ -188,6 +188,11 @@ describe('cellCandidates', () => {
     assert.deepEqual(cells[0].agents, [{ id: 'add4fa4fc4b15a337', sec: 150, line: 2 }]);
   });
 
+  it('이름이 붙은 서로 다른 agentId는 앞 16진수가 같아도 서로 다른 에이전트 둘로 센다', () => {
+    const cells = cellCandidates([urow(1, 'sonnet-low', '구현', 'acab-qr-1d6679cb720078db', 100), urow(2, 'sonnet-low', '구현', 'acab-wide-mock-4fb2a6f9d81863d8', 50)]);
+    assert.deepEqual(cells[0].agents.map((a) => a.id), ['acab-qr-1d6679cb720078db', 'acab-wide-mock-4fb2a6f9d81863d8']);
+  });
+
   it('회고 자체의 일 종류는 후보에서 뺀다', () => {
     const rows = EXCLUDED_KINDS.map((kind, i) => urow(i + 1, 'opus-medium', kind, `x${i}`, 60));
     assert.deepEqual(cellCandidates(rows), []);
