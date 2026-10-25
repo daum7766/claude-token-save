@@ -7,20 +7,26 @@
  * 지난 회고 뒤의 사용자 메시지를 뽑아 정정 분류를 받아 정정 기록에 덧붙인다.
  *
  * 실행:
- *   node scripts/subagent-retro.js                                    표와 칸 조정 후보(기록은 쓰지 않음. CLAUDE.md가 200줄 이하이면 config.json의 claudeMdKeptLines만 지움)
+ *   node scripts/subagent-retro.js                                    표와 칸 조정 후보(기록은 쓰지 않음. CLAUDE.md가 기준 줄 수 이하이면 config.json의 claudeMdKeptLines만 지움)
  *   node scripts/subagent-retro.js --where                            기록 폴더의 절대 경로만 찍음(어느 폴더에서 실행해도 같음)
  *   node scripts/subagent-retro.js --count                            지난 회고 뒤 사용 기록 줄 수만 찍음
  *   node scripts/subagent-retro.js --due                              회고를 물을 때인지 `ask`, `auto`(자동 회고 방식), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상)이면 ask이고 그 칸은 둘째 줄에 찍음)
  *   node scripts/subagent-retro.js --snooze                           사용자가 회고를 미뤘다는 표시 줄을 사용 기록에 덧붙임(그 뒤 기준의 절반만큼, 최대 20줄 쌓일 때까지 --due가 wait. 올림이 쌓인 칸은 올림이 붙은 에이전트가 1명 더 생겨 조건을 다시 채울 때까지 묻지 않음. 그때 걸린 기준만 미루고, 기간 기준이 걸렸을 때만 기간 셈을 오늘부터 다시 함)
  *   node scripts/subagent-retro.js --retro-mode [auto|ask]            회고 방식(config.json)을 찍거나 바꿈. 인자가 없으면 지금 값만 찍고, 설정 파일이 없거나 깨졌으면 ask
- *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 전체 줄 수가 200줄을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 전체 줄 수가 기준(config.json의 claudeMdLimitLines, 기본 200)을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --docs [--since YYYY-MM-DD]       문서 내용 검토 대상을 찍음. 지난 회고 추출 시각 뒤(--since면 그 날 0시 뒤)의 대화에서 쓴 스킬(사용자가 고칠 수 있는 ~/.claude/skills와 그 프로젝트의 .claude/skills만. 플러그인 스킬과 키트 스킬은 뺌)과, 같은 구간 사용 기록의 프로젝트 CLAUDE.md 가운데 config.json의 docReviewHashes에 적힌 지난 검토 뒤 바뀐 것만, 한 번에 최대 5개. 프로젝트 CLAUDE.md는 줄 수와 기준(claudeMdLimitLines) 초과 여부도 찍음. 아무것도 쓰지 않음
+ *   node scripts/subagent-retro.js --docs-done <경로>...              검토를 마친 문서의 지금 내용 해시를 config.json의 docReviewHashes에 더함(다른 키는 그대로). 설정 파일이 없거나 깨졌거나 파일이 없으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --claim                            자동 회고를 시작해도 되는지 잠금으로 가림. 잡으면 ok, 다른 회고가 진행 중이면 busy(3시간 넘은 잠금은 버려진 것으로 보고 다시 잡음)
  *   node scripts/subagent-retro.js --release [--failed]               잠금만 풂. --failed를 붙이면 자동 회고가 실패한 것으로 세어 config.json의 retroFailures를 1 올리고, 이어 두 번 실패하면 회고 방식을 ask로 돌림. --mark도 회고 표시를 남기면 잠금을 풀고 횟수를 0으로 돌림
  *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
  *   node scripts/subagent-retro.js --slash "<인자>"                   슬래시 커맨드 인자(상태 보기, auto, ask, now, 그 밖은 사용법)와 같은 동작. 스킬은 인자가 auto, ask, now 중 하나와 정확히 같을 때만 부름. 항상 종료 코드 0
  *   node scripts/subagent-retro.js --kinds                            기록 전체에서 표에 없는 일 이름, 건수, 마지막 날짜만 찍음(새 일 이름을 짓기 전에 봄). config.json의 removedKinds에 든 이름에는 (사용자가 뺐거나 회고가 쪼갠 옛 이름)을, 표에 <이름>[기준] 꼴 칸이 있으면 (회고가 쪼갠 옛 이름)을 붙임
- *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 일곱 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 여덟 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 문서 내용 검토, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --restore-kind "<일 이름>"          사용자가 다시 넣으라고 한 일 이름을 removedKinds에서 뺌(비면 키를 지움). 다른 키는 그대로
+ *   node scripts/subagent-retro.js --remove-def "<정의 이름>"          회고가 지운 정의 이름을 config.json의 removedDefs(배열)에 더함. 이미 있으면 그대로. 다른 키는 그대로, 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --restore-def "<정의 이름>"         정의를 다시 만들 때 그 이름을 removedDefs에서 뺌(비면 키를 지움). 다른 키는 그대로
+ *   node scripts/subagent-retro.js --shortfalls                       지난 회고 메모와, 마지막 회고 뒤 사용 기록 메모의 `모자람:` 줄을 찍음(아무것도 쓰지 않음)
+ *   node scripts/subagent-retro.js --check-fable <agentId> [--project <폴더>]  Fable 5.1로 보낸 에이전트의 비용 기록 모델 열을 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견줘 Fable 여부, 사용 기록에 쓸 --def, 사용자에게 알릴 말을 찍음. --project는 세션을 연 폴더(기본은 지금 폴더). 아무것도 쓰지 않음
  *   node scripts/subagent-retro.js --record-kit-hashes                키트가 통째로 바꾸는 설치본 파일(스크립트 폴더 전체, RETRO.md, GUIDE의 사용자 구역 밖, 정의의 description과 글쓰기 줄 밖, /retro 스킬)의 sha256을 config.json의 kitFileHashes에 적음(전체를 새로 씀). 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --check-kit-hashes [--kit <키트 폴더>]  설치본 파일을 kitFileHashes와 견줘 기록과 다른 파일(손으로 고쳤을 수 있음)과 없어진 파일을 찍음. removedDefs에 든 정의가 없는 것은 회고가 지운 것이라 따로 찍음. --kit을 주면 다른 파일 가운데 그 키트 폴더(subagent-system이 든 폴더)의 새 키트와 같은 파일에 표시를 붙임(업데이트가 이미 놓은 파일. 스킬은 $HOME/.claude를 절대 경로로 풀어 쓴 꼴도 같게 봄). 기록이 없으면 그렇다고 찍음. 아무것도 쓰지 않고 항상 종료 코드 0
  *   node scripts/subagent-retro.js --check                           표와 실제 배정이 어긋난 곳을 찍음(다른 정의로 보낸 기록, 정의 description과 표 칸의 차이, 정의 파일 없는 칸, removedDefs에 든 정의인데 표 칸에 일이 있는 칸). 문제가 있으면 종료 코드 1
@@ -36,11 +42,13 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { locateTranscript } from './subagent-usage.js';
 import { CLAUDE_DIR, RECORDS_DIR, GUIDE_FILE, AGENTS_DIR, CONFIG_FILE, PROJECTS_ROOT, listSessions, readJsonl, sessionCwd, projectRoot, localDate, retentionDays, printTable, appendWithHeader, splitLines } from './claudeProjectPaths.js';
-import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, CLAUDE_MD_LIMIT_LINES, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP } from './subagentRetroHelpers.js';
+import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP } from './subagentRetroHelpers.js';
 
 const USAGE_FILE = path.join(RECORDS_DIR, 'subagent-usage.tsv');
 const COST_FILE = path.join(RECORDS_DIR, 'subagent-cost.tsv');
@@ -52,7 +60,7 @@ const MESSAGES_HEADER = ['번호', '세션', '프로젝트', '시각', '끝난 �
 const MAX_SKIPPED_RATIO = 0.2;
 
 function parseArgs(argv) {
-  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, count: false, where: false, kinds: false, check: false, repeats: false };
+  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, count: false, where: false, kinds: false, check: false, repeats: false, docs: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'count') opts.count = true;
@@ -60,6 +68,7 @@ function parseArgs(argv) {
     else if (key === 'kinds') opts.kinds = true;
     else if (key === 'check') opts.check = true;
     else if (key === 'repeats') opts.repeats = true;
+    else if (key === 'docs') opts.docs = true;
     else if (key in opts) opts[key] = argv[++i] ?? '';
   }
   return opts;
@@ -121,7 +130,7 @@ const SPLIT_MARK = '(회고가 쪼갠 옛 이름)';
 const isSplitOld = (name, known) => Boolean(known) && [...known].some((k) => k.startsWith(`${name}[`));
 const removedMark = (name, known) => (isSplitOld(name, known) ? SPLIT_MARK : REMOVED_MARK);
 // 체계가 표에서 이 일이 든 칸의 정의를 찾아 서브에이전트를 보내므로(회고, 자동 회고, 무조건 Opus 영역의 판단과 구현, 올리기), 표에서 빠지면 보낼 정의를 못 찾는다.
-const RETRO_OWN_KINDS = ['회고 정정 분류', '자동 회고', '작업 기록 병목 분석', '무조건 Opus 영역 판단', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현', 'high로도 안 풀려 다시 보내는 일'];
+const RETRO_OWN_KINDS = ['회고 정정 분류', '자동 회고', '작업 기록 병목 분석', '문서 내용 검토', '무조건 Opus 영역 판단', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현', 'high로도 안 풀려 다시 보내는 일'];
 
 // removedKinds에 든 이름의 표시를 풀어 쓴다. 표시마다 한 번만 찍는다.
 function printRemovedNotes(kinds, known, indent, forKinds = false) {
@@ -232,12 +241,13 @@ function countByAgent(rows) {
 // 회고가 CLAUDE.md를 읽을지 정하는 줄이다. 대상이 아니면 CLAUDE.md는 읽지 않는다.
 function printClaudeMd() {
   const file = path.join(CLAUDE_DIR, 'CLAUDE.md');
-  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, readConfig().claudeMdKeptLines);
+  const { claudeMdKeptLines, claudeMdLimitLines } = readConfig();
+  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, claudeMdKeptLines, claudeMdLimitLines);
   if (!sum.exists) return console.log(`\nCLAUDE.md 정리: CLAUDE.md 없음(${file})`);
   const counts = `전체 ${sum.total}줄, 키트 구역 ${sum.kit}줄`;
-  // 사용자가 회고 밖에서 줄여도 옛 값이 남아 다시 늘 때 200줄이 아니라 옛 값 + 20줄부터 제안되므로, 200줄 이하가 되면 여기서 지운다.
+  // 사용자가 회고 밖에서 줄여도 옛 값이 남아 다시 늘 때 기준 줄 수가 아니라 옛 값 + 여유 줄부터 제안되므로, 기준 이하가 되면 여기서 지운다.
   let cleared = '';
-  if (sum.total <= CLAUDE_MD_LIMIT_LINES && sum.keptLines !== null) {
+  if (sum.total <= claudeMdLimitLines && sum.keptLines !== null) {
     try {
       const next = configTextWithoutKeptLines(readIfExists(CONFIG_FILE));
       if (next === null) throw new Error('설정 파일을 읽지 못했습니다');
@@ -633,7 +643,7 @@ function changeRemovedKind(raw, add) {
   if (raw === undefined || raw.startsWith('--')) fail(`${flag}에는 일 이름이 필요합니다: ${flag} "<일 이름>"`);
   const name = kindNameOf(raw);
   if (!name) fail(`${flag}의 일 이름이 비어 있습니다: ${raw}`);
-  if (add && RETRO_OWN_KINDS.includes(name)) fail(`「${name}」: 체계가 쓰는 일곱 가지 일이라 표에서 빼지 않습니다. 사용자가 빼 달라고 했으면 그렇다고 알리세요.`);
+  if (add && RETRO_OWN_KINDS.includes(name)) fail(`「${name}」: 체계가 쓰는 여덟 가지 일이라 표에서 빼지 않습니다. 사용자가 빼 달라고 했으면 그렇다고 알리세요.`);
   const text = readIfExists(CONFIG_FILE);
   const kinds = readConfig().removedKinds;
   const has = kinds.includes(name);
@@ -647,6 +657,90 @@ function changeRemovedKind(raw, add) {
     console.log(add ? `removedKinds에 더했습니다: ${name}` : `removedKinds에서 뺐습니다: ${name}`);
   }
   if (add && readTable().known?.has(name)) console.log('표에 아직 그 이름이 있습니다. 표와 그 칸 정의의 description 일 이름 나열에서도 뺐는지 확인하세요.');
+}
+
+// 정의 이름 목록(removedDefs)을 설정 파일에서 더하거나 뺀다. 업데이트가 지운 정의를 다시 놓지 않게 하려는 기록이다.
+function changeRemovedDef(name, add) {
+  const flag = add ? '--remove-def' : '--restore-def';
+  if (name === undefined || name.startsWith('--') || !name.trim()) fail(`${flag}에는 정의 이름이 필요합니다: ${flag} "<정의 이름>"`);
+  let o = null;
+  try {
+    o = JSON.parse(readIfExists(CONFIG_FILE));
+  } catch {
+    // 아래에서 설정 파일 오류로 알린다.
+  }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) fail(`설정 파일이 없거나 깨져 removedDefs를 쓰지 못했습니다: ${CONFIG_FILE}`);
+  const prev = Array.isArray(o.removedDefs) ? o.removedDefs : [];
+  const has = prev.includes(name);
+  if (add) o.removedDefs = has ? prev : [...prev, name];
+  else if (prev.some((x) => x !== name)) o.removedDefs = prev.filter((x) => x !== name);
+  else delete o.removedDefs;
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(o, null, 2) + '\n');
+  if (add) console.log(has ? `이미 removedDefs에 있어 그대로 뒀습니다: ${name}` : `removedDefs에 더했습니다: ${name}`);
+  else console.log(has ? `removedDefs에서 뺐습니다: ${name}` : `removedDefs에 없어 그대로 뒀습니다: ${name}`);
+}
+
+// 지난 회고 줄은 일 종류 열이 `회고`인 마지막 줄이다. 없으면 기록 처음부터 센다.
+function printShortfalls() {
+  if (!fs.existsSync(USAGE_FILE)) fail(`사용 기록이 없습니다: ${USAGE_FILE}`);
+  const lines = splitLines(fs.readFileSync(USAGE_FILE, 'utf8'));
+  const at = lines.map((l) => l.split('\t')[2]).lastIndexOf('회고');
+  console.log(`지난 회고 메모: ${at < 0 ? '' : lines[at].split('\t')[8]}`);
+  for (const l of lines.slice(at + 1)) if (l.includes('모자람:')) console.log(l);
+}
+
+const readJsonObject = (file) => {
+  try {
+    const o = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
+  } catch {
+    return null;
+  }
+};
+
+// 개인용 settings.local.json이 어느 폴더의 것인지는 Claude Code가 git 저장소 안이면 최상위(워크트리는 메인 체크아웃의 최상위)로 잡는다.
+// 저장소 밖이거나 최상위가 홈 폴더이거나 Windows이거나 최상위나 그 .git, .claude가 사용자 소유가 아니면 지금 연 폴더다.
+function localSettingsRoot(cwd) {
+  if (process.platform === 'win32') return cwd;
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], { encoding: 'utf8' });
+  if (r.status !== 0) return cwd;
+  const [top, common] = r.stdout.trim().split('\n');
+  const root = path.basename(common) === '.git' ? path.dirname(common) : top;
+  if (!root || path.resolve(root) === path.resolve(os.homedir())) return cwd;
+  const mine = process.getuid?.();
+  const owned = [root, path.join(root, '.git'), path.join(root, '.claude')].every((p) => !fs.existsSync(p) || fs.statSync(p).uid === mine);
+  return owned ? root : cwd;
+}
+
+// 설정 파일을 우선순위대로 돌려준다: 최상위의 settings.local.json, 지금 연 폴더의 settings.local.json(옛 버전이 남긴 것), 프로젝트 settings.json, 사용자 settings.json.
+// 지금 연 폴더의 .claude가 사용자 설정 폴더와 같으면 그 settings.json은 사용자 설정으로만 읽는다.
+function fableSettingFiles(cwd) {
+  const files = [path.join(localSettingsRoot(cwd), '.claude', 'settings.local.json'), path.join(cwd, '.claude', 'settings.local.json')];
+  const user = path.join(CLAUDE_DIR, 'settings.json');
+  const project = path.join(cwd, '.claude', 'settings.json');
+  const real = (f) => (fs.existsSync(f) ? fs.realpathSync(f) : path.resolve(f));
+  if (real(project) !== real(user)) files.push(project);
+  files.push(user);
+  return [...new Set(files.map(real))].filter((f) => fs.existsSync(f));
+}
+
+function checkFable(agentId, projectArg) {
+  if (agentId === undefined || agentId.startsWith('--')) fail('--check-fable에는 agentId가 필요합니다: --check-fable <agentId> [--project <폴더>]');
+  const entry = readCost().get(agentId);
+  const files = fableSettingFiles(path.resolve(projectArg ?? process.cwd()));
+  const settings = files.map((f) => readJsonObject(f) ?? {});
+  const overrides = {};
+  for (const s of [...settings].reverse()) {
+    for (const [key, value] of Object.entries(s.modelOverrides ?? {})) if (key.startsWith('claude-fable-5') && typeof value === 'string') overrides[key] = value;
+  }
+  const defaultFableModel = settings.map((s) => s.env?.ANTHROPIC_DEFAULT_FABLE_MODEL).find((v) => typeof v === 'string' && v) ?? process.env.ANTHROPIC_DEFAULT_FABLE_MODEL ?? null;
+  const v = judgeFableModel({ model: entry ? entry.model : null, defaultFableModel, overrides });
+  console.log(`모델 열: ${entry ? entry.model || '(빈 값)' : '(비용 기록에 그 agentId 줄이 없음)'}`);
+  console.log(`읽은 설정: ${files.length ? files.join(', ') : '(없음)'}`);
+  console.log(`판정: ${v.label}`);
+  console.log(`사용 기록 --def: ${v.def}`);
+  if (v.memoNote) console.log(`사용 기록 --memo: ${agentId} ${v.memoNote}`);
+  if (v.notice) console.log(`사용자에게 알릴 말: ${v.notice}`);
 }
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -830,10 +924,11 @@ function slash(raw) {
 // 묻기를 마친 뒤 메인이 줄 수를 직접 세지 않고 적게 하려는 것이다. 설정 파일은 없으면 만들지 않는다.
 function claudeMdDone() {
   const file = path.join(CLAUDE_DIR, 'CLAUDE.md');
-  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+  const limit = readConfig().claudeMdLimitLines;
+  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, null, limit);
   if (!fs.existsSync(CONFIG_FILE)) fail(`설정 파일이 없어 claudeMdKeptLines를 쓰지 못했습니다: ${CONFIG_FILE}`);
   const text = fs.readFileSync(CONFIG_FILE, 'utf8');
-  const over = sum.exists && sum.total > CLAUDE_MD_LIMIT_LINES;
+  const over = sum.exists && sum.total > limit;
   const next = over ? configTextWithKeptLines(text, sum.total) : configTextWithoutKeptLines(text);
   if (next === null) fail(`설정 파일이 깨져 claudeMdKeptLines를 쓰지 못했습니다: ${CONFIG_FILE}`);
   if (over) {
@@ -842,8 +937,90 @@ function claudeMdDone() {
   }
   const had = 'claudeMdKeptLines' in JSON.parse(text);
   if (had) fs.writeFileSync(CONFIG_FILE, next);
-  const head = sum.exists ? `CLAUDE.md ${sum.total}줄: ${CLAUDE_MD_LIMIT_LINES}줄 이하라` : 'CLAUDE.md 없음:';
+  const head = sum.exists ? `CLAUDE.md ${sum.total}줄: ${limit}줄 이하라` : 'CLAUDE.md 없음:';
   console.log(`${head} claudeMdKeptLines를 ${had ? '지웠습니다' : '지울 것이 없어 그대로 뒀습니다'}`);
+}
+
+const sha256File = (file) => sha256(fs.readFileSync(file));
+
+// 문서 내용 검토 대상을 찍는다. 대화 기록을 읽어 쓴 스킬을 찾고, 지난 검토 뒤 바뀐 문서만 대상으로 삼는다.
+function printDocs(opts) {
+  const parsed = readUsage();
+  const { at: since, text: sinceText } = repeatsRange(opts);
+  const config = readConfig();
+  const limit = config.claudeMdLimitLines;
+  console.log('문서 검토 대상(회고 구간에 쓴 스킬과 사용 기록에 나온 프로젝트의 CLAUDE.md 가운데 지난 검토 뒤 바뀐 것)');
+  console.log(`범위: ${since ? since.toISOString() : '처음부터'} 뒤 (${sinceText || '기록 없음'})`);
+  console.log(`CLAUDE.md 기준 줄 수: ${limit}줄 (config.json의 claudeMdLimitLines)`);
+
+  const uses = new Map();
+  const sessionProjects = new Map();
+  const sessions = fs.existsSync(PROJECTS_ROOT) ? listSessions().filter((s) => since === null || s.mtime >= since.getTime()) : [];
+  for (const s of sessions) {
+    const names = extractSkillUses(readJsonl(s.file), since);
+    if (!names.length) continue;
+    const project = projectRoot(sessionCwd(s.file) ?? path.basename(s.dir));
+    for (const name of names) {
+      uses.set(name, (uses.get(name) ?? 0) + 1);
+      if (!sessionProjects.has(name)) sessionProjects.set(name, new Set());
+      sessionProjects.get(name).add(project);
+    }
+  }
+
+  const docs = [];
+  const plugin = [];
+  const unresolved = [];
+  const byFile = new Map();
+  for (const [name, count] of uses) {
+    if (name.includes(':')) {
+      plugin.push(name);
+      continue;
+    }
+    if (name === config.commandName) continue;
+    const home = path.join(CLAUDE_DIR, 'skills', name, 'SKILL.md');
+    const file = [home, ...[...sessionProjects.get(name)].map((p) => path.join(p, '.claude', 'skills', name, 'SKILL.md'))].find((f) => fs.existsSync(f));
+    if (!file) {
+      unresolved.push(name);
+      continue;
+    }
+    const doc = byFile.get(file) ?? { kind: '스킬', file, name, uses: 0, hash: sha256File(file) };
+    doc.uses += count;
+    byFile.set(file, doc);
+  }
+  docs.push(...byFile.values());
+
+  const projects = new Set();
+  for (const r of parsed.target) if (r.project && r.project !== '-') projects.add(projectRoot(r.project));
+  for (const project of projects) {
+    const file = path.join(project, 'CLAUDE.md');
+    if (!fs.existsSync(file)) continue;
+    const text = fs.readFileSync(file, 'utf8');
+    const sum = claudeMdSummary(text, null, limit);
+    docs.push({ kind: '프로젝트 CLAUDE.md', file, name: file, uses: 0, hash: sha256File(file), lines: sum.total, over: sum.total > limit });
+  }
+
+  const { targets, deferred, unchanged } = docReviewTargets(docs, config.docReviewHashes);
+  console.log(`\n검토 대상 ${targets.length}개 (한 번에 최대 ${DOC_REVIEW_MAX}개)`);
+  for (const d of targets) {
+    const detail = d.kind === '스킬' ? `${d.name}  쓴 횟수 ${d.uses}번` : `${d.lines}줄, 기준 ${d.over ? '초과' : '이하'}`;
+    console.log(`  ${d.kind}  ${d.file}  ${detail}  ${d.state === '처음' ? '처음 검토' : '지난 검토 뒤 수정됨'}`);
+  }
+  if (!targets.length) console.log('  없음');
+  if (deferred.length) console.log(`다음 회고로 미룬 것 ${deferred.length}개: ${deferred.map((d) => d.file).join(', ')}`);
+  console.log(`뺀 것: 지난 검토 뒤 바뀌지 않음 ${unchanged}개, 플러그인 스킬 ${plugin.length}개${plugin.length ? `(${plugin.join(', ')})` : ''}, 스킬 파일을 찾지 못한 이름 ${unresolved.length}개${unresolved.length ? `(${unresolved.join(', ')})` : ''}`);
+  if (unresolved.length) console.log('  찾지 못한 이름에는 내장 슬래시 명령과, 사용자 폴더 밖에 있어 고칠 수 없는 스킬이 들어 있습니다.');
+}
+
+// 검토를 마친 문서의 해시를 남겨, 다음 회고가 그 뒤에 바뀐 문서만 대상으로 삼게 한다. 설정 파일은 없으면 만들지 않는다.
+function docsDone(files) {
+  if (!files.length) fail('--docs-done에는 검토를 마친 문서 경로가 필요합니다: --docs-done <경로>...');
+  const missing = files.filter((f) => !fs.existsSync(f));
+  if (missing.length) fail(`파일이 없어 해시를 쓰지 못했습니다: ${missing.join(', ')}`);
+  if (!fs.existsSync(CONFIG_FILE)) fail(`설정 파일이 없어 docReviewHashes를 쓰지 못했습니다: ${CONFIG_FILE}`);
+  const next = configTextWithDocHashes(fs.readFileSync(CONFIG_FILE, 'utf8'), Object.fromEntries(files.map((f) => [path.resolve(f), sha256File(path.resolve(f))])));
+  if (next === null) fail(`설정 파일이 깨져 docReviewHashes를 쓰지 못했습니다: ${CONFIG_FILE}`);
+  fs.writeFileSync(CONFIG_FILE, next);
+  for (const f of files) console.log(`docReviewHashes에 적었습니다: ${path.resolve(f)}`);
 }
 
 function main() {
@@ -856,6 +1033,16 @@ function main() {
     const at = args.indexOf(flag);
     if (at >= 0) return changeRemovedKind(args[at + 1], add);
   }
+  for (const [flag, add] of [['--remove-def', true], ['--restore-def', false]]) {
+    const at = args.indexOf(flag);
+    if (at >= 0) return changeRemovedDef(args[at + 1], add);
+  }
+  const fableAt = args.indexOf('--check-fable');
+  if (fableAt >= 0) {
+    const projectAt = args.indexOf('--project');
+    return checkFable(args[fableAt + 1], projectAt >= 0 ? args[projectAt + 1] : undefined);
+  }
+  if (args.includes('--shortfalls')) return printShortfalls();
   if (args.includes('--record-kit-hashes')) return recordKitHashes();
   if (args.includes('--check-kit-hashes')) {
     const kitAt = args.indexOf('--kit');
@@ -863,6 +1050,12 @@ function main() {
     return checkKitHashes(kitAt >= 0 ? path.resolve(args[kitAt + 1]) : null);
   }
   if (args.includes('--claude-md-done')) return claudeMdDone();
+  const docsDoneAt = args.indexOf('--docs-done');
+  if (docsDoneAt >= 0) {
+    const rest = args.slice(docsDoneAt + 1);
+    const end = rest.findIndex((a) => a.startsWith('--'));
+    return docsDone(end < 0 ? rest : rest.slice(0, end));
+  }
   if (args.includes('--claim')) return claim();
   if (args.includes('--release')) return release(args.includes('--failed'));
   if (args.includes('--status')) return printStatus();
@@ -873,6 +1066,7 @@ function main() {
   if (opts.where) return console.log(RECORDS_DIR);
   if (opts.check) return printCheck();
   if (opts.repeats) return printRepeats(opts);
+  if (opts.docs) return printDocs(opts);
   if (opts.mark !== null) return mark(opts);
   if ((opts.messages === null) !== (opts.labels === null)) fail('--messages와 --labels는 함께 씁니다.');
 

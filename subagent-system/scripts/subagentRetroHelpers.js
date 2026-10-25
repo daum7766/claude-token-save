@@ -1406,10 +1406,12 @@ export function parseConfig(text) {
     removedDefs: Array.isArray(o?.removedDefs) ? o.removedDefs.filter((d) => typeof d === 'string') : [],
     removedKinds: Array.isArray(o?.removedKinds) ? o.removedKinds.filter((d) => typeof d === 'string') : [],
     claudeMdKeptLines: Number.isInteger(o?.claudeMdKeptLines) && o.claudeMdKeptLines >= 0 ? o.claudeMdKeptLines : null,
+    claudeMdLimitLines: Number.isInteger(o?.claudeMdLimitLines) && o.claudeMdLimitLines > 0 ? o.claudeMdLimitLines : CLAUDE_MD_LIMIT_LINES,
+    docReviewHashes: docReviewHashesOf(o),
   };
 }
 
-// CLAUDE.md 정리 제안의 기준 줄 수와, 정리 뒤 남긴 줄 수보다 이만큼 넘게 늘어야 다시 제안하는 여유다. 문서의 「200줄」, 「20줄」과 함께 바꾼다.
+// CLAUDE.md 정리 제안의 기본 기준 줄 수(config.json의 claudeMdLimitLines가 바꿈)와, 정리 뒤 남긴 줄 수보다 이만큼 넘게 늘어야 다시 제안하는 여유다. 문서의 「200줄」, 「20줄」과 함께 바꾼다.
 export const CLAUDE_MD_LIMIT_LINES = 200;
 export const CLAUDE_MD_KEPT_MARGIN_LINES = 20;
 // 키트가 CLAUDE.md에 넣는 구역의 표시 주석 쌍이다. 이 안은 정리 제안 대상이 아니라 따로 센다.
@@ -1419,7 +1421,7 @@ const CLAUDE_MD_KIT_BLOCKS = [
 ];
 
 // text가 null이면 CLAUDE.md가 없는 것이다. 키트 구역 줄 수에는 표시 줄도 넣고, 끝 표시가 없는 시작 표시는 구역으로 세지 않는다.
-export function claudeMdSummary(text, keptLines = null) {
+export function claudeMdSummary(text, keptLines = null, limit = CLAUDE_MD_LIMIT_LINES) {
   if (text === null) return { exists: false };
   const lines = splitLines(text);
   const total = lines.length;
@@ -1429,9 +1431,9 @@ export function claudeMdSummary(text, keptLines = null) {
     const to = from < 0 ? -1 : lines.findIndex((l, i) => i > from && l.trim() === end);
     if (to > from) kit += to - from + 1;
   }
-  const target = total > CLAUDE_MD_LIMIT_LINES && (keptLines === null || total > keptLines + CLAUDE_MD_KEPT_MARGIN_LINES);
+  const target = total > limit && (keptLines === null || total > keptLines + CLAUDE_MD_KEPT_MARGIN_LINES);
   let reason = '';
-  if (!target) reason = total <= CLAUDE_MD_LIMIT_LINES ? `${CLAUDE_MD_LIMIT_LINES}줄 이하` : `정리 뒤 남긴 ${keptLines}줄에서 ${CLAUDE_MD_KEPT_MARGIN_LINES}줄 이내`;
+  if (!target) reason = total <= limit ? `${limit}줄 이하` : `정리 뒤 남긴 ${keptLines}줄에서 ${CLAUDE_MD_KEPT_MARGIN_LINES}줄 이내`;
   return { exists: true, total, kit, target, reason, keptLines };
 }
 
@@ -1455,6 +1457,51 @@ export function configTextWithKeptLines(text, lines) {
   const o = text ? parseConfigObject(text) : null;
   if (!o) return null;
   return JSON.stringify({ ...o, claudeMdKeptLines: lines }, null, 2) + '\n';
+}
+
+// 값이 sha256 16진 문자열인 항목만 남긴다. 없거나 객체가 아니면 빈 객체라 검토한 적이 없는 것과 같게 본다.
+function docReviewHashesOf(o) {
+  const v = o?.docReviewHashes;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  return Object.fromEntries(Object.entries(v).filter(([, h]) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)));
+}
+
+// 다른 키는 그대로 두고 docReviewHashes에 files(경로 → 해시)를 더한 설정 파일 내용을 만든다. 깨진 파일이면 null이라 호출하는 쪽이 쓰지 않고 넘어간다.
+export function configTextWithDocHashes(text, files) {
+  const o = text ? parseConfigObject(text) : null;
+  if (!o) return null;
+  return JSON.stringify({ ...o, docReviewHashes: { ...docReviewHashesOf(o), ...files } }, null, 2) + '\n';
+}
+
+// 문서 검토 대상 고르기. 회고마다 모든 문서를 다시 읽는 비용을 막으려고 지난 검토 뒤 바뀐 것만 고르고, 한 회고에 DOC_REVIEW_MAX개까지만 보낸다.
+// docs의 항목은 { file, hash, uses }이고, uses는 회고 구간에 쓴 횟수(CLAUDE.md는 0)다. 많이 쓴 것부터 보낸다.
+export const DOC_REVIEW_MAX = 5;
+export function docReviewTargets(docs, reviewed = {}) {
+  const changed = docs
+    .filter((d) => reviewed[d.file] !== d.hash)
+    .map((d) => ({ ...d, state: reviewed[d.file] === undefined ? '처음' : '수정됨' }))
+    .sort((a, b) => b.uses - a.uses || a.file.localeCompare(b.file));
+  return { targets: changed.slice(0, DOC_REVIEW_MAX), deferred: changed.slice(DOC_REVIEW_MAX), unchanged: docs.length - changed.length };
+}
+
+// 한 세션의 줄에서 쓴 스킬 이름을 모은다. Skill 도구 호출과 사용자가 친 슬래시 명령이 든다. since 앞의 것은 세지 않는다.
+// 슬래시 명령에는 내장 명령도 섞이는데, 스킬 파일을 찾지 못하면 그쪽에서 걸러진다.
+export function extractSkillUses(lines, since) {
+  const sinceMs = since == null ? null : new Date(since).getTime();
+  const names = [];
+  for (const o of lines) {
+    if (sinceMs !== null && Date.parse(o.timestamp) < sinceMs) continue;
+    const content = o.message?.content;
+    if (o.type === 'assistant' && Array.isArray(content)) {
+      for (const b of content) {
+        if (b?.type === 'tool_use' && b.name === 'Skill' && typeof b.input?.skill === 'string') names.push(b.input.skill.replace(/^\//, ''));
+      }
+    } else if (o.type === 'user') {
+      const m = /<command-name>\/?([^<\s]+)<\/command-name>/.exec(textOf(content));
+      if (m) names.push(m[1]);
+    }
+  }
+  return names;
 }
 
 // 다른 키는 그대로 두고 removedKinds만 kinds로 바꾼 설정 파일 내용을 만든다. 빈 배열이면 키를 뺀다.
@@ -1552,4 +1599,24 @@ export function countPending(text) {
 export function dueHead(d, { mode = 'ask', lockLive = false } = {}) {
   if (lockLive || d.status !== 'ask') return `wait ${d.remaining}`;
   return mode === 'auto' ? 'auto' : 'ask';
+}
+
+const FABLE_ID = 'claude-fable-5';
+const FABLE_51_ID = 'claude-fable-5-1';
+
+// 올리기 마지막 단계(Fable 5.1)로 보낸 에이전트의 모델 열로 Fable로 돌았는지 가른다. model이 null이면 비용 기록에 그 agentId 줄이 없는 것이다.
+// 공급자 꼴 ID(Bedrock, Vertex, 날짜가 붙은 ID)도 알아보려고 값이 같은지가 아니라 ID가 들어 있는지로 본다.
+// overrides는 설정의 modelOverrides 가운데 Fable 모델 ID 키만 우선순위대로 합친 것이고, 값이 ID 꼴이 아닐 수 있어(추론 프로필 ARN) 모델 열과 같은지로 본다.
+// 둘 다 Fable로 알아보는 조건이면 버전을 아는 modelOverrides를 먼저 본다.
+export function judgeFableModel({ model, defaultFableModel = null, overrides = {} }) {
+  const fable = (label, notice = null) => ({ label, def: 'fable-high', notice, memoNote: null });
+  if (model === null || model === undefined) return { label: '줄 없음', def: 'fable-high', notice: '모델을 확인하지 못했다', memoNote: '모델 미확인' };
+  if (model.includes(FABLE_51_ID)) return fable('Fable 5.1');
+  if (model.includes(FABLE_ID)) return fable('Fable 5', 'Fable 5.1이 아니라 Fable 5로 돌았다');
+  const hit = Object.entries(overrides).find(([key, value]) => key.startsWith(FABLE_ID) && value === model);
+  if (hit) return hit[0].startsWith(FABLE_51_ID) ? fable('Fable 5.1') : fable('Fable 5', 'Fable 5.1이 아니라 Fable 5로 돌았다');
+  if (defaultFableModel && model === defaultFableModel) return fable('Fable(버전 미확인)', 'Fable(버전 미확인)으로 돌았다');
+  const other = { def: 'opus-xhigh', memoNote: model };
+  if (!model.includes('claude-')) return { ...other, label: 'Fable 확인 못함', notice: 'Fable인지 확인하지 못했다(조직 관리 설정의 modelOverrides는 읽지 못함)' };
+  return { ...other, label: 'Fable 아님', notice: 'Fable 결과가 아니다' };
 }

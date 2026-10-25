@@ -296,6 +296,21 @@ function tildePath(cwd: string, home: string | undefined): string {
   return cwd.startsWith(h) && (next === '/' || next === '\\') ? `~${cwd.slice(h.length)}` : cwd
 }
 
+// 조직 정책이 시계 호출을 거절하면 그 세션에서는 다시 부르지 않고 로컬 시각을 쓴다.
+// 훅 안에서 오류가 나면 훅이 건너뛰어졌다는 경고가 뜨기 때문이다
+let isClockDenied = false
+
+async function nowMs($: EngineInterface): Promise<number> {
+  if (!isClockDenied) {
+    try {
+      return await $.clock.now()
+    } catch {
+      isClockDenied = true
+    }
+  }
+  return Date.now()
+}
+
 async function record(
   $: EngineInterface,
   id: string,
@@ -304,7 +319,9 @@ async function record(
   u: TurnUsage,
   tookMs: number,
 ): Promise<void> {
-  const at = await $.clock.now()
+  // 메인이 요청을 보냈으면 서브에이전트를 기다리던 한 번이 끝난 것이다
+  if (id === MAIN) isSkipNotified = false
+  const at = await nowMs($)
   const before = (await read($, loops))[id]
   await update($, loops, all => {
     const prev = all[id] ?? blank(id, at - tookMs)
@@ -433,13 +450,15 @@ async function restoreMain($: EngineInterface, file: string): Promise<void> {
 // 서브에이전트를 기다리는 동안 메인 캐시가 풀리면 돌아와서 문맥 전체를 다시 쓰게 된다.
 // 메인 요청을 그대로 한 번 더 보내면 캐시를 읽는 값만 내고 만료 시각이 다시 늘어난다.
 // 서브에이전트가 없을 때는 자리를 비웠을 수 있어 연장하지 않고 알리기만 한다.
-// 캐시를 못 읽었어도 그 요청은 캐시 쓰기 값을 냈으므로 비용은 더하고 isWarmed만 false로 돌려준다
+// 캐시를 못 읽었어도 그 요청은 캐시 쓰기 값을 냈으므로 비용은 더하고 isWarmed만 false로 돌려준다.
+// 응답이 없으면 null이다
 async function warmMain($: EngineInterface, main: Loop): Promise<{ cost: number; isWarmed: boolean } | null> {
   const r = await $.model.fork({ prompt: 'Cache keep-alive ping. Reply with just: ok' })
-  if (!('usage' in r)) return null
+  // 캐시가 식었거나 API 오류면 엔진이 null을 돌려준다
+  if (!r || !('usage' in r)) return null
   const isWarmed = r.usage.cache_read_input_tokens > 0
   const cost = stepCost({ ...r.usage, model: main.model } as TurnUsage, main.ttl)
-  const at = await $.clock.now()
+  const at = await nowMs($)
   await update($, loops, all =>
     all[MAIN]
       ? {
@@ -478,10 +497,25 @@ function isOffOption(v: unknown): boolean {
   return v === false || ['0', 'false', 'off'].includes(String(v ?? '').trim().toLowerCase())
 }
 
-// 서브에이전트가 도는 동안 메인 캐시를 연장하는지. 연장 요청과 유휴 압축 건너뛰기가 같은 판정을 쓴다
+// 연장이 거절되거나 캐시를 읽지 못하면 그 세션에서는 연장도 유휴 압축 건너뛰기도 멈춘다.
+// 연장이 되지 않는 환경에서 건너뛰기만 계속하면 캐시가 풀리는데도 압축만 미뤄지기 때문이다
+let isKeepAliveStopped = false
+// 응답 없이 끝난 연장 요청(오류, null)이 이어진 횟수. 일시 오류 한 번으로 연장을 멈추지 않으려고 센다
+let failedWarms = 0
+const MAX_FAILED_WARMS = 2
+// 유휴 압축을 건너뛴 알림은 서브에이전트를 기다리는 한 번에 한 번만 띄워, 압축이 되풀이되어도 같은 알림이 쌓이지 않게 한다
+let isSkipNotified = false
+// 화면 부품 요청이 거절되면 그 세션에서는 표를 그리지 않고 원래 화면만 넘긴다
+let isResolveDenied = false
+
+const KEEP_ALIVE_STOPPED_NOTE = '캐시 연장이 되지 않아 이 세션에서는 keep-alive를 끕니다. 계속 끄려면 /config의 agent-meter 줄에서 keep-alive를 끄세요'
+
+// 서브에이전트가 도는 동안 메인 캐시를 연장하는지. 연장 요청과 유휴 압축 건너뛰기가 같은 판정을 쓴다.
+// 꺼져 있으면 에이전트 목록도 읽지 않는다
 async function isWarmingMain($: EngineInterface): Promise<boolean> {
+  if (!isKeepAliveEnabled || isKeepAliveStopped) return false
   const isAgentRunning = (await $.agent.list().catch(() => [])).some(a => a.status === 'running')
-  return isAgentRunning && isKeepAliveEnabled
+  return isAgentRunning
 }
 
 // context.window는 모델 원래 창이라 settings의 autoCompactWindow로 낮춘 기준이 반영되지 않는다.
@@ -508,16 +542,24 @@ async function keepMainWarm($: EngineInterface, at: number): Promise<void> {
   // 알림은 사람이 돌아올 틈을 두려고 더 일찍 낸다.
   if (isWarming && left > WARM_BEFORE_MS[main.ttl]) return
   await update($, warnedAt, () => main.lastAt)
+  let isStoppedNow = false
   if (isWarming) {
     const warmed = await warmMain($, main).catch(() => null)
     if (warmed?.isWarmed) {
+      failedWarms = 0
       $.ui.toast(`메인 캐시를 ${TTL_LABEL[main.ttl]} 연장했습니다 ${money(warmed.cost)}`)
       return
+    }
+    // 응답은 왔는데 캐시를 못 읽었으면 연장이 통하지 않는 환경이라 바로 멈추고, 응답이 없으면 연달아 되풀이될 때만 멈춘다
+    failedWarms = warmed ? MAX_FAILED_WARMS : failedWarms + 1
+    if (failedWarms >= MAX_FAILED_WARMS) {
+      isKeepAliveStopped = true
+      isStoppedNow = true
     }
   }
   const minutes = Math.ceil(left / 60_000)
   const text = `메인 캐시가 ${minutes}분 뒤 만료됩니다. 만료되면 다시 쓰는 데 ${money(recacheCost(main))}`
-  $.ui.toast(text)
+  $.ui.toast(isStoppedNow ? `${text}. ${KEEP_ALIVE_STOPPED_NOTE}` : text)
   await $.ui.notify(text, { title: '캐시 만료 직전' }).catch(() => undefined)
 }
 
@@ -739,27 +781,61 @@ function pillOffset(mode: string): number {
   return pill ? cells(pill + PILL_SEPARATOR) : 0
 }
 
+async function skipIdleCompact($: EngineInterface, e: { agentId?: string; trigger?: string }): Promise<boolean> {
+  if (e.agentId || (e.trigger !== 'auto' && e.trigger !== 'precompute')) return false
+  const main = (await read($, loops))[MAIN]
+  if (!main || main.ttl !== '1h' || (await nowMs($)) - main.lastAt < IDLE_COMPACT_GUARD_MS) return false
+  if (!(await isWarmingMain($)) || !(await isFarFromCompactLimit($))) return false
+  if (!isSkipNotified) {
+    isSkipNotified = true
+    $.ui.toast('서브에이전트 실행 중이라 유휴 압축을 건너뛰었습니다')
+  }
+  return true
+}
+
+// 거절과 정지 표시는 세션 단위다. /clear와 resume은 register를 다시 부르지 않으므로 session.end에서도 부른다
+function resetSessionState(): void {
+  isKeepAliveStopped = false
+  failedWarms = 0
+  isSkipNotified = false
+  isResolveDenied = false
+  isClockDenied = false
+}
+
 export const register: Register = (on, options) => {
   isKeepAliveEnabled = !isOffOption(options?.keep_alive)
+  resetSessionState()
   on('session.start', async ($, e, next) => {
+    // 아래 엔진 호출은 정책으로 거절될 수 있다. 거절돼도 훅은 실패하지 않고 그 기능만 빠진다
     await $.command.register({
       name: 'meter',
       description: '입력창 아래 세션과 에이전트 사용량 표를 켜고 끈다. tokens를 붙이면 토큰 네 열만 켜고 끈다',
       argumentHint: '[tokens]',
-    })
+    }).catch(() => undefined)
     let ticks = 0
-    $.clock.every(1000, () => {
-      ticks += 1
-      void $.clock.now().then(async t => {
-        await update($, now, () => t)
-        await keepMainWarm($, t)
-        if (ticks % SESSION_REFRESH_TICKS !== 0) return
-        await refreshSession($)
-        // 시작 때 한 번 읽기를 놓치거나 터미널에서 브랜치를 바꿔도 따라가게 늘 다시 읽는다
-        await refreshBranch($).catch(() => undefined)
+    try {
+      $.clock.every(1000, () => {
+        ticks += 1
+        void nowMs($)
+          .then(async t => {
+            await update($, now, () => t)
+            // 오류가 나면 이 회차의 연장만 건너뛰고 아래 세션 갱신은 이어 간다
+            await keepMainWarm($, t).catch(() => undefined)
+            if (ticks % SESSION_REFRESH_TICKS !== 0) return
+            await refreshSession($)
+            // 시작 때 한 번 읽기를 놓치거나 터미널에서 브랜치를 바꿔도 따라가게 늘 다시 읽는다
+            await refreshBranch($).catch(() => undefined)
+          })
+          .catch(() => undefined)
       })
-    })
-    $.ui.status(undefined)
+    } catch {
+      // 타이머 없이도 표는 그려지고 요청마다 갱신된다
+    }
+    try {
+      await $.ui.status(undefined)
+    } catch {
+      // 상태줄을 비우지 못해도 표 그리기에는 영향이 없다
+    }
     await seedPermissionMode($)
     await refreshSession($)
     await refreshBranch($).catch(() => undefined)
@@ -803,6 +879,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    resetSessionState()
     if (e.reason === 'clear') {
       await update($, loops, () => ({}))
       await update($, session, s => ({ ...s, usd: null, contextPercent: null }))
@@ -814,20 +891,18 @@ export const register: Register = (on, options) => {
   // 서브에이전트를 기다리는 동안은 mod가 캐시를 연장하므로, 그보다 먼저 오는 유휴 압축을 건너뛴다.
   // 유휴 압축이 auto와 precompute 중 어느 값으로 오는지 문서로 알 수 없어 둘 다 본다
   on('session.compact', async ($, e, next) => {
-    if (e.agentId || (e.trigger !== 'auto' && e.trigger !== 'precompute')) return next(e)
-    const main = (await read($, loops))[MAIN]
-    if (!main || main.ttl !== '1h' || (await $.clock.now()) - main.lastAt < IDLE_COMPACT_GUARD_MS) return next(e)
-    if (!(await isWarmingMain($)) || !(await isFarFromCompactLimit($))) return next(e)
-    $.ui.toast('서브에이전트 실행 중이라 유휴 압축을 건너뛰었습니다')
-    return { skip: '서브에이전트 실행 중이라 압축을 건너뜀' }
+    // 판정 중 엔진 호출이 오류를 던지면 훅이 건너뛰어졌다는 알림이 뜨므로, 오류면 건너뛰지 않고 기본 압축으로 보낸다
+    if (await skipIdleCompact($, e).catch(() => false)) return { skip: '서브에이전트 실행 중이라 압축을 건너뜀' }
+    return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
-    const startedAt = await $.clock.now()
+    const startedAt = await nowMs($)
     const result = yield* next(e)
     if (result.usage) {
-      const tookMs = (await $.clock.now()) - startedAt
-      await record($, e.agentId ?? MAIN, e.model, e.effort, result.usage, tookMs)
+      const tookMs = (await nowMs($)) - startedAt
+      // 기록이 실패해도 이번 요청의 결과는 그대로 돌려준다
+      await record($, e.agentId ?? MAIN, e.model, e.effort, result.usage, tookMs).catch(() => undefined)
     }
 
     return result
@@ -851,11 +926,19 @@ export const register: Register = (on, options) => {
     // 상태를 먼저 읽어 숨김이 바뀔 때 다시 그려지게 구독한다
     await read($, isHidden)
     await read($, tokensRevision)
-    if (await isMeterHidden($)) return next(e)
+    if (isResolveDenied || (await isMeterHidden($))) return next(e)
 
-    const { Box, Text } = $.ui.resolve(e)
+    let parts
+    try {
+      parts = $.ui.resolve(e)
+    } catch {
+      // 화면 부품을 얻지 못하면 표 없이 원래 화면으로 넘기고, 그 세션에서는 다시 시도하지 않는다
+      isResolveDenied = true
+      return next(e)
+    }
+    const { Box, Text } = parts
     // 첫 1초 눈금 전에는 시계를 직접 읽는다
-    const at = (await read($, now)) || (await $.clock.now())
+    const at = (await read($, now)) || (await nowMs($))
     const s = await read($, session)
     const width = (e.viewport?.columns ?? 160) - 2
     const t = buildTable(s, await read($, loops), at, width, await isTokensShown($), await isOneMillionDisabled($))

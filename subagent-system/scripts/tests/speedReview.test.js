@@ -17,6 +17,8 @@ import {
   speedLogLine,
   pickTarget,
   effects,
+  qualityVerdict,
+  countBad,
 } from '../speedReviewHelpers.js';
 
 const tempRoots = [];
@@ -225,15 +227,15 @@ describe('pendingTargets', () => {
 });
 
 describe('speedLog', () => {
-  const entry = { at: '2026-10-10T00:00:00.000Z', type: '적용', target: '칸:a/b c', what: '속도 개선', beforeAvg: 900.5, beforeCount: 3, usageLines: 10, note: '요지' };
+  const entry = { at: '2026-10-10T00:00:00.000Z', type: '적용', target: '칸:a/b c', what: '속도 개선', beforeAvg: 900.5, beforeCount: 3, usageLines: 10, note: '요지', beforeBad: 1 };
 
   it('한 줄로 쓴 항목을 다시 읽으면 같은 항목이고 머리줄은 건너뛴다', () => {
-    const text = `시각\t종류\t대상\t무엇\t전 평균 초\t전 건수\t사용 기록 줄 수\t내용\n${speedLogLine(entry)}\n`;
+    const text = `시각\t종류\t대상\t무엇\t전 평균 초\t전 건수\t사용 기록 줄 수\t내용\t전 문제 건수\n${speedLogLine(entry)}\n`;
     assert.deepEqual(parseSpeedLog(text), [entry]);
   });
 
   it('측정 항목의 빈 칸(-)은 null로 읽고 다시 쓰면 같은 줄이다', () => {
-    const m = { at: entry.at, type: '측정', target: entry.target, what: '-', beforeAvg: null, beforeCount: null, usageLines: null, note: '대기 12' };
+    const m = { at: entry.at, type: '측정', target: entry.target, what: '-', beforeAvg: null, beforeCount: null, usageLines: null, note: '대기 12', beforeBad: null };
     assert.deepEqual(parseSpeedLog(speedLogLine(m)), [m]);
   });
 
@@ -333,7 +335,7 @@ describe('effects', () => {
       { id: 'n2', sec: 400, line: 12 },
     ]);
     assert.deepEqual(effects({ speedLog: [applied], cellsAll: [cell], proceduresAll: [] }), [
-      { target: applied.target, appliedAt: at, what: '속도 개선', beforeAvg: 900, beforeCount: 3, afterAvg: 300, afterCount: 2 },
+      { target: applied.target, appliedAt: at, what: '속도 개선', note: '', beforeAvg: 900, beforeCount: 3, afterAvg: 300, afterCount: 2, quality: null },
     ]);
   });
 
@@ -356,6 +358,79 @@ describe('effects', () => {
   it('측정 요청 적용과 측정 줄은 효과 목록에 넣지 않는다', () => {
     const rows = [{ ...applied, what: '측정 요청' }, { ...applied, type: '측정', what: '-' }];
     assert.deepEqual(effects({ speedLog: rows, cellsAll: [], proceduresAll: [] }), []);
+  });
+});
+
+describe('speedLog 옛 줄', () => {
+  it('전 문제 건수 열이 없는 옛 줄은 beforeBad가 null이다', () => {
+    const old = '2026-10-10T00:00:00.000Z\t적용\t칸:a/b\t속도 개선\t900\t3\t10\t요지';
+    assert.equal(parseSpeedLog(old)[0].beforeBad, null);
+  });
+});
+
+describe('qualityVerdict', () => {
+  const q = (o) => qualityVerdict({ beforeBad: 0, beforeCount: 5, afterBad: 0, afterCount: 4, ...o });
+
+  it('적용 전 문제 건수 기록이 없으면 판정 불가다', () => {
+    assert.equal(q({ beforeBad: null }), '판정 불가');
+    assert.equal(q({ beforeBad: undefined }), '판정 불가');
+  });
+
+  it('적용 전 건수가 0이면 비율을 낼 수 없어 판정 불가다', () => {
+    assert.equal(q({ beforeCount: 0, beforeBad: 0 }), '판정 불가');
+  });
+
+  it('적용 뒤 건수가 모자라면 문제가 많아도 기다림이다', () => {
+    assert.equal(q({ afterCount: 2, afterBad: 2 }), '기다림');
+  });
+
+  it('적용 뒤 문제가 2건 이상이고 비율이 적용 전보다 20%p 넘게 늘면 떨어짐이다', () => {
+    assert.equal(q({ beforeBad: 0, afterCount: 4, afterBad: 2 }), '떨어짐');
+  });
+
+  it('문제가 1건뿐이면 비율이 늘어도 유지다', () => {
+    assert.equal(q({ beforeBad: 0, afterCount: 3, afterBad: 1 }), '유지');
+  });
+
+  it('적용 전에도 문제 비율이 비슷하게 높았으면 유지다', () => {
+    assert.equal(q({ beforeBad: 2, beforeCount: 5, afterCount: 5, afterBad: 2 }), '유지');
+  });
+});
+
+describe('effects 품질', () => {
+  const at = '2026-10-10T00:00:00.000Z';
+  const applied = { at, type: '적용', target: '칸:sonnet-medium/A', what: '속도 개선', beforeAvg: 900, beforeCount: 3, usageLines: 10, note: '캐시 사용. 되돌리기: 옛 절을 되살림', beforeBad: 0 };
+  const bad = new Set(['n1', 'n2']);
+
+  it('isBad를 주면 적용 뒤 문제 건수를 세고, 시간이 줄었어도 문제가 늘었으면 떨어짐이다', () => {
+    const cell = cellOf('sonnet-medium', 'A', agentsOf(['n1', 'n2', 'n3'], 100, 11));
+    const [e] = effects({ speedLog: [applied], cellsAll: [cell], proceduresAll: [], isBad: (id) => bad.has(id) });
+    assert.equal(e.afterAvg, 100);
+    assert.deepEqual(e.quality, { beforeBad: 0, beforeCount: 3, afterBad: 2, afterCount: 3, verdict: '떨어짐' });
+    assert.equal(e.note, applied.note);
+  });
+
+  it('절차 회차는 에이전트 하나라도 문제가 있으면 문제 회차로 센다', () => {
+    const t = Date.parse(at);
+    const proc = procOf('/p', '검증', [runOf(t + 1000, 300, ['n1', 'ok1']), runOf(t + 2000, 300, ['n2']), runOf(t + 3000, 300, ['ok2'])]);
+    const a = { ...applied, target: proc.target, usageLines: 0 };
+    const [e] = effects({ speedLog: [a], cellsAll: [], proceduresAll: [proc], isBad: (id) => bad.has(id) });
+    assert.equal(e.quality.afterBad, 2);
+    assert.equal(e.quality.verdict, '떨어짐');
+  });
+
+  it('적용 뒤 기록이 없으면 품질은 기다림이다', () => {
+    const cell = cellOf('sonnet-medium', 'A', agentsOf(['old'], 100, 5));
+    const [e] = effects({ speedLog: [applied], cellsAll: [cell], proceduresAll: [], isBad: () => false });
+    assert.equal(e.quality.verdict, '기다림');
+  });
+});
+
+describe('countBad', () => {
+  it('칸은 문제가 붙은 에이전트 수를, 절차는 문제 에이전트가 든 회차 수를 센다', () => {
+    const isBad = (id) => id === 'x';
+    assert.equal(countBad(cellOf('d', 'k', agentsOf(['x', 'y', 'x2'], 1)), isBad), 1);
+    assert.equal(countBad(procOf('/p', '검증', [runOf(1, 1, ['x', 'y']), runOf(2, 1, ['y'])]), isBad), 1);
   });
 });
 
@@ -389,7 +464,7 @@ function cliSetup({ usage = null, transcripts = [], session = null } = {}) {
   }
   fs.writeFileSync(path.join(proj, `${SESSION}.jsonl`), jl(session ?? [{ type: 'user', timestamp: at(0), cwd: '/work/proj', message: { content: 'hi' } }]));
   if (usage) {
-    const rows = usage.map(([def, kind, sec, id]) => ['2026-10-09', '/work/proj', def, kind, '-', '-', String(sec), 'ok', `${id} 메모`].join('\t'));
+    const rows = usage.map(([def, kind, sec, id, result = 'ok']) => ['2026-10-09', '/work/proj', def, kind, '-', '-', String(sec), result, `${id} 메모`].join('\t'));
     fs.writeFileSync(path.join(records, 'subagent-usage.tsv'), [USAGE_HEADER, ...rows].join('\n') + '\n');
   }
   return { root, records, out: path.join(root, 'material.md'), env: { ...process.env, CLAUDE_CONFIG_DIR: claude, SUBAGENT_RECORDS_DIR: records } };
@@ -465,6 +540,55 @@ describe('speed-review.js --measure, --applied, --effects', () => {
     assert.equal(logged[5], '3');
     const e = cli(['--effects'], env);
     assert.match(e.stdout, /칸:sonnet-medium\/목업 수정: 전 10\.0분\(3회\) → 기다림/);
+  });
+
+  it('--applied는 적용 전 기록에서 올림이 붙은 건수를 전 문제 건수 열에 남긴다', () => {
+    const { env, records } = cliSetup({ usage: [...CELL_A.slice(0, 2), ['sonnet-medium', '목업 수정', 600, 'a3', '올림']], transcripts: ['a1'] });
+    const a = cli(['--applied', '칸:sonnet-medium/목업 수정', '--what', '속도 개선', '--note', '바뀐 구간만. 되돌리기: 옛 절 복원'], env);
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(a.stderr, '');
+    const logged = fs.readFileSync(path.join(records, 'speed-log.tsv'), 'utf8').trim().split('\n')[1].split('\t');
+    assert.equal(logged[8], '1');
+  });
+
+  it('--applied에 되돌릴 방법이 없는 속도 개선 내용을 주면 경고하고 기록은 남긴다', () => {
+    const { env, records } = cliSetup({ usage: CELL_A, transcripts: ['a1'] });
+    const a = cli(['--applied', '칸:sonnet-medium/목업 수정', '--what', '속도 개선', '--note', '바뀐 구간만'], env);
+    assert.equal(a.status, 0);
+    assert.match(a.stderr, /되돌릴 방법/);
+    assert.ok(fs.existsSync(path.join(records, 'speed-log.tsv')));
+  });
+
+  it('--effects는 시간이 줄었어도 적용 뒤 올림이 늘었으면 품질 떨어짐과 적용 내용을 찍는다', () => {
+    const { env, records } = cliSetup({ usage: CELL_A, transcripts: ['a1'] });
+    cli(['--applied', '칸:sonnet-medium/목업 수정', '--what', '속도 개선', '--note', '바뀐 구간만. 되돌리기: 옛 절 복원'], env);
+    const usage = path.join(records, 'subagent-usage.tsv');
+    const row = (id, result) => ['2026-10-10', '/work/proj', 'sonnet-medium', '목업 수정', '-', '-', '100', result, `${id} 메모`].join('\t');
+    fs.appendFileSync(usage, [row('b1', '올림'), row('b2', '올림'), row('b3', 'ok')].join('\n') + '\n');
+    const out = cli(['--effects'], env).stdout;
+    assert.match(out, /칸:sonnet-medium\/목업 수정: 전 10\.0분\(3회\) → 뒤 1\.7분\(3회\)  품질 떨어짐: 문제 전 0\/3건 → 뒤 2\/3건\. 빨라졌어도 되돌리자고 제안\(적용 내용: 바뀐 구간만\. 되돌리기: 옛 절 복원\)/);
+  });
+
+  it('--effects는 정정 기록이 붙은 에이전트도 문제로 센다', () => {
+    const { env, records } = cliSetup({ usage: CELL_A, transcripts: ['a1'] });
+    cli(['--applied', '칸:sonnet-medium/목업 수정', '--what', '속도 개선', '--note', '요지. 되돌리기: x'], env);
+    const row = (id) => ['2026-10-10', '/work/proj', 'sonnet-medium', '목업 수정', '-', '-', '100', 'ok', `${id} 메모`].join('\t');
+    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['c1', 'c2', 'c3'].map(row).join('\n') + '\n');
+    const corr = (id) => ['2026-10-10', '/work/proj', 's', 't', id, id, 'sonnet-medium', '목업 수정', '틀림', '메시지'].join('\t');
+    fs.writeFileSync(path.join(records, 'subagent-corrections.tsv'), [corr('c1'), corr('c2')].join('\n') + '\n');
+    assert.match(cli(['--effects'], env).stdout, /품질 떨어짐: 문제 전 0\/3건 → 뒤 2\/3건/);
+  });
+
+  it('--effects는 문제가 늘지 않았으면 품질 유지를 찍고, 적용 전 문제 건수 기록이 없는 옛 적용은 판정 불가로 찍는다', () => {
+    const { env, records } = cliSetup({ usage: CELL_A, transcripts: ['a1'] });
+    cli(['--applied', '칸:sonnet-medium/목업 수정', '--what', '속도 개선', '--note', '요지. 되돌리기: x'], env);
+    const row = (id) => ['2026-10-10', '/work/proj', 'sonnet-medium', '목업 수정', '-', '-', '100', 'ok', `${id} 메모`].join('\t');
+    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['c1', 'c2', 'c3'].map(row).join('\n') + '\n');
+    assert.match(cli(['--effects'], env).stdout, /품질 유지: 문제 전 0\/3건 → 뒤 0\/3건/);
+    const log = path.join(records, 'speed-log.tsv');
+    const [head, line] = fs.readFileSync(log, 'utf8').trim().split('\n');
+    fs.writeFileSync(log, `${head}\n${line.split('\t').slice(0, 8).join('\t')}\n`);
+    assert.match(cli(['--effects'], env).stdout, /품질 판정 불가\(적용 전 품질 기록 없음\)/);
   });
 
   it('적용한 속도 개선이 없으면 그렇게 찍는다', () => {

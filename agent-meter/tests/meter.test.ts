@@ -727,14 +727,20 @@ type CompactCase = {
   idleMinutes?: number
   tokens?: number
   breakdown?: { rawMaxTokens: number; autoCompactThreshold?: number } | null
+  // 연장 요청의 결과: 기본은 캐시를 읽음, cold는 캐시를 못 읽음, throw는 요청이 거절됨, null은 엔진이 응답 없이 끝냄
+  fork?: 'ok' | 'cold' | 'throw' | 'null'
 }
 
 async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], c: CompactCase) {
   const clock = mock.clock(on)
   const toasts: string[] = []
+  const state = { isAgentRunning: c.isAgentRunning !== false, agentListCalls: 0, forks: 0, forkResult: c.fork ?? 'ok' }
   const hasTokens = 'tokens' in c ? c.tokens : 300_000
   const breakdown = 'breakdown' in c ? c.breakdown : { rawMaxTokens: 400_000, autoCompactThreshold: 380_000 }
-  on('agent.list', () => ({ value: c.isAgentRunning === false ? [] : [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] }))
+  on('agent.list', () => {
+    state.agentListCalls += 1
+    return { value: state.isAgentRunning ? [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] : [] }
+  })
   on('env.get', () => ({ value: undefined }) as never)
   on('session.usage', () => ({
     value: { startedAt: 0, context: { window: 1_000_000, tokens: hasTokens, percent: 30, ...(breakdown ? { breakdown } : {}) }, rateLimits: [], cost: { usd: 1.5 } },
@@ -750,7 +756,13 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
   })
   on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
   on('ui.render', () => null as never)
-  on('model.fork', () => ({ value: { isAnswered: true, text: 'ok', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 113_000, cache_creation_input_tokens: 0 } } }) as never)
+  on('model.fork', () => {
+    state.forks += 1
+    if (state.forkResult === 'throw') throw new Error('blocked')
+    if (state.forkResult === 'null') return { value: null } as never
+    const read = state.forkResult === 'cold' ? 0 : 113_000
+    return { value: { isAnswered: true, text: 'ok', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: read === 0 ? 113_000 : 0 } } } as never
+  })
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
@@ -767,8 +779,9 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
   }
   await clock.advance((c.idleMinutes ?? 51) * 60_000)
-  const result = await ($.session.compact as (input: unknown) => Promise<{ skip?: string }>)({ trigger: c.trigger ?? 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }], ...(c.agentId ? { agentId: c.agentId } : {}) })
-  return { result, toasts: toasts.filter(t => t.includes('유휴 압축')) }
+  const compact = () => ($.session.compact as (input: unknown) => Promise<{ skip?: string }>)({ trigger: c.trigger ?? 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }], ...(c.agentId ? { agentId: c.agentId } : {}) })
+  const result = await compact()
+  return { result, toasts: toasts.filter(t => t.includes('유휴 압축')), compact, state, allToasts: toasts, clock }
 }
 
 for (const [name, c, isSkipped] of [
@@ -794,3 +807,190 @@ for (const [name, c, isSkipped] of [
     }
   })
 }
+
+const SKIP_TOAST = '서브에이전트 실행 중이라 유휴 압축을 건너뛰었습니다'
+
+test('keep_alive가 꺼져 있으면 실행 중인 에이전트 목록을 읽지 않고 연장 요청도 건너뛰기도 없다', { timeoutMs: 30_000, options: { keep_alive: false } }, async ($, on) => {
+  const { result, compact, state, allToasts } = await compactAfterIdle($, on, { idleMinutes: 57 })
+  expect((await compact()).skip).toBeUndefined()
+  expect(result.skip).toBeUndefined()
+  expect(state.agentListCalls).toBe(0)
+  expect(state.forks).toBe(0)
+  expect(allToasts.filter(t => t.includes(SKIP_TOAST))).toEqual([])
+  expect(allToasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
+})
+
+test('연장 요청이 응답은 왔는데 캐시를 읽지 못하면 그 세션에서는 연장과 유휴 압축 건너뛰기를 멈추고 한 번만 알린다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  const { result, compact, state, allToasts } = await compactAfterIdle($, on, { idleMinutes: 57, fork: 'cold' })
+  expect(state.forks).toBe(1)
+  expect(result.skip).toBeUndefined()
+  expect((await compact()).skip).toBeUndefined()
+  const stopped = allToasts.filter(t => t.includes('keep-alive를 끕니다'))
+  expect(stopped).toHaveLength(1)
+  expect(stopped[0]).toMatch(/^메인 캐시가 \d+분 뒤 만료됩니다/)
+  expect(stopped[0]).toContain('/config')
+  expect(allToasts.filter(t => t.includes(SKIP_TOAST))).toEqual([])
+})
+
+async function mainRequest($: Parameters<Parameters<typeof test>[2]>[0]) {
+  for await (const _ of $.turn.step({ turnId: `t-${Math.random()}`, index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
+  }
+}
+
+for (const fork of ['throw', 'null'] as const) {
+  test(`연장 요청이 ${fork === 'throw' ? '오류를 던져도' : '응답 없이 끝나도'} 한 번으로는 멈추지 않고 만료 알림만 내며, 연달아 되풀이되면 멈추고 한 번만 알린다`, { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+    const { state, allToasts, clock } = await compactAfterIdle($, on, { idleMinutes: 57, fork })
+    expect(state.forks).toBe(1)
+    expect(allToasts.filter(t => t.includes('keep-alive를 끕니다'))).toEqual([])
+    expect(allToasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
+    await mainRequest($)
+    await clock.advance(57 * 60_000)
+    expect(state.forks).toBe(2)
+    const stopped = allToasts.filter(t => t.includes('keep-alive를 끕니다'))
+    expect(stopped).toHaveLength(1)
+    await mainRequest($)
+    await clock.advance(57 * 60_000)
+    expect(state.forks).toBe(2)
+  })
+}
+
+test('연장이 한 번 실패한 뒤 성공하면 실패 횟수를 세던 것을 지워 다음 실패 한 번으로 멈추지 않는다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  const { state, allToasts, clock } = await compactAfterIdle($, on, { idleMinutes: 57, fork: 'null' })
+  expect(state.forks).toBe(1)
+  state.forkResult = 'ok'
+  await mainRequest($)
+  await clock.advance(57 * 60_000)
+  expect(state.forks).toBe(2)
+  expect(allToasts.some(t => t.startsWith('메인 캐시를 1시간 연장했습니다'))).toBe(true)
+  state.forkResult = 'null'
+  await mainRequest($)
+  await clock.advance(57 * 60_000)
+  expect(state.forks).toBe(3)
+  expect(allToasts.filter(t => t.includes('keep-alive를 끕니다'))).toEqual([])
+})
+
+test('유휴 압축 건너뛰기 알림은 서브에이전트를 한 번 기다리는 동안 한 번만 띄우고 다음 기다림에는 다시 띄운다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  const { result, compact, state, allToasts, clock } = await compactAfterIdle($, on, {})
+  const skipToasts = () => allToasts.filter(t => t === SKIP_TOAST).length
+  expect(result.skip).toBeDefined()
+  expect((await compact()).skip).toBeDefined()
+  expect(skipToasts()).toBe(1)
+  state.isAgentRunning = false
+  expect((await compact()).skip).toBeUndefined()
+  await mainRequest($)
+  state.isAgentRunning = true
+  await clock.advance(51 * 60_000)
+  expect((await compact()).skip).toBeDefined()
+  expect(skipToasts()).toBe(2)
+})
+
+test('시계, 타이머, 명령 등록, 상태줄 호출이 거절돼도 훅이 오류로 끝나지 않고 표는 로컬 시각으로 그린다', { timeoutMs: 30_000 }, async ($, on) => {
+  const denied = { clockNow: 0 }
+  on('clock.now', () => {
+    denied.clockNow += 1
+    throw new Error('blocked')
+  })
+  on('clock.every', () => {
+    throw new Error('blocked')
+  })
+  on('command.register', () => {
+    throw new Error('blocked')
+  })
+  on('ui.status', () => {
+    throw new Error('blocked')
+  })
+  on('agent.list', () => ({ value: [] }))
+  on('env.get', () => ({ value: undefined }) as never)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', () => ({ value: {} }) as never)
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
+  on('ui.render', () => null as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.SessionStart', () => ({}) as never)
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
+  })
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'kept', toolUses: [] }] }) as never)
+
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
+  }
+  const compact = await ($.session.compact as (input: unknown) => Promise<{ skip?: string }>)({ trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] })
+  expect(compact.skip).toBeUndefined()
+  const hint = await $.ui.mount({
+    plugin: 'agent-meter',
+    surface: 'terminal',
+    component: 'PromptHint',
+    props: { isDraft: false, isWorking: false, hint: '⏵⏵ bypass permissions on (shift+tab to cycle)' },
+    viewport: { columns: 162, rows: 40 },
+  } as never)
+  const lines = (await hint.findAll({ type: 'Text' })).map(t => t.text)
+  expect(lines.some(l => /^\s*main\s+opus 5\.5\s/.test(l))).toBe(true)
+  // 한 번 거절된 시계는 그 세션에서 다시 부르지 않는다
+  expect(denied.clockNow).toBe(1)
+})
+
+test('/clear로 세션이 끝나면 연장 정지 표시가 새 세션에 남지 않고 유휴 압축 건너뛰기가 다시 동작한다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  on('session.end', () => ({ sessionId: 's1' }) as never)
+  const { compact, state, clock, allToasts } = await compactAfterIdle($, on, { idleMinutes: 57, fork: 'cold' })
+  expect(state.forks).toBe(1)
+  expect(allToasts.some(t => t.includes('keep-alive를 끕니다'))).toBe(true)
+  expect((await compact()).skip).toBeUndefined()
+  await ($.session.end as (i: unknown) => Promise<unknown>)({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+  await mainRequest($)
+  await clock.advance(51 * 60_000)
+  expect((await compact()).skip).toBeDefined()
+})
+
+test('거절돼 켜진 시계 표시도 /clear로 세션이 끝나면 지워진다', { timeoutMs: 30_000 }, async ($, on) => {
+  let clockCalls = 0
+  let isDenied = true
+  on('clock.now', () => {
+    clockCalls += 1
+    if (isDenied) throw new Error('blocked')
+    return { value: 1_000 }
+  })
+  on('clock.every', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  on('env.get', () => ({ value: undefined }) as never)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', () => ({ value: {} }) as never)
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.render', () => null as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', () => ({ sessionId: 's1' }) as never)
+  on('classic.SessionStart', () => ({}) as never)
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await mainRequest($)
+  expect(clockCalls).toBe(1)
+  isDenied = false
+  await mainRequest($)
+  expect(clockCalls).toBe(1)
+  await ($.session.end as (i: unknown) => Promise<unknown>)({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+  await mainRequest($)
+  expect(clockCalls).toBeGreaterThan(1)
+})
+
+test('건너뛰기 알림은 압축이 불리지 않는 사이에 메인이 요청을 보내도 다음 기다림에서 다시 뜬다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  const { result, compact, state, allToasts, clock } = await compactAfterIdle($, on, {})
+  expect(result.skip).toBeDefined()
+  state.isAgentRunning = false
+  await mainRequest($)
+  state.isAgentRunning = true
+  await clock.advance(51 * 60_000)
+  expect((await compact()).skip).toBeDefined()
+  expect(allToasts.filter(t => t === SKIP_TOAST)).toHaveLength(2)
+})

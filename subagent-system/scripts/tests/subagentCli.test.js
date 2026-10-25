@@ -1466,13 +1466,13 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
     assert.doesNotMatch(run(root, ['--remove-kind', '표 정리']).stdout, /표에 아직/);
   });
 
-  it('체계가 쓰는 일곱 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)은 표시와 부연을 붙여도 --remove-kind가 거절하고 설정 파일을 바꾸지 않는다', () => {
+  it('체계가 쓰는 여덟 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 문서 내용 검토, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)은 표시와 부연을 붙여도 --remove-kind가 거절하고 설정 파일을 바꾸지 않는다', () => {
     const root = setup({ config: JSON.stringify({ retroMode: 'ask' }) });
     const before = fs.readFileSync(configOf(root), 'utf8');
-    for (const name of ['회고 정정 분류', '회고 정정 분류 「(고정)」', '자동 회고(회고 서브에이전트)', '작업 기록 병목 분석', '작업 기록 병목 분석 「(고정)」', '무조건 Opus 영역 판단(결론, 설계) 「(고정)」', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현 「(고정)」', 'high로도 안 풀려 다시 보내는 일']) {
+    for (const name of ['회고 정정 분류', '회고 정정 분류 「(고정)」', '자동 회고(회고 서브에이전트)', '작업 기록 병목 분석', '작업 기록 병목 분석 「(고정)」', '문서 내용 검토', '문서 내용 검토 「(고정)」', '무조건 Opus 영역 판단(결론, 설계) 「(고정)」', '계획이 정한 무조건 Opus 영역 단계 구현', '무조건 Opus 영역 구현 「(고정)」', 'high로도 안 풀려 다시 보내는 일']) {
       const r = run(root, ['--remove-kind', name]);
       assert.equal(r.status, 1, name);
-      assert.match(r.stderr, /체계가 쓰는 일곱 가지 일이라 표에서 빼지 않습니다/);
+      assert.match(r.stderr, /체계가 쓰는 여덟 가지 일이라 표에서 빼지 않습니다/);
       assert.equal(fs.readFileSync(configOf(root), 'utf8'), before, name);
     }
     assert.equal(run(root, ['--remove-kind', '번역']).status, 0);
@@ -1820,5 +1820,288 @@ describe('subagent-retro.js 키트 파일 해시(kitFileHashes)', () => {
     fs.rmSync(path.join(root, 'config.json'));
     assert.equal(run(root, ['--record-kit-hashes']).status, 1);
     assert.equal(fs.existsSync(path.join(root, 'config.json')), false);
+  });
+});
+
+describe('subagent-retro.js 회고가 지운 정의(removedDefs) 실행', () => {
+  const setup = (config) => {
+    const root = tmpDir();
+    if (config !== null) fs.writeFileSync(path.join(root, 'config.json'), config);
+    return root;
+  };
+  const run = (root, args) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') }, encoding: 'utf8' });
+  const readConfig = (root) => JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+
+  it('--remove-def는 이름을 removedDefs 끝에 더하고 다른 키는 그대로이며, 같은 이름을 다시 더해도 하나만 남는다', () => {
+    const root = setup(JSON.stringify({ retroMode: 'auto', removedDefs: ['a'], future: { x: 1 } }));
+    assert.equal(run(root, ['--remove-def', 'sonnet-low']).status, 0);
+    assert.equal(run(root, ['--remove-def', 'sonnet-low']).status, 0);
+    assert.deepEqual(readConfig(root), { retroMode: 'auto', removedDefs: ['a', 'sonnet-low'], future: { x: 1 } });
+  });
+
+  it('--restore-def는 이름을 빼고 마지막 하나를 빼면 removedDefs 키 자체가 없어지며, 다른 키는 그대로다', () => {
+    const root = setup(JSON.stringify({ retroMode: 'ask', removedDefs: ['a', 'b'] }));
+    run(root, ['--restore-def', 'a']);
+    assert.deepEqual(readConfig(root).removedDefs, ['b']);
+    run(root, ['--restore-def', 'b']);
+    assert.deepEqual(readConfig(root), { retroMode: 'ask' });
+  });
+
+  it('설정 파일이 없거나 깨졌으면 종료 코드 1이고 파일을 만들거나 바꾸지 않는다', () => {
+    const missing = setup(null);
+    assert.equal(run(missing, ['--remove-def', 'x']).status, 1);
+    assert.equal(fs.existsSync(path.join(missing, 'config.json')), false);
+    const broken = setup('{');
+    const r = run(broken, ['--restore-def', 'x']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /설정 파일이 없거나 깨져/);
+    assert.equal(fs.readFileSync(path.join(broken, 'config.json'), 'utf8'), '{');
+  });
+
+  it('이름 인자가 없으면 종료 코드 1이다', () => {
+    const root = setup('{}');
+    assert.equal(run(root, ['--remove-def']).status, 1);
+    assert.equal(run(root, ['--restore-def', '--x']).status, 1);
+  });
+});
+
+describe('subagent-retro.js --shortfalls 실행', () => {
+  const row = (kind, memo) => ['2026-10-12', '/p', 'sonnet-low', kind, '1', '1', '1', 'ok', memo].join('\t');
+  const retroRow = (memo) => ['2026-10-13', '/p', '회고', '경계', '-', '-', '-', 'ok', memo].join('\t');
+  const run = (lines) => {
+    const root = tmpDir();
+    fs.mkdirSync(path.join(root, 'records'));
+    if (lines) fs.writeFileSync(path.join(root, 'records', 'subagent-usage.tsv'), lines.join('\n') + '\n');
+    return spawnSync(process.execPath, [RETRO, '--shortfalls'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records') }, encoding: 'utf8' });
+  };
+
+  it('마지막 회고 줄의 메모와 그 뒤의 모자람 줄만 찍고 이전 모자람은 찍지 않는다', () => {
+    const r = run([row('일', 'a 모자람:옛'), retroRow('지난 메모'), row('일', 'b 모자람:새'), row('일', 'c 없음')]);
+    assert.equal(r.status, 0, r.stderr);
+    const out = r.stdout.trim().split('\n');
+    assert.equal(out[0], '지난 회고 메모: 지난 메모');
+    assert.equal(out.length, 2);
+    assert.match(out[1], /b 모자람:새/);
+  });
+
+  it('회고 줄이 없으면 기록 처음부터 모자람 줄을 찍고 지난 회고 메모는 비어 있다', () => {
+    const r = run([row('일', 'a 모자람:하나'), row('일', 'b 모자람:둘')]);
+    const out = r.stdout.trim().split('\n');
+    assert.equal(out[0], '지난 회고 메모: ');
+    assert.equal(out.length, 3);
+  });
+
+  it('사용 기록이 없으면 종료 코드 1이다', () => {
+    assert.equal(run(null).status, 1);
+  });
+});
+
+describe('subagent-retro.js --check-fable 실행', () => {
+  const costRow = (agentId, model) => ['2026-10-25', '/p', 's1', agentId, 'opus-xhigh', model, 'high', '설명', '1', '1', '1', '1', '1', '1', '0.1'].join('\t');
+  const setup = ({ model, project = {}, user = {}, local = {} } = {}) => {
+    const root = tmpDir();
+    const cwd = path.join(root, 'proj');
+    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'claude'));
+    fs.mkdirSync(path.join(root, 'records'));
+    if (model !== undefined) fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), costRow('a1b2c3', model) + '\n');
+    fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify(project));
+    fs.writeFileSync(path.join(cwd, '.claude', 'settings.local.json'), JSON.stringify(local));
+    fs.writeFileSync(path.join(root, 'claude', 'settings.json'), JSON.stringify(user));
+    return { root, cwd };
+  };
+  const run = ({ root, cwd }, env = {}) => {
+    const clean = { ...process.env };
+    delete clean.ANTHROPIC_DEFAULT_FABLE_MODEL;
+    return spawnSync(process.execPath, [RETRO, '--check-fable', 'a1b2c3'], {
+      cwd,
+      env: { ...clean, CLAUDE_CONFIG_DIR: path.join(root, 'claude'), SUBAGENT_RECORDS_DIR: path.join(root, 'records'), ...env },
+      encoding: 'utf8',
+    });
+  };
+  const verdict = (r) => /^판정: (.*)$/m.exec(r.stdout)?.[1];
+  const def = (r) => /^사용 기록 --def: (.*)$/m.exec(r.stdout)?.[1];
+
+  it('모델 열에 claude-fable-5-1이 들어 있으면 공급자 꼴 ID여도 Fable 5.1이고 fable-high로 적는다', () => {
+    for (const model of ['claude-fable-5-1', 'us.anthropic.claude-fable-5-1-v1:0', 'claude-fable-5-1-20261001']) {
+      const r = run(setup({ model }));
+      assert.equal(verdict(r), 'Fable 5.1', model);
+      assert.equal(def(r), 'fable-high');
+      assert.doesNotMatch(r.stdout, /사용자에게 알릴 말/);
+    }
+  });
+
+  it('claude-fable-5만 들어 있으면 Fable 5로 돈 것을 알리고 fable-high로 적는다', () => {
+    const r = run(setup({ model: 'claude-fable-5' }));
+    assert.equal(verdict(r), 'Fable 5');
+    assert.equal(def(r), 'fable-high');
+    assert.match(r.stdout, /Fable 5\.1이 아니라 Fable 5로 돌았다/);
+  });
+
+  it('다른 모델이면 opus-xhigh로 적고 메모에 agentId 뒤 실제 모델을 남기라고 한다', () => {
+    const r = run(setup({ model: 'claude-opus-5-5' }));
+    assert.equal(verdict(r), 'Fable 아님');
+    assert.equal(def(r), 'opus-xhigh');
+    assert.match(r.stdout, /^사용 기록 --memo: a1b2c3 claude-opus-5-5$/m);
+  });
+
+  it('ID에 claude-가 없고 설정에서 대응도 못 찾으면 Fable 아님이라 단정하지 않고 확인하지 못했다고 한다', () => {
+    const r = run(setup({ model: 'arn:aws:bedrock:us-east-1:1:inference-profile/x' }));
+    assert.equal(verdict(r), 'Fable 확인 못함');
+    assert.equal(def(r), 'opus-xhigh');
+    assert.match(r.stdout, /확인하지 못했다/);
+  });
+
+  it('modelOverrides가 Fable 모델 ID 키를 모델 열의 값에 대응시키면 키로 5.1과 5를 가른다', () => {
+    const arn = 'arn:aws:bedrock:us-east-1:1:inference-profile/x';
+    assert.equal(verdict(run(setup({ model: arn, user: { modelOverrides: { 'claude-fable-5-1': arn } } }))), 'Fable 5.1');
+    const five = run(setup({ model: arn, user: { modelOverrides: { 'claude-fable-5': arn } } }));
+    assert.equal(verdict(five), 'Fable 5');
+    assert.equal(def(five), 'fable-high');
+  });
+
+  it('같은 modelOverrides 키가 여러 곳에 있으면 프로젝트 로컬, 프로젝트, 사용자 순으로 먼저 있는 값을 쓴다', () => {
+    const r = run(setup({ model: 'arn-local', local: { modelOverrides: { 'claude-fable-5-1': 'arn-local' } }, project: { modelOverrides: { 'claude-fable-5-1': 'arn-project' } }, user: { modelOverrides: { 'claude-fable-5-1': 'arn-user' } } }));
+    assert.equal(verdict(r), 'Fable 5.1');
+    assert.equal(verdict(run(setup({ model: 'arn-user', local: { modelOverrides: { 'claude-fable-5-1': 'arn-local' } }, user: { modelOverrides: { 'claude-fable-5-1': 'arn-user' } } }))), 'Fable 확인 못함');
+  });
+
+  it('ANTHROPIC_DEFAULT_FABLE_MODEL은 설정 파일 env가 셸 환경보다 먼저고, 같은 값이면 버전 미확인 Fable로 본다', () => {
+    const fromFile = run(setup({ model: 'my-fable', project: { env: { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' } } }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'other' });
+    assert.equal(verdict(fromFile), 'Fable(버전 미확인)');
+    assert.equal(def(fromFile), 'fable-high');
+    assert.equal(verdict(run(setup({ model: 'my-fable' }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' })), 'Fable(버전 미확인)');
+    assert.equal(verdict(run(setup({ model: 'my-fable', project: { env: { ANTHROPIC_DEFAULT_FABLE_MODEL: 'other' } } }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' })), 'Fable 확인 못함');
+  });
+
+  it('비용 기록에 그 agentId 줄이 없으면 fable-high로 적고 메모에 모델 미확인을 남기라고 한다', () => {
+    const r = run(setup({}));
+    assert.equal(verdict(r), '줄 없음');
+    assert.equal(def(r), 'fable-high');
+    assert.match(r.stdout, /^사용 기록 --memo: a1b2c3 모델 미확인$/m);
+  });
+
+  it('지금 연 폴더의 .claude가 설정 폴더와 같으면 그 settings.json은 사용자 설정으로 한 번만 읽고 settings.local.json은 프로젝트 로컬로 읽는다', () => {
+    const root = tmpDir();
+    fs.mkdirSync(path.join(root, '.claude'));
+    fs.mkdirSync(path.join(root, 'records'));
+    fs.writeFileSync(path.join(root, '.claude', 'settings.json'), '{}');
+    fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), JSON.stringify({ modelOverrides: { 'claude-fable-5-1': 'arn-x' } }));
+    fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), costRow('a1b2c3', 'arn-x') + '\n');
+    const r = spawnSync(process.execPath, [RETRO, '--check-fable', 'a1b2c3'], { cwd: root, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, '.claude'), SUBAGENT_RECORDS_DIR: path.join(root, 'records') }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const read = /^읽은 설정: (.*)$/m.exec(r.stdout)[1].split(', ');
+    assert.equal(read.filter((f) => f.endsWith(`${path.sep}settings.json`)).length, 1);
+    assert.equal(read.filter((f) => f.endsWith(`${path.sep}settings.local.json`)).length, 1);
+    assert.equal(verdict(r), 'Fable 5.1');
+  });
+
+  it('git 저장소의 하위 폴더에서 열었으면 저장소 최상위의 settings.local.json을 읽는다', () => {
+    const ctx = setup({ model: 'arn-top' });
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: ctx.cwd }).status, 0);
+    const sub = path.join(ctx.cwd, 'packages', 'app');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(ctx.cwd, '.claude', 'settings.local.json'), JSON.stringify({ modelOverrides: { 'claude-fable-5-1': 'arn-top' } }));
+    const r = run({ root: ctx.root, cwd: sub });
+    assert.equal(verdict(r), 'Fable 5.1', r.stdout);
+  });
+
+  it('agentId 인자가 없으면 종료 코드 1이다', () => {
+    const ctx = setup({ model: 'x' });
+    const r = spawnSync(process.execPath, [RETRO, '--check-fable'], { cwd: ctx.cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(ctx.root, 'claude'), SUBAGENT_RECORDS_DIR: path.join(ctx.root, 'records') }, encoding: 'utf8' });
+    assert.equal(r.status, 1);
+  });
+});
+
+describe('subagent-retro.js --docs와 --docs-done', () => {
+  const SESSION = '11111111-2222-3333-4444-555555555555';
+  const lines = (n) => Array.from({ length: n }, (_, i) => `규칙 ${i}`).join('\n') + '\n';
+
+  // 사용 기록의 프로젝트는 CLAUDE.md가 있는 임시 폴더이고, 같은 구간의 대화가 내 스킬, 플러그인 스킬, 파일 없는 이름을 부른다.
+  const setup = ({ claudeMdLines = 250, config = {} } = {}) => {
+    const root = tmpDir();
+    const claude = path.join(root, 'claude');
+    const records = path.join(root, 'records');
+    const project = path.join(root, 'proj');
+    const skill = path.join(claude, 'skills', 'mine', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.mkdirSync(path.join(claude, 'projects', '-proj'), { recursive: true });
+    fs.mkdirSync(records);
+    fs.mkdirSync(project);
+    fs.writeFileSync(skill, '# mine\n');
+    fs.writeFileSync(path.join(project, 'CLAUDE.md'), lines(claudeMdLines));
+    fs.writeFileSync(path.join(records, 'subagent-usage.tsv'), `2026-10-12\t${project}\tsonnet-low\t번역\t1\t2\t3\tok\ta1 줄\n`);
+    const call = (skill, ts) => JSON.stringify({ type: 'assistant', timestamp: ts, cwd: project, message: { content: [{ type: 'tool_use', id: skill, name: 'Skill', input: { skill } }] } });
+    fs.writeFileSync(
+      path.join(claude, 'projects', '-proj', `${SESSION}.jsonl`),
+      [call('mine', '2026-10-12T10:00:00Z'), call('mine', '2026-10-12T10:01:00Z'), call('plug:thing', '2026-10-12T10:02:00Z'), call('ghost', '2026-10-12T10:03:00Z')].join('\n') + '\n'
+    );
+    const configFile = path.join(root, 'config.json');
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    return { claude, records, project, skill, claudeMd: path.join(project, 'CLAUDE.md'), configFile };
+  };
+  const run = (e, args) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_RECORDS_DIR: e.records, SUBAGENT_CONFIG_FILE: e.configFile }, encoding: 'utf8' });
+
+  it('처음에는 쓴 스킬 파일과 프로젝트 CLAUDE.md를 줄 수와 함께 대상으로 찍고 플러그인 스킬과 파일 없는 이름은 뺀다', () => {
+    const e = setup();
+    const r = run(e, ['--docs']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /CLAUDE\.md 기준 줄 수: 200줄/);
+    assert.match(r.stdout, /검토 대상 2개/);
+    assert.ok(r.stdout.includes(`스킬  ${e.skill}  mine  쓴 횟수 2번  처음 검토`));
+    assert.ok(r.stdout.includes(`프로젝트 CLAUDE.md  ${e.claudeMd}  250줄, 기준 초과  처음 검토`));
+    assert.match(r.stdout, /플러그인 스킬 1개\(plug:thing\)/);
+    assert.match(r.stdout, /스킬 파일을 찾지 못한 이름 1개\(ghost\)/);
+  });
+
+  it('claudeMdLimitLines를 크게 두면 같은 CLAUDE.md가 기준 이하로 찍힌다', () => {
+    const e = setup({ config: { claudeMdLimitLines: 300 } });
+    const r = run(e, ['--docs']);
+    assert.match(r.stdout, /CLAUDE\.md 기준 줄 수: 300줄/);
+    assert.match(r.stdout, /250줄, 기준 이하/);
+  });
+
+  it('--docs-done으로 해시를 남기면 바뀌기 전까지 대상이 아니고 고치면 수정됨으로 다시 나온다', () => {
+    const e = setup();
+    const done = run(e, ['--docs-done', e.skill, e.claudeMd]);
+    assert.equal(done.status, 0, done.stderr);
+    const saved = JSON.parse(fs.readFileSync(e.configFile, 'utf8')).docReviewHashes;
+    assert.deepEqual(Object.keys(saved).sort(), [e.skill, e.claudeMd].sort());
+    const again = run(e, ['--docs']);
+    assert.match(again.stdout, /검토 대상 0개/);
+    assert.match(again.stdout, /지난 검토 뒤 바뀌지 않음 2개/);
+    fs.appendFileSync(e.skill, '한 줄 더\n');
+    const edited = run(e, ['--docs']);
+    assert.match(edited.stdout, /검토 대상 1개/);
+    assert.ok(edited.stdout.includes(`${e.skill}  mine  쓴 횟수 2번  지난 검토 뒤 수정됨`));
+  });
+
+  it('--docs-done은 다른 설정 키를 남기고, 파일이 없으면 아무것도 쓰지 않고 종료 코드 1이다', () => {
+    const e = setup({ config: { retroMode: 'auto' } });
+    const bad = run(e, ['--docs-done', e.skill, path.join(e.project, '없는파일.md')]);
+    assert.equal(bad.status, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.configFile, 'utf8')), { retroMode: 'auto' });
+    assert.equal(run(e, ['--docs-done']).status, 1);
+    assert.equal(run(e, ['--docs-done', e.skill]).status, 0);
+    assert.equal(JSON.parse(fs.readFileSync(e.configFile, 'utf8')).retroMode, 'auto');
+  });
+
+  it('config.json의 commandName과 같은 이름의 스킬은 키트가 덮어쓰는 것이라 대상에서 뺀다', () => {
+    const e = setup({ config: { commandName: 'mine' } });
+    assert.match(run(e, ['--docs']).stdout, /검토 대상 1개/);
+  });
+});
+
+describe('subagent-retro.js claudeMdLimitLines', () => {
+  it('--claude-md-done은 claudeMdLimitLines를 기준으로 쓰고 넘으면 그 줄 수를 남긴다', () => {
+    const root = tmpDir();
+    const claude = path.join(root, 'claude');
+    fs.mkdirSync(claude);
+    fs.writeFileSync(path.join(claude, 'CLAUDE.md'), Array.from({ length: 230 }, (_, i) => `규칙 ${i}`).join('\n') + '\n');
+    const file = path.join(root, 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ claudeMdLimitLines: 100 }));
+    const r = spawnSync(process.execPath, [RETRO, '--claude-md-done'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), CLAUDE_CONFIG_DIR: claude, SUBAGENT_CONFIG_FILE: file }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { claudeMdLimitLines: 100, claudeMdKeptLines: 230 });
   });
 });

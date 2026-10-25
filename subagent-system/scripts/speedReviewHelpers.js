@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sessionCwd, projectRoot } from './claudeProjectPaths.js';
 import { analyzeTranscript, readMessageRows } from './transcriptTiming.js';
+import { UP_MIN_COUNT, UP_MIN_RATIO } from './subagentRetroHelpers.js';
 
 // Agent 호출은 거의 모두 백그라운드라 호출 시작끼리만 재면 긴 단계 뒤에서 회차가 잘못 갈린다. 그래서 앞 호출들이 끝난 시각(서브에이전트 활동 끝 포함)부터 잰다.
 export const RUN_GAP_SEC = 3600;
@@ -177,9 +178,10 @@ export function findProcedureRuns(sessionFile, opts = {}) {
 }
 
 // 회고 자체의 일은 병목 분석 대상이 아니다. 회고가 회고를 고치려 들면 끝이 없다.
-export const EXCLUDED_KINDS = ['자동 회고', '회고 정정 분류', '작업 기록 병목 분석'];
+export const EXCLUDED_KINDS = ['자동 회고', '회고 정정 분류', '작업 기록 병목 분석', '문서 내용 검토'];
 
-export const SPEED_LOG_HEADER = '시각\t종류\t대상\t무엇\t전 평균 초\t전 건수\t사용 기록 줄 수\t내용';
+// 전 문제 건수는 적용 전 기록에서 올림, 재지시, 정정이 붙은 건수다. 절차의 대화 기록은 보존 기간이 지나면 사라져 나중에 다시 셀 수 없으므로 적용할 때 남긴다.
+export const SPEED_LOG_HEADER = '시각\t종류\t대상\t무엇\t전 평균 초\t전 건수\t사용 기록 줄 수\t내용\t전 문제 건수';
 
 // 메모 첫 낱말에 `add4fa4fc4b15a337(이어서)`처럼 꼬리가 붙을 수 있어 앞의 16진수 글자만 agentId로 쓴다.
 export const agentIdOf = (word) => (word ? /^[0-9a-f]+/.exec(word)?.[0] ?? word : word);
@@ -233,7 +235,7 @@ const undash = (v) => (v === '-' || v === '' || v === undefined ? null : Number(
 
 export function speedLogLine(e) {
   const note = String(e.note ?? '').replace(/[\t\r\n]+/g, ' ');
-  return [e.at, e.type, e.target, e.what, dash(e.beforeAvg), dash(e.beforeCount), dash(e.usageLines), note].join('\t');
+  return [e.at, e.type, e.target, e.what, dash(e.beforeAvg), dash(e.beforeCount), dash(e.usageLines), note, dash(e.beforeBad)].join('\t');
 }
 
 export function parseSpeedLog(text) {
@@ -241,7 +243,7 @@ export function parseSpeedLog(text) {
   for (const line of (text ?? '').split(/\r?\n/)) {
     const c = line.split('\t');
     if (c.length < 8 || c[0] === '시각') continue;
-    out.push({ at: c[0], type: c[1], target: c[2], what: c[3], beforeAvg: undash(c[4]), beforeCount: undash(c[5]), usageLines: undash(c[6]), note: c.slice(7).join('\t') });
+    out.push({ at: c[0], type: c[1], target: c[2], what: c[3], beforeAvg: undash(c[4]), beforeCount: undash(c[5]), usageLines: undash(c[6]), note: c[7], beforeBad: undash(c[8]) });
   }
   return out;
 }
@@ -301,8 +303,22 @@ export function pickTarget({ cells, procedures, pending = new Set(), speedLog = 
   return top;
 }
 
+// 적용 뒤 이만큼 모이기 전에는 품질을 판정하지 않는다. 한두 건의 우연한 올림을 품질 하락으로 읽지 않으려는 것이다.
+export const QUALITY_MIN_AFTER = 3;
+
+// 문제 건수의 비율이 적용 전보다 UP_MIN_RATIO 넘게 늘고 문제가 UP_MIN_COUNT건 이상이면 떨어진 것이다(올리기 후보와 같은 기준).
+// 건수가 모자라거나 적용 전 기록이 없으면 판정하지 않는다.
+export function qualityVerdict({ beforeBad, beforeCount, afterBad, afterCount }) {
+  if (beforeBad === null || beforeBad === undefined || !beforeCount) return '판정 불가';
+  if (afterCount < QUALITY_MIN_AFTER) return '기다림';
+  return afterBad >= UP_MIN_COUNT && afterBad / afterCount - beforeBad / beforeCount >= UP_MIN_RATIO ? '떨어짐' : '유지';
+}
+
+const badItem = (kind, item, isBad) => (kind === 'cell' ? isBad(item.id) : item.agents.some((id) => isBad(id)));
+
 // 같은 대상의 적용이 여러 번이면 각 적용은 다음 적용 직전까지의 기록만 자기 뒤로 센다.
-export function effects({ speedLog, cellsAll, proceduresAll }) {
+// isBad(agentId)를 주면 적용 뒤 항목 가운데 문제가 붙은 것을 세어 quality에 담는다. 절차 회차는 에이전트 하나라도 문제가 있으면 문제 회차다.
+export function effects({ speedLog, cellsAll, proceduresAll, isBad = null }) {
   const byTarget = new Map([...cellsAll, ...proceduresAll].map((c) => [c.target, c]));
   const applies = speedLog.filter((e) => e.type === '적용');
   return applies
@@ -315,6 +331,15 @@ export function effects({ speedLog, cellsAll, proceduresAll }) {
         const laterOnes = new Set(afterItems(c, next));
         items = items.filter((x) => !laterOnes.has(x));
       }
-      return { target: e.target, appliedAt: e.at, what: e.what, beforeAvg: e.beforeAvg, beforeCount: e.beforeCount, afterAvg: mean(items), afterCount: items.length };
+      let quality = null;
+      if (isBad) {
+        const afterBad = items.filter((x) => badItem(c.kind, x, isBad)).length;
+        const q = { beforeBad: e.beforeBad ?? null, beforeCount: e.beforeCount, afterBad, afterCount: items.length };
+        quality = { ...q, verdict: qualityVerdict(q) };
+      }
+      return { target: e.target, appliedAt: e.at, what: e.what, note: e.note, beforeAvg: e.beforeAvg, beforeCount: e.beforeCount, afterAvg: mean(items), afterCount: items.length, quality };
     });
 }
+
+// 칸 후보나 절차 후보 안에서 문제가 붙은 항목 수. 적용할 때 적용 전 품질로 남긴다.
+export const countBad = (candidate, isBad) => (candidate.kind === 'cell' ? candidate.agents : candidate.runs).filter((x) => badItem(candidate.kind, x, isBad)).length;

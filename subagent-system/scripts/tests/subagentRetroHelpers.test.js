@@ -15,6 +15,7 @@ function partialEqual(actual, expected, at = '') {
     assert.deepStrictEqual(actual, expected, at || undefined);
   }
 }
+import { docReviewTargets, extractSkillUses, configTextWithDocHashes, DOC_REVIEW_MAX } from '../subagentRetroHelpers.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1657,8 +1658,8 @@ describe('표 안정 판정', () => {
 
 describe('회고 방식 설정', () => {
   it('값이 auto일 때만 auto이고, 없거나 깨졌거나 모르는 값이면 ask이며 commandName은 기본 retro다', () => {
-    assert.deepEqual(parseConfig('{"retroMode":"auto"}'), { retroMode: 'auto', commandName: 'retro', retroFailures: 0, removedDefs: [], removedKinds: [], claudeMdKeptLines: null });
-    assert.deepEqual(parseConfig('{"retroMode":"ask","commandName":"huigo","retroFailures":1}'), { retroMode: 'ask', commandName: 'huigo', retroFailures: 1, removedDefs: [], removedKinds: [], claudeMdKeptLines: null });
+    assert.deepEqual(parseConfig('{"retroMode":"auto"}'), { retroMode: 'auto', commandName: 'retro', retroFailures: 0, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {} });
+    assert.deepEqual(parseConfig('{"retroMode":"ask","commandName":"huigo","retroFailures":1}'), { retroMode: 'ask', commandName: 'huigo', retroFailures: 1, removedDefs: [], removedKinds: [], claudeMdKeptLines: null, claudeMdLimitLines: 200, docReviewHashes: {} });
     for (const text of [undefined, '', '{깨짐', 'null', '[]', '"auto"', '{"retroMode":"AUTO"}', '{}']) assert.equal(parseConfig(text).retroMode, 'ask', String(text));
   });
 
@@ -2809,5 +2810,70 @@ describe('키트 파일 해시 순수 함수', () => {
     const next = JSON.parse(configTextWithKitHashes('{"roles":[],"kitFileHashes":{"old":"1"}}', { a: 'b' }));
     assert.deepEqual(next, { roles: [], kitFileHashes: { a: 'b' } });
     for (const bad of ['', '{', '[]']) assert.equal(configTextWithKitHashes(bad, {}), null, bad);
+  });
+});
+
+describe('설정의 claudeMdLimitLines와 docReviewHashes', () => {
+  const H = 'a'.repeat(64);
+
+  it('기준 줄 수는 양의 정수일 때만 받고 아니면 기본 200줄이다', () => {
+    assert.equal(parseConfig('{"claudeMdLimitLines":300}').claudeMdLimitLines, 300);
+    for (const bad of ['0', '-5', '1.5', '"300"', 'null']) assert.equal(parseConfig(`{"claudeMdLimitLines":${bad}}`).claudeMdLimitLines, 200);
+    assert.equal(parseConfig(null).claudeMdLimitLines, 200);
+  });
+
+  it('검토 해시는 sha256 16진 문자열인 항목만 받는다', () => {
+    assert.deepEqual(parseConfig(JSON.stringify({ docReviewHashes: { '/a': H, '/b': 'zz', '/c': 3 } })).docReviewHashes, { '/a': H });
+    assert.deepEqual(parseConfig('{"docReviewHashes":[1]}').docReviewHashes, {});
+  });
+
+  it('claudeMdSummary는 넘겨준 기준 줄 수로 정리 제안 대상을 가른다', () => {
+    const text = Array.from({ length: 250 }, (_, i) => `규칙 ${i}`).join('\n') + '\n';
+    assert.equal(claudeMdSummary(text, null, 300).target, false);
+    assert.equal(claudeMdSummary(text, null, 300).reason, '300줄 이하');
+    assert.equal(claudeMdSummary(text, null, 200).target, true);
+  });
+
+  it('configTextWithDocHashes는 다른 키와 이전 해시를 남기고 해시를 더하며, 깨진 설정에는 null이다', () => {
+    const next = JSON.parse(configTextWithDocHashes(JSON.stringify({ retroMode: 'auto', docReviewHashes: { '/a': H } }), { '/b': 'b'.repeat(64) }));
+    assert.deepEqual(next, { retroMode: 'auto', docReviewHashes: { '/a': H, '/b': 'b'.repeat(64) } });
+    assert.equal(configTextWithDocHashes('{깨짐', { '/b': H }), null);
+  });
+});
+
+describe('docReviewTargets', () => {
+  const doc = (file, hash, uses = 0) => ({ file, hash, uses });
+
+  it('지난 검토 뒤 해시가 같은 문서는 대상이 아니고 처음과 수정됨을 가른다', () => {
+    const r = docReviewTargets([doc('/same', 'h1'), doc('/edited', 'h2'), doc('/new', 'h3')], { '/same': 'h1', '/edited': 'old' });
+    assert.deepEqual(r.targets.map((d) => [d.file, d.state]).sort(), [['/edited', '수정됨'], ['/new', '처음']]);
+    assert.equal(r.unchanged, 1);
+  });
+
+  it('한 번에 DOC_REVIEW_MAX개까지만 많이 쓴 것부터 고르고 나머지는 미룬다', () => {
+    const docs = Array.from({ length: DOC_REVIEW_MAX + 2 }, (_, i) => doc(`/d${i}`, 'h', i));
+    const r = docReviewTargets(docs, {});
+    assert.equal(r.targets.length, DOC_REVIEW_MAX);
+    assert.equal(r.targets[0].file, `/d${DOC_REVIEW_MAX + 1}`);
+    assert.equal(r.deferred.length, 2);
+  });
+});
+
+describe('extractSkillUses', () => {
+  const skillCall = (ts, skill) => ({ type: 'assistant', timestamp: ts, message: { content: [{ type: 'tool_use', id: 't', name: 'Skill', input: { skill } }] } });
+
+  it('Skill 도구 호출과 사용자가 친 슬래시 명령에서 스킬 이름을 모으고 앞의 슬래시는 뗀다', () => {
+    const lines = [
+      skillCall('2026-10-12T01:00:00Z', 'my-skill'),
+      skillCall('2026-10-12T01:00:01Z', '/other'),
+      { type: 'user', timestamp: '2026-10-12T01:00:02Z', message: { content: '<command-message>x</command-message>\n<command-name>/slashy</command-name>' } },
+      { type: 'assistant', timestamp: '2026-10-12T01:00:03Z', message: { content: [{ type: 'tool_use', id: 'u', name: 'Bash', input: { command: 'ls' } }] } },
+    ];
+    assert.deepEqual(extractSkillUses(lines, null), ['my-skill', 'other', 'slashy']);
+  });
+
+  it('since보다 앞의 호출은 세지 않는다', () => {
+    const lines = [skillCall('2026-10-10T00:00:00Z', 'old'), skillCall('2026-10-12T00:00:00Z', 'new')];
+    assert.deepEqual(extractSkillUses(lines, new Date('2026-10-11T00:00:00Z')), ['new']);
   });
 });

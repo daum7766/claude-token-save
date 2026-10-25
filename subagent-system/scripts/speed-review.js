@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RECORDS_DIR, PROJECTS_ROOT, appendWithHeader, listSessions } from './claudeProjectPaths.js';
-import { parseUsage, extractSince } from './subagentRetroHelpers.js';
+import { parseUsage, parseCorrections, extractSince } from './subagentRetroHelpers.js';
 import { analyzeTranscript, fileHasLine } from './transcriptTiming.js';
 import {
   findProcedureRuns,
@@ -23,6 +23,9 @@ import {
   pickTarget,
   measuredFirstTargets,
   effects,
+  countBad,
+  QUALITY_MIN_AFTER,
+  agentIdOf,
   embraces,
   sameAgent,
   SPEED_LOG_HEADER,
@@ -36,10 +39,12 @@ const USAGE = [
 ].join('\n');
 const WHATS = ['속도 개선', '측정 요청'];
 const LONG_CALL_TOP = 15;
+const sizeOf = (c) => (c.kind === 'cell' ? c.agents.length : c.runs.length);
 
 const USAGE_FILE = path.join(RECORDS_DIR, 'subagent-usage.tsv');
 const SPEED_LOG_FILE = path.join(RECORDS_DIR, 'speed-log.tsv');
 const PENDING_FILE = path.join(RECORDS_DIR, 'retro-pending.md');
+const CORRECTIONS_FILE = path.join(RECORDS_DIR, 'subagent-corrections.tsv');
 
 const readOrNull = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
 const min1 = (sec) => (sec / 60).toFixed(1);
@@ -253,18 +258,41 @@ function measure(target, items) {
   append({ at: new Date().toISOString(), type: '측정', target, what: '-', beforeAvg: null, beforeCount: null, usageLines: null, note: items });
 }
 
+// 품질 신호는 사용 기록의 올림, 재지시와 정정 기록이다. 사용 기록의 agentId는 앞 8자라 대화 기록의 전체 id와 앞부분이 같으면 같은 에이전트로 본다.
+function badPredicate() {
+  const ids = [
+    ...usageParsed().all.filter((r) => r.result === '올림' || r.result === '재지시').map((r) => agentIdOf(r.agentId)),
+    ...parseCorrections(readOrNull(CORRECTIONS_FILE) ?? '').map((c) => c.agentId),
+  ].filter((id) => id && id !== '-' && id !== '메인');
+  return (id) => ids.some((bad) => sameAgent(id, bad));
+}
+
 function beforeStats(target) {
-  if (target.startsWith('칸:')) {
-    const c = cellCandidates(usageParsed().all).find((x) => x.target === target);
-    return c ? { avg: Math.round(c.totalSec / c.agents.length), count: c.agents.length } : { avg: null, count: 0 };
-  }
-  const p = procedureCandidates(scanProcedures(0).flatMap((s) => s.runs)).find((x) => x.target === target);
-  return p ? { avg: Math.round(p.totalSec / p.runs.length), count: p.runs.length } : { avg: null, count: 0 };
+  const isBad = badPredicate();
+  const stats = (c) => (c ? { avg: Math.round(c.totalSec / sizeOf(c)), count: sizeOf(c), bad: countBad(c, isBad) } : { avg: null, count: 0, bad: 0 });
+  if (target.startsWith('칸:')) return stats(cellCandidates(usageParsed().all).find((x) => x.target === target));
+  return stats(procedureCandidates(scanProcedures(0).flatMap((s) => s.runs)).find((x) => x.target === target));
 }
 
 function applied(target, what, note) {
-  const { avg, count } = beforeStats(target);
-  append({ at: new Date().toISOString(), type: '적용', target, what, beforeAvg: avg, beforeCount: count, usageLines: usageParsed().lineCount, note });
+  const { avg, count, bad } = beforeStats(target);
+  if (what === '속도 개선' && !note.includes('되돌리기')) console.error('경고: 내용에 되돌릴 방법이 없습니다. 품질이 떨어졌을 때 되돌리려면 --note에 "되돌리기: <방법>"을 적으세요.');
+  append({ at: new Date().toISOString(), type: '적용', target, what, beforeAvg: avg, beforeCount: count, beforeBad: bad, usageLines: usageParsed().lineCount, note });
+}
+
+const QUALITY_TEXT = {
+  유지: '품질 유지',
+  기다림: `품질 기다림(뒤 ${QUALITY_MIN_AFTER}건 이상 쌓이면 판정)`,
+  '판정 불가': '품질 판정 불가(적용 전 품질 기록 없음)',
+};
+
+// 문제는 올림, 재지시, 정정이 붙은 건수다. 떨어졌으면 시간이 줄었어도 되돌리자고 제안하도록 적용 때 적은 내용(되돌릴 방법 포함)을 함께 찍는다.
+function qualityText(e) {
+  const q = e.quality;
+  if (!q) return '';
+  const counts = q.beforeBad === null ? '' : `: 문제 전 ${q.beforeBad}/${q.beforeCount}건 → 뒤 ${q.afterBad}/${q.afterCount}건`;
+  if (q.verdict === '떨어짐') return `  품질 떨어짐${counts}. 빨라졌어도 되돌리자고 제안(적용 내용: ${e.note || '없음'})`;
+  return `  ${QUALITY_TEXT[q.verdict]}${q.verdict === '유지' ? counts : ''}`;
 }
 
 function printEffects() {
@@ -278,9 +306,9 @@ function printEffects() {
   const procTargets = new Set(improved.filter((e) => e.target.startsWith('절차:')).map((e) => e.target));
   const sinceMs = Math.min(...improved.filter((e) => procTargets.has(e.target)).map((e) => Date.parse(e.at)));
   const proceduresAll = procTargets.size ? procedureCandidates(scanProcedures(sinceMs).flatMap((s) => s.runs)) : [];
-  for (const e of effects({ speedLog, cellsAll, proceduresAll })) {
+  for (const e of effects({ speedLog, cellsAll, proceduresAll, isBad: badPredicate() })) {
     const before = `전 ${e.beforeAvg === null ? '-' : min1(e.beforeAvg)}분(${e.beforeCount ?? 0}회)`;
-    console.log(`${e.target}: ${before} → ${e.afterAvg === null ? '기다림' : `뒤 ${min1(e.afterAvg)}분(${e.afterCount}회)`}`);
+    console.log(`${e.target}: ${before} → ${e.afterAvg === null ? '기다림' : `뒤 ${min1(e.afterAvg)}분(${e.afterCount}회)`}${qualityText(e)}`);
   }
 }
 
