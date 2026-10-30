@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 const SUB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HOOK = path.join(SUB, 'hooks', 'git', 'commit-msg');
@@ -131,5 +134,54 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP }, () => 
     assert.match(bad.stderr, /왜:/);
     const ok = git(repo, ['commit', '-m', '제목', '-m', '왜: 까닭\n전제: 믿은 사실']);
     assert.equal(ok.status, 0, ok.stderr);
+  });
+
+  it('결정 문서가 열려 있으면 다른 문서에 새 결정 표기를 넣는 커밋은 막히고, 대조 줄이 있거나 결정 문서 안이면 통과한다', { skip: spawnSync('git', ['--version']).status !== 0 }, () => {
+    const git = (cwd, args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+    });
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'commit-msg-decision-'));
+    const write = (f, text) => fs.writeFileSync(path.join(repo, f), text);
+    const commit = (msgExtra = '') => git(repo, ['commit', '-m', '제목', '-m', `왜: 까닭\n전제: 믿은 사실${msgExtra}`]);
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['config', '--local', 'core.hooksPath', path.dirname(ISOLATED)]);
+    write('plan.md', '# 기획\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 결정 문서가 없으면 결정 표기를 넣어도 통과한다
+    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 결정 문서 안의 결정 표기는 통과한다
+    write('overhaul.md', '<!-- decision-doc -->\n# 결정\n| 광고 | 최대 3개(2026-10-31 사용자) |\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 열린 결정 문서가 있는데 다른 문서에 넣으면 막힌다. 날짜만 있거나 결정어만 있는 괄호는 표기가 아니다
+    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 뺀 것(2026-11-01 사용자 지시, 이유)\n');
+    git(repo, ['add', '.']);
+    const bad = commit();
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /결정 문서\(overhaul\.md\)/);
+    assert.match(bad.stderr, /plan\.md: - 뺀 것/);
+    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 측정(2026-11-01)과 정리(사용자 몫)\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 대조표대로 옮기는 커밋은 대조 줄로 통과한다
+    write('plan.md', '# 기획\n- 뺀 것(2026-11-01 사용자 지시)\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit('\n대조: overhaul.md 뺀 것 행').status, 0);
+  });
+
+  it('결정어는 config.json decisionWords를 따른다', () => {
+    const { checkDecision } = require(HOOK);
+    const added = [['a.md', '- 정함(2026-10-31 팀장)']];
+    assert.equal(checkDecision('제목\n', ['d.md'], added, ['사용자']), null);
+    assert.match(checkDecision('제목\n', ['d.md'], added, ['사용자', '팀장']), /a\.md/);
   });
 });

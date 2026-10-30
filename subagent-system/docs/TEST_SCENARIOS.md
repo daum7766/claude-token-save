@@ -68,6 +68,7 @@
 - IN-54 brief-check는 늘 놓이고 PreToolUse에 걸리며(옛 설치본도 update가 채움, 옛 `--hooks brief-check`는 무시하고 알림) commit-msg는 고른 때만 놓이고, add는 겹치지 않게 더하고 uninstall은 키트 훅만 지운다(APPLY_GUIDE Q5)
 - IN-55 commit-msg는 commitCheck가 block일 때만 저장소마다 core.hooksPath를 거는 명령을 알리고 전역으로는 걸지 않는다(APPLY_GUIDE Q5)
 - IN-56 지시문 검사 훅은 목표 줄과 결정 문서가 없는 600자 이상의 비 haiku 지시를 막고 표보다 높은 정의에 높임을 요구하며, 커밋 검사 훅은 왜와 전제 줄이 없으면 막고 commitCheck가 off이면 통과한다(APPLY_GUIDE Q5)
+- IN-56b 커밋 검사 훅은 `<!-- decision-doc -->` 표시가 든 결정 문서가 색인에 있으면 다른 마크다운에 날짜와 결정어(`decisionWords`, 기본 `사용자`)가 함께 든 괄호를 새로 넣는 커밋을 막고, 결정 문서 안이거나 메시지에 `대조:` 줄이 있으면 통과한다
 - IN-57 지시문 검사 훅은 표의 일 이름에서 시험, 최저, 고정 표시와 괄호 부연만 떼고 `일[기준]` 꼴 두 칸을 다른 일로 읽어, 쉬운 쪽 일을 표보다 높은 정의로 보내면 높임을 요구한다(ROUTING_PRESETS 표 형식)
 - IN-58 ask-log는 늘 놓이고 PermissionRequest에 matcher `*`로 걸리며(개인용과 회사용 모두, retro-write-allow는 개인용만) update가 두 번 넣지 않고 uninstall이 키트 경로의 것만 지운다
 - IN-59 지시문 검사 훅은 `올림:` 줄이 있는 지시를 표 칸보다 높은 정의여도 통과시키고 목표와 결정 문서 검사는 그대로 한다(GUIDE 문제가 생기면 올리기)

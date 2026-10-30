@@ -3,17 +3,24 @@
  * git commit-msg 훅. 커밋 메시지에 `왜:` 줄과 `전제:` 줄이 없으면 커밋을 막는다.
  *
  * 무엇을: 메시지(주석 줄 제외)에 값이 있는 `왜:` 줄과 `전제:` 줄이 모두 있는지 본다. merge 커밋과 `fixup!`, `squash!`, `amend!`는 통과한다.
+ *  또 저장소에 열린 결정 문서(`<!-- decision-doc -->` 표시가 든 마크다운)가 있으면, 다른 마크다운에 사용자 결정 표기(날짜와 결정어가 함께 든 괄호)를 새로 넣는 커밋을 막는다. 대조표대로 옮기는 커밋은 메시지에 `대조:` 줄을 넣으면 통과한다.
+ * 왜(결정 문서): 개편 중 대화 결정을 정리 대상 문서에 바로 기워 넣으면 정본을 가를 수 없고 압축 뒤와 실무자가 판단할 근거가 없다(DOC_WRITING 「결정 문서」 개편). 규칙만으로는 놓쳐서 기계로 막는다.
  * 왜: 커밋에 근거가 빠지면 나중에 이 변경을 되돌리거나 고칠 때 무엇을 믿고 한 일인지 알 수 없다. 사람 기억에 맡기지 않고 기계로 막는다.
  * 전제:
  *  - `왜:` 줄은 변경의 까닭, `전제:` 줄은 그때 믿은 사실이나 상태(측정값, 기준 커밋, 결정)를 적는다.
  *  - 통과하는 꼴은 첫 줄이 `Merge `로 시작하는 메시지와 `fixup! `, `squash! `, `amend! `로 시작하는 메시지다.
  *  - node만 있으면 돈다(Windows Git Bash에서도 같다). 설치는 git `core.hooksPath`가 이 폴더를 가리키게 한다.
+ *  - 결정어는 config.json `decisionWords`(문자열 배열)이고 없으면 `사용자`다. 결정 문서 표시를 지우면(개편이 끝나면) 이 검사는 쉰다.
  *  - 설치본(subagent-system/hooks/git)이면 subagent-system/config.json의 `commitCheck`가 `off`일 때 검사하지 않는다. 설정이 없거나 읽을 수 없으면 검사한다.
  */
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const DECISION_MARK = '<!-- decision-doc -->';
+const DATE = /\d{4}-\d{2}-\d{2}/;
 
 const EXEMPT = /^(Merge |fixup! |squash! |amend! )/;
 const REQUIRED = [
@@ -47,29 +54,77 @@ function check(raw) {
   ].join('\n');
 }
 
-function checkOff() {
+function readConfig() {
   try {
-    const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'config.json'), 'utf8'));
-    return config.commitCheck === 'off';
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'config.json'), 'utf8'));
   } catch {
-    return false;
+    return {};
+  }
+}
+
+// 괄호 하나 안에 날짜와 결정어가 함께 있으면 사용자 결정 표기로 본다.
+function hasDecisionNote(line, words) {
+  for (const m of line.matchAll(/[(（]([^()（）]*)[)）]/g)) {
+    if (DATE.test(m[1]) && words.some((w) => m[1].includes(w))) return true;
+  }
+  return false;
+}
+
+// 통과면 null. message는 커밋 메시지, docs는 열린 결정 문서 경로, added는 [경로, 더한 줄] 목록이다.
+function checkDecision(message, docs, added, words) {
+  if (docs.length === 0 || /^[ \t]*대조[ \t]*[:：][ \t]*\S/m.test(bodyOf(message))) return null;
+  const hits = added.filter(([file, line]) => !docs.includes(file) && hasDecisionNote(line, words));
+  if (hits.length === 0) return null;
+  return [
+    `커밋을 막았습니다. 결정 문서(${docs.join(', ')})가 열려 있는데 다른 문서에 결정 표기를 새로 넣었습니다.`,
+    ...hits.slice(0, 5).map(([file, line]) => `  ${file}: ${line.trim().slice(0, 80)}`),
+    '대화에서 정한 것은 결정 문서에 먼저 적습니다. 대조표대로 옮기는 커밋이면 메시지에 `대조: <대조표 행>` 줄을 넣습니다.',
+  ].join('\n');
+}
+
+function git(args) {
+  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+// 색인(index)에서 결정 문서와, 마크다운에 새로 들어간 줄을 읽는다. git을 못 부르면 검사하지 않는다.
+function stagedDecisionInput() {
+  try {
+    let docs = [];
+    try {
+      docs = git(['grep', '--cached', '-l', '-F', DECISION_MARK, '--', '*.md']).split('\n').filter(Boolean);
+    } catch {
+      return { docs: [], added: [] };
+    }
+    const added = [];
+    let file = null;
+    for (const line of git(['diff', '--cached', '-U0', '--no-color', '--', '*.md']).split('\n')) {
+      if (line.startsWith('+++ ')) file = line.startsWith('+++ b/') ? line.slice(6) : null;
+      else if (file && line.startsWith('+')) added.push([file, line.slice(1)]);
+    }
+    return { docs, added };
+  } catch {
+    return { docs: [], added: [] };
   }
 }
 
 function main() {
-  if (checkOff()) return;
+  const config = readConfig();
+  if (config.commitCheck === 'off') return;
   const file = process.argv[2];
   if (!file) {
     process.stderr.write('commit-msg: 메시지 파일 경로 인자가 없습니다\n');
     process.exit(1);
   }
-  const problem = check(fs.readFileSync(file, 'utf8'));
+  const message = fs.readFileSync(file, 'utf8');
+  const words = Array.isArray(config.decisionWords) && config.decisionWords.length ? config.decisionWords : ['사용자'];
+  const { docs, added } = stagedDecisionInput();
+  const problem = check(message) || checkDecision(message, docs, added, words);
   if (problem) {
     process.stderr.write(problem + '\n');
     process.exit(1);
   }
 }
 
-module.exports = { check };
+module.exports = { check, checkDecision };
 
 if (require.main === module) main();
