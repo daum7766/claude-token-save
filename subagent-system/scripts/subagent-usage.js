@@ -8,15 +8,10 @@
  * Agent 결과에 붙는 총 토큰 하나로는 가격이 크게 다른 입력, 출력, 캐시 읽기를 나눠 볼 수 없어서
  * 모델과 effort 배정을 실측으로 조절하려고 만들었다.
  *
- * 실행:
+ * 실행(--help가 같은 내용을 찍고, 모르는 인자는 사용법과 함께 종료 코드 1로 끝난다):
  *   node scripts/subagent-usage.js                    모든 프로젝트 중 가장 최근에 수정된 세션 하나
- *   node scripts/subagent-usage.js --session <id>     그 세션
- *   node scripts/subagent-usage.js --since YYYY-MM-DD 그 날 이후 수정된 모든 세션(모든 프로젝트)
- *   node scripts/subagent-usage.js --tsv              표 대신 탭 구분 줄(헤더 없음)
  *   node scripts/subagent-usage.js --hook             SubagentStop 훅용. stdin의 서브에이전트 하나를 records/subagent-cost.tsv에 기록
  *   node scripts/subagent-usage.js --recost           비용이 ?인 에이전트를 세션 기록으로 다시 계산해 같은 agentId의 새 줄로 덧붙임(--dry-run은 쓰지 않고 보기만)
- *
- * TSV 열: 날짜, 정의, 모델, effort, 설명, 입력, 캐시 쓰기, 캐시 읽기, 출력, 요청 수, 걸린 초, 어림 비용($)
  *
  * 한 요청(requestId)은 여러 줄로 나뉘어 기록된다. 입력과 캐시 값은 줄마다 같고
  * 출력만 늘어나 마지막 줄에서 확정되므로, 요청마다 마지막 줄 하나만 센다.
@@ -58,15 +53,20 @@ export function loadRates(file = RATES_FILE) {
   }
 }
 
+const USAGE = `사용법:
+  node scripts/subagent-usage.js              모든 프로젝트 중 가장 최근에 수정된 세션 하나의 비용을 집계해 찍음
+  node scripts/subagent-usage.js --hook       SubagentStop 훅용. stdin의 서브에이전트 하나를 records/subagent-cost.tsv에 기록
+  node scripts/subagent-usage.js --recost [--dry-run]   비용이 ?인 에이전트를 다시 계산해 덧붙임(--dry-run은 쓰지 않고 보기만)
+  node scripts/subagent-usage.js --help       이 사용법을 찍음`;
+
 function parseArgs(argv) {
-  const opts = { session: null, since: null, tsv: false, hook: false, recost: false, dryRun: false };
+  const opts = { hook: false, recost: false, dryRun: false, help: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--session') opts.session = argv[++i];
-    else if (argv[i] === '--since') opts.since = argv[++i];
-    else if (argv[i] === '--tsv') opts.tsv = true;
-    else if (argv[i] === '--hook') opts.hook = true;
+    if (argv[i] === '--hook') opts.hook = true;
     else if (argv[i] === '--recost') opts.recost = true;
     else if (argv[i] === '--dry-run') opts.dryRun = true;
+    else if (argv[i] === '--help') opts.help = true;
+    else opts.unknown.push(argv[i]);
   }
   return opts;
 }
@@ -174,14 +174,8 @@ function collectMain(sessionFile, rates) {
   return { sum: sumCounts(counts), requests: counts.length, cost: sumCost(counts, rates), unknown: unknownModels(counts, rates) };
 }
 
-function pickSessions(opts) {
-  const sessions = listSessions().sort((a, b) => b.mtime - a.mtime);
-  if (opts.session) return sessions.filter((s) => s.id === opts.session);
-  if (opts.since) {
-    const from = new Date(`${opts.since}T00:00:00`).getTime();
-    return sessions.filter((s) => s.mtime >= from).reverse();
-  }
-  return sessions.slice(0, 1);
+function pickSessions() {
+  return listSessions().sort((a, b) => b.mtime - a.mtime).slice(0, 1);
 }
 
 const n = (v) => v.toLocaleString('en-US');
@@ -281,9 +275,18 @@ function runRecost(opts) {
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.help) {
+    console.log(USAGE);
+    return;
+  }
+  // 훅은 작업을 막으면 안 되므로 --hook이면 모르는 인자가 있어도 훅으로 돈다.
   if (opts.hook) {
     runHook();
     return;
+  }
+  if (opts.unknown.length) {
+    console.error(`모르는 인자: ${opts.unknown.join(' ')}\n${USAGE}`);
+    process.exit(1);
   }
   if (opts.recost) {
     runRecost(opts);
@@ -292,7 +295,7 @@ function main() {
   const { rates, error: ratesError } = loadRates();
   if (ratesError) console.error(`${RATES_FILE}을 읽지 못해 비용을 모두 ?로 찍습니다: ${ratesError}`);
   const unknownSeen = new Set();
-  const sessions = pickSessions(opts);
+  const sessions = pickSessions();
   if (sessions.length === 0) {
     console.error('조건에 맞는 세션이 없습니다.');
     process.exit(1);
@@ -310,15 +313,6 @@ function main() {
       : [];
 
     for (const a of agents) for (const m of a.unknown) unknownSeen.add(m);
-    if (opts.tsv) {
-      for (const a of agents) {
-        console.log(
-          [a.date, a.agentType, a.model, a.effort, a.description, a.sum.input, writes(a.sum), a.sum.read, a.sum.output, a.requests, a.seconds, money(a.cost)].join('\t')
-        );
-      }
-      continue;
-    }
-
     console.log(`세션 ${s.id}`);
     const rows = [['정의', '모델', 'effort', '설명', '요청', '입력', '캐시쓰기', '캐시읽기', '출력', '총', '초', '$']];
     for (const a of agents) {

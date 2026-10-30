@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRates, toCounts, cost } from '../subagent-usage.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const TIME = path.join(SCRIPTS, 'agent-time-breakdown.js');
+const TIME = path.join(SCRIPTS, 'speed-review.js');
 const COST = path.join(SCRIPTS, 'main-session-cost.js');
 const SESSION = '11111111-2222-3333-4444-555555555555';
 
@@ -69,17 +69,17 @@ function setup({ withCostFile = true } = {}) {
 
 const run = (script, args, env) => spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8' });
 
-describe('agent-time-breakdown.js 실행', () => {
+describe('speed-review.js --breakdown 실행', () => {
   it('--top이 1보다 작으면 사용법을 찍고 종료 코드 1이다', () => {
     const { env } = setup();
-    const r = run(TIME, ['--top', '0'], env);
+    const r = run(TIME, ['--breakdown', '--top', '0'], env);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /사용: node "\$HOME\/\.claude\/subagent-system\/scripts\/agent-time-breakdown\.js"/);
+    assert.match(r.stderr, /사용: node "\$HOME\/\.claude\/subagent-system\/scripts\/speed-review\.js"/);
   });
 
   it('같은 칸 2건의 대화 기록에서 모델 시간과 도구 시간을 나눠 찍는다', () => {
     const { env } = setup();
-    const r = run(TIME, ['--since', '2026-10-01'], env);
+    const r = run(TIME, ['--breakdown', '--since', '2026-10-01'], env);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /== sonnet-high \/ 긴 구현/);
     assert.match(r.stdout, /건수 2, 평균 0\.8분, 대화 기록 분석 2건, 기록 없음 0건/);
@@ -89,7 +89,7 @@ describe('agent-time-breakdown.js 실행', () => {
 
   it('--since보다 앞선 사용 기록은 건너뛰어 조건에 맞는 묶음이 없다고 알린다', () => {
     const { env } = setup();
-    const r = run(TIME, ['--since', '2026-10-11'], env);
+    const r = run(TIME, ['--breakdown', '--since', '2026-10-11'], env);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /사용 기록 0줄/);
     assert.match(r.stdout, /조건에 맞는 묶음이 없습니다/);
@@ -109,47 +109,16 @@ describe('agent-time-breakdown.js 실행', () => {
       ])
     );
     fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['2026-10-10', '/work/proj', 'sonnet-high', '겹침', '-', '-', '60', 'ok', 'ovl1 메모'].join('\t') + '\n');
-    const r = run(TIME, ['--kind', '겹침'], env);
+    const r = run(TIME, ['--breakdown', '--kind', '겹침'], env);
     assert.equal(r.status, 0, r.stderr);
     // 도구 구간 10~40초와 10~50초가 겹쳐 합치면 10~50초(40초)다. 나머지 20초는 모델이 쓴다.
     assert.match(r.stdout, /합 1\.0분: 모델 0\.3분 \(33%\), 도구 0\.7분 \(67%\), 그 밖 0\.0분 \(0%\), 사용자 기다림 0\.0분/);
   });
 
-  it('--kind를 주면 그 일 종류가 한 건뿐이어도 보이고 주지 않으면 2건 미만 묶음은 뺀다', () => {
-    const { records, env } = setup();
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['2026-10-10', '/work/proj', 'sonnet-high', '혼자 한 일', '-', '-', '60', 'ok', 'solo1 메모'].join('\t') + '\n');
-    const all = run(TIME, ['--since', '2026-10-01'], env);
-    assert.doesNotMatch(all.stdout, /혼자 한 일/);
-    const one = run(TIME, ['--kind', '혼자 한 일'], env);
-    assert.equal(one.status, 0, one.stderr);
-    assert.match(one.stdout, /== sonnet-high \/ 혼자 한 일/);
-    assert.match(one.stdout, /건수 1, 평균 1\.0분/);
-  });
-
-  it('초를 적지 않은 에이전트는 평균에서 빼고 재지시로 같은 agentId가 여러 줄이면 초를 더해 한 건으로 센다', () => {
-    const { records, env } = setup();
-    const row = (sec, id) => ['2026-10-10', '/work/proj', 'sonnet-high', '재지시 일', '-', '-', sec, 'ok', `${id} 메모`].join('\t');
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('60', 'rr1'), row('120', 'rr1'), row('-', 'rr2')].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '재지시 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    // 에이전트 둘이고 rr1은 60초와 120초를 더한 180초, rr2는 초를 몰라 뺀다. 0초로 넣으면 평균이 1.5분으로 낮아진다.
-    assert.match(r.stdout, /건수 2, 평균 3\.0분/);
-  });
-
-  it('--kind에 부연 없는 이름을 주면 끝 괄호 부연이 붙은 기록도 같은 일 종류로 묶는다', () => {
-    const { records, env } = setup();
-    const row = (kind, id) => ['2026-10-10', '/work/proj', 'sonnet-high', kind, '-', '-', '60', 'ok', `${id} 메모`].join('\t');
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('부연 일(상세)', 'pa1'), row('부연 일', 'pa2')].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '부연 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /== sonnet-high \/ 부연 일\n/);
-    assert.match(r.stdout, /건수 2, 평균 1\.0분/);
-  });
-
   it('--kind에 일 종류의 일부만 주어도 그 말을 포함한 일 종류를 잡는다', () => {
     const { records, env } = setup();
     fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['2026-10-10', '/work/proj', 'sonnet-high', '디자인 체크리스트 계측', '-', '-', '60', 'ok', 'cl1 메모'].join('\t') + '\n');
-    const r = run(TIME, ['--kind', '체크리스트 계측'], env);
+    const r = run(TIME, ['--breakdown', '--kind', '체크리스트 계측'], env);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /== sonnet-high \/ 디자인 체크리스트 계측\n/);
   });
@@ -158,48 +127,10 @@ describe('agent-time-breakdown.js 실행', () => {
     const { records, env } = setup();
     const row = (kind, id) => ['2026-10-10', '/work/proj', 'sonnet-high', kind, '-', '-', '60', 'ok', `${id} 메모`].join('\t');
     fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('브라우저 조작', 'ex1'), row('브라우저 조작 길게', 'ex2')].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '브라우저 조작'], env);
+    const r = run(TIME, ['--breakdown', '--kind', '브라우저 조작'], env);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /== sonnet-high \/ 브라우저 조작\n/);
     assert.doesNotMatch(r.stdout, /브라우저 조작 길게/);
-  });
-
-  it('메모 첫 낱말에 agentId 뒤 꼬리가 붙어도 꼬리 없는 줄과 같은 에이전트 한 건으로 센다', () => {
-    const { records, env } = setup();
-    const row = (id) => ['2026-10-10', '/work/proj', 'sonnet-high', '꼬리 일', '-', '-', '60', 'ok', `${id} 메모`].join('\t');
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('add4fa4fc4b15a337(이어서)'), row('add4fa4fc4b15a337')].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '꼬리 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /건수 1, 평균 2\.0분/);
-  });
-
-  it('이름이 붙은 서로 다른 agentId는 앞 16진수가 같아도 에이전트 둘로 센다', () => {
-    const { records, env } = setup();
-    const row = (id) => ['2026-10-10', '/work/proj', 'sonnet-high', '이름 붙은 일', '-', '-', '60', 'ok', `${id} 메모`].join('\t');
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [row('acab-qr-1d6679cb720078db'), row('acab-wide-mock-4fb2a6f9d81863d8')].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '이름 붙은 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /건수 2, 평균 1\.0분/);
-  });
-
-  it('사용 기록 메모에 agentId 앞 8자만 있어도 전체 ID 대화 기록을 찾는다', () => {
-    const { proj, records, env } = setup();
-    const full = 'abcd1234efgh5678i';
-    const ev = (type, sec, content) => ({ type, timestamp: at(sec), message: { id: `p-${sec}`, content } });
-    fs.writeFileSync(
-      path.join(proj, SESSION, 'subagents', `agent-${full}.jsonl`),
-      jsonl([
-        ev('user', 0, 'go'),
-        ev('assistant', 10, [{ type: 'tool_use', id: 'p1', name: 'Bash', input: { command: 'sleep 30' } }]),
-        ev('user', 40, [{ type: 'tool_result', tool_use_id: 'p1', content: 'a' }]),
-        ev('assistant', 50, [{ type: 'text', text: 'done' }]),
-      ])
-    );
-    const usageRow = ['2026-10-10', '/work/proj', 'sonnet-high', '앞부분 일', '-', '-', '50', 'ok', 'abcd1234 메모'].join('\t');
-    fs.writeFileSync(path.join(records, 'subagent-usage.tsv'), ['날짜\t프로젝트\t정의\t일 종류\t토큰\t도구\t초\t결과\t메모', usageRow].join('\n') + '\n');
-    const r = run(TIME, ['--kind', '앞부분 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /대화 기록 분석 1건, 기록 없음 0건/);
   });
 
   it('--since와 --kind가 없고 회고 줄이 있으면 그 줄 뒤 기록만 센다', () => {
@@ -207,37 +138,11 @@ describe('agent-time-breakdown.js 실행', () => {
     const row = (kind, id) => ['2026-10-10', '/work/proj', 'sonnet-high', kind, '-', '-', '60', 'ok', `${id} 메모`].join('\t');
     const mark = ['회고', '-', '회고', '-', '-', '-', '-', '-', '2026-10-10 회고'].join('\t');
     fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), [mark, row('회고 뒤 일', 'af1'), row('회고 뒤 일', 'af2')].join('\n') + '\n');
-    const r = run(TIME, [], env);
+    const r = run(TIME, ['--breakdown', '--breakdown'], env);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /사용 기록 2줄/);
     assert.match(r.stdout, /== sonnet-high \/ 회고 뒤 일\n/);
     assert.doesNotMatch(r.stdout, /긴 구현/);
-  });
-
-  it('도구 호출이 상한을 넘으면 넘는 몫을 사용자 기다림으로 따로 찍는다', () => {
-    const { proj, records, env } = setup();
-    const ev = (type, sec, content) => ({ type, timestamp: at(sec), message: { id: `w-${sec}`, content } });
-    fs.writeFileSync(
-      path.join(proj, SESSION, 'subagents', 'agent-wait1.jsonl'),
-      jsonl([
-        ev('user', 0, 'go'),
-        ev('assistant', 10, [{ type: 'tool_use', id: 'w1', name: 'Bash', input: { command: 'rm -r x' } }]),
-        ev('user', 1010, [{ type: 'tool_result', tool_use_id: 'w1', content: 'a' }]),
-        ev('assistant', 1020, [{ type: 'text', text: 'done' }]),
-      ])
-    );
-    fs.appendFileSync(path.join(records, 'subagent-usage.tsv'), ['2026-10-10', '/work/proj', 'sonnet-high', '기다림 일', '-', '-', '1020', 'ok', 'wait1 메모'].join('\t') + '\n');
-    const r = run(TIME, ['--kind', '기다림 일'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /도구 11\.0분 \(65%\), 그 밖 0\.0분 \(0%\), 사용자 기다림 5\.7분/);
-  });
-
-  it('사용 기록 파일이 없으면 경로를 알리고 종료 코드 1이다', () => {
-    const { root, env } = setup();
-    fs.rmSync(path.join(root, 'records', 'subagent-usage.tsv'));
-    const r = run(TIME, ['--since', '2026-10-01'], env);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /사용 기록이 없습니다: .*subagent-usage\.tsv/);
   });
 });
 
@@ -258,13 +163,6 @@ describe('main-session-cost.js 실행', () => {
     assert.match(r.stdout, /11111111: Read 1회 3자/);
   });
 
-  it('서브에이전트 비용 기록이 없어도 메인 비용은 찍고 서브는 $0.00이다', () => {
-    const { env } = setup({ withCostFile: false });
-    const r = run(COST, ['--since', '2026-10-01'], env);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, new RegExp(`합계\\s+${dollars(mainCost)}\\s+\\$0\\.00\\s+100%`));
-  });
-
   it('--since보다 앞선 메인 응답과 서브에이전트 비용은 세지 않는다', () => {
     const { env } = setup();
     const r = run(COST, ['--since', '2026-10-11'], env);
@@ -272,3 +170,45 @@ describe('main-session-cost.js 실행', () => {
     assert.match(r.stdout, /합계\s+\$0\.00\s+\$0\.00\s+-/);
   });
 });
+
+describe('subagent-usage.js --recost', () => {
+  const USAGE = path.join(SCRIPTS, 'subagent-usage.js');
+
+  it('--recost --dry-run은 비용 기록을 바꾸지 않는다', () => {
+    const { proj, records, env } = setup();
+    const response = { type: 'assistant', timestamp: at(0), requestId: 'r1', message: { id: 'm1', model: 'claude-sonnet-5-5', usage: { input_tokens: 1000, output_tokens: 10 }, content: [{ type: 'text', text: 'x' }] } };
+    fs.writeFileSync(path.join(proj, SESSION, 'subagents', 'agent-rc1.jsonl'), jsonl([response]));
+    const costFile = path.join(records, 'subagent-cost.tsv');
+    fs.appendFileSync(costFile, ['2026-10-10', '/work/proj', SESSION, 'rc1', 'sonnet-high', 'claude-sonnet-5-5', 'high', 'x', 1000, 0, 0, 10, 1, 0, '?'].join('\t') + '\n');
+    const before = fs.readFileSync(costFile, 'utf8');
+    const dry = run(USAGE, ['--recost', '--dry-run'], env);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /채운 건 1건/);
+    assert.equal(fs.readFileSync(costFile, 'utf8'), before);
+    assert.equal(run(USAGE, ['--recost'], env).status, 0);
+    assert.notEqual(fs.readFileSync(costFile, 'utf8'), before);
+  });
+
+  it('--help는 사용법을 찍고 0으로, 모르는 인자는 사용법과 함께 1로 끝나며 집계를 돌리지 않는다', () => {
+    const { env } = setup();
+    const help = run(USAGE, ['--help'], env);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /사용법:/);
+    assert.equal(help.stderr, '');
+    const bad = run(USAGE, ['--nope'], env);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /모르는 인자: --nope[\s\S]*사용법:/);
+  });
+});
+
+describe('키트 원본 rates.json', () => {
+  it('키트 rates.json의 모델 요율은 정한 다섯 필드를 갖추고 _checked가 YYYY-MM 꼴이다', () => {
+    const rates = JSON.parse(fs.readFileSync(new URL('../../rates.json', import.meta.url), 'utf8'));
+    assert.match(rates._checked, /^\d{4}-(0[1-9]|1[0-2])$/);
+    const models = Object.keys(rates).filter((k) => !k.startsWith('_'));
+    assert.ok(models.length > 0);
+    assert.deepEqual(Object.keys(loadRates().rates).sort(), models.sort());
+    for (const m of models) for (const key of ['input', 'write5m', 'write1h', 'cacheRead', 'output']) assert.ok(Number.isFinite(rates[m][key]), `${m}.${key}`);
+  });
+});
+

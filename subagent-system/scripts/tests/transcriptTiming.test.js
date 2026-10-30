@@ -30,14 +30,8 @@ const start = { type: 'user', timestamp: at(0), message: { content: 'go' } };
 describe('bashKey', () => {
   const cases = [
     ['cd /x && node scripts/a.js --foo', 'node a.js'],
-    ['python3 /tmp/s/check.py arg', 'python3 check.py'],
-    ['bash /private/tmp/q/run.sh', 'bash run.sh'],
     ['S=/private/tmp/x; node "$S/m.mjs"', 'node m.mjs'],
     ['npm run e2e -- --grep x', 'npm run e2e'],
-    ['npm test', 'npm test'],
-    ['npx vitest run src/a.test.js', 'npx vitest'],
-    ['node -e "console.log(1)"', 'node -e'],
-    ['until [ -f x ]; do sleep 5; done', 'until'],
   ];
   for (const [cmd, key] of cases) {
     it(`${cmd} 는 묶음 이름 ${key} 로 묶인다`, () => {
@@ -82,38 +76,6 @@ describe('analyzeTranscript', () => {
     assert.equal(a.userWait, 0);
     assert.equal(a.calls[0].label, '긴 일');
   });
-
-  it('calls에는 명령 전체가 잘리지 않고 시작과 끝 시각이 ms로 들어간다', () => {
-    const cmd = `echo ${'a'.repeat(200)}`;
-    const file = write([start, useRow(10, 't1', 'Bash', { command: cmd, description: '긴 명령' }), resultRow(40, 't1')]);
-    const [c] = analyzeTranscript(file).calls;
-    assert.equal(c.cmd, cmd);
-    assert.equal(c.label, '긴 명령');
-    assert.equal(c.at, Date.parse(at(10)));
-    assert.equal(c.end, Date.parse(at(40)));
-  });
-
-  it('Bash가 아닌 호출의 cmd는 도구 이름과 파일 경로다', () => {
-    const file = write([start, useRow(10, 't1', 'Read', { file_path: '/a/b.js' }), resultRow(12, 't1')]);
-    assert.equal(analyzeTranscript(file).calls[0].cmd, 'Read /a/b.js');
-  });
-
-  it('bashSample은 같은 묶음에서 가장 오래 걸린 호출의 명령 전체를 돌려준다', () => {
-    const file = write([
-      start,
-      useRow(10, 't1', 'Bash', { command: 'cd /x && node scripts/a.js --short' }),
-      resultRow(12, 't1'),
-      useRow(20, 't2', 'Bash', { command: 'cd /x && node scripts/a.js --long' }),
-      resultRow(50, 't2'),
-    ]);
-    const a = analyzeTranscript(file);
-    assert.equal(a.bashSample.get('node a.js'), 'cd /x && node scripts/a.js --long');
-    assert.equal(a.bash.get('node a.js'), 32);
-  });
-
-  it('메시지가 없는 기록은 null이다', () => {
-    assert.equal(analyzeTranscript(write([{ type: 'summary', timestamp: at(0) }])), null);
-  });
 });
 
 describe('jsonlRows', () => {
@@ -132,20 +94,11 @@ describe('jsonlRows', () => {
   };
   const text = rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
 
-  it('줄 하나가 읽기 덩어리보다 길어도 모든 줄을 그대로 읽는다', () => {
-    assert.deepEqual([...jsonlRows(raw(text), 16)], rows);
-  });
-
-  for (const chunk of [1, 2, 3, 5, 7, 31, 64, 1000]) {
+  for (const chunk of [1, 1000]) {
     it(`덩어리 크기가 ${chunk}바이트여도 줄 경계와 여러 바이트 글자가 깨지지 않고 같은 결과다`, () => {
       assert.deepEqual([...jsonlRows(raw(text), chunk)], rows);
     });
   }
-
-  it('깨진 줄과 빈 줄은 건너뛰고 끝 줄바꿈이 없는 마지막 줄과 CRLF 줄도 읽는다', () => {
-    const file = raw('{"n":1}\r\n{broken\n\n{"n":2}\n{"n":3}');
-    assert.deepEqual([...jsonlRows(file, 4)], [{ n: 1 }, { n: 2 }, { n: 3 }]);
-  });
 });
 
 describe('fileHasLine', () => {

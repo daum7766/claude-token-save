@@ -218,7 +218,7 @@ export function procedureCandidates(runs) {
 }
 
 // 제목의 대상과 바꿀 요지는 ` / `로 가른다. 대상 안의 슬래시는 앞뒤에 공백이 없다.
-const PENDING_TITLE = /^## (?:속도 개선|측정 요청): (.+?)(?: \/ .*)?$/;
+const PENDING_TITLE = /^### (?:속도 개선|측정 요청): (.+?)(?: \/ .*)?$/;
 
 export function pendingTargets(pendingText) {
   const out = new Set();

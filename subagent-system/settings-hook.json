@@ -7,6 +7,45 @@
             "type": "command",
             "command": "node \"$HOME/.claude/subagent-system/scripts/subagent-usage.js\" --hook",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/hooks/usage-autolog.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/hooks/retro-write-allow.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/hooks/ask-log.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/hooks/brief-check.js\"",
+            "timeout": 10
           }
         ]
       }

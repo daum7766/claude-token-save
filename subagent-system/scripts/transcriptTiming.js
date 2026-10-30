@@ -1,6 +1,6 @@
 /**
  * 대화 기록(jsonl) 하나에서 시간이 모델, 도구, 사용자 기다림 가운데 어디에 들었는지 잰다.
- * agent-time-breakdown.js와 speed-review.js가 같은 계산을 쓴다.
+ * speed-review.js가 쓴다.
  */
 import fs from 'node:fs';
 
@@ -211,7 +211,7 @@ export function analyzeTranscript(file) {
       bash.set(k, (bash.get(k) || 0) + (b - a) / act.length);
     }
   }
-  // 키마다 가장 오래 걸린 호출의 명령 전체를 대표로 쓴다.
+  // 키마다 가장 오래 걸린 호출의 명령 전체를 쓴다.
   const bashSample = new Map();
   const bestSec = new Map();
   for (const u of ev) {

@@ -7,35 +7,36 @@
  * 지난 회고 뒤의 사용자 메시지를 뽑아 정정 분류를 받아 정정 기록에 덧붙인다.
  *
  * 실행:
- *   node scripts/subagent-retro.js                                    표와 칸 조정 후보(기록은 쓰지 않음. CLAUDE.md가 기준 줄 수 이하이면 config.json의 claudeMdKeptLines만 지움)
+ *   node scripts/subagent-retro.js                                    사용법만 찍음(인자가 없으면 아무것도 읽거나 쓰지 않음. 모르는 인자는 사용법과 함께 종료 코드 1)
+ *   node scripts/subagent-retro.js --help                             이 사용법을 찍음. `--log --help`, `--check-fable --help`는 그 명령의 자세한 사용법을 찍음
+ *   node scripts/subagent-retro.js --report                           표와 칸 조정 후보(기록은 쓰지 않음. 늘 읽히는 줄의 합이 기준 줄 수 이하이면 config.json의 claudeMdKeptLines만 지움)
  *   node scripts/subagent-retro.js --where                            기록 폴더의 절대 경로만 찍음(어느 폴더에서 실행해도 같음)
- *   node scripts/subagent-retro.js --count                            지난 회고 뒤 사용 기록 줄 수만 찍음
- *   node scripts/subagent-retro.js --due [--project <절대 경로>]          회고를 물을 때인지 `ask`, `auto`(자동 회고 방식), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상)이면 ask이고 그 칸은 둘째 줄에 찍음. 마지막 줄 덧붙임 목록에 `그 자리에서 고칠 것 N건`(--fixes의 처리할 것. --project를 주면 그 프로젝트와 범위가 전역인 고침만 셈)이 붙을 수 있음)
- *   node scripts/subagent-retro.js --snooze                           사용자가 회고를 미뤘다는 표시 줄을 사용 기록에 덧붙임(그 뒤 기준의 절반만큼, 최대 20줄 쌓일 때까지 --due가 wait. 올림이 쌓인 칸은 올림이 붙은 에이전트가 1명 더 생겨 조건을 다시 채울 때까지 묻지 않음. 그때 걸린 기준만 미루고, 기간 기준이 걸렸을 때만 기간 셈을 오늘부터 다시 함)
- *   node scripts/subagent-retro.js --retro-mode [auto|ask]            회고 방식(config.json)을 찍거나 바꿈. 인자가 없으면 지금 값만 찍고, 설정 파일이 없거나 깨졌으면 ask
- *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 전체 줄 수가 기준(config.json의 claudeMdLimitLines, 기본 200)을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
- *   node scripts/subagent-retro.js --docs [--since YYYY-MM-DD]       문서 내용 검토 대상을 찍음. 지난 회고 추출 시각 뒤(--since면 그 날 0시 뒤)의 대화에서 쓴 스킬(사용자가 고칠 수 있는 ~/.claude/skills와 그 프로젝트의 .claude/skills만. 플러그인 스킬과 키트 스킬은 뺌)과, 같은 구간 사용 기록의 프로젝트 CLAUDE.md 가운데 config.json의 docReviewHashes에 적힌 지난 검토 뒤 바뀐 것만, 한 번에 최대 5개. 프로젝트 CLAUDE.md는 줄 수와 기준(claudeMdLimitLines) 초과 여부도 찍음. 아무것도 쓰지 않음
+ *   node scripts/subagent-retro.js --due [--project <절대 경로>]          회고를 물을 때인지 `ask`(묻기. 회사용 기본), `auto`(개인용 기본. 회고할지 묻지 않고 뒤에서 돌리라는 판정), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상. 훅이 적은 줄은 표에서 일 이름을 찾은 것만 그 칸 에이전트로 셈)이면 ask이고 그 칸은 둘째 줄에 찍음. 마지막 줄 덧붙임 목록에 `그 자리에서 고칠 것 N건`(--fixes의 처리할 것. --project를 주면 그 프로젝트와 범위가 전역인 고침만 셈)과 `물을 것 N건`이 붙을 수 있음(잠금이 잡힌 동안은 물을 것을 붙이지 않음). 물을 것은 PROPOSALS.md(설정 폴더의 docs/)의 `## 제안` 절 항목(`### 제목`)이고, 회사용(profile)은 항목 전부, 개인용은 본문에 `- 묻기: <돈|되돌리기 어려운 일|정책|목표로 못 가르는 트레이드오프|사용자 작업에 걸리는 장치|문지기 풀기>` 줄이 있는 항목만 셈)
+ *   node scripts/subagent-retro.js --snooze                           회고 방식이 ask일 때만: 사용자가 회고를 미뤘다는 표시 줄을 사용 기록에 덧붙임(그 뒤 기준의 절반만큼, 최대 20줄 쌓일 때까지 --due가 wait. 회고 방식이 auto이면 회고를 묻지 않아 미룰 질문이 없으니 profile과 상관없이 알리고 끝냄. 올림이 쌓인 칸은 올림이 붙은 에이전트가 1명 더 생겨 조건을 다시 채울 때까지 묻지 않음. 그때 걸린 기준만 미루고, 기간 기준이 걸렸을 때만 기간 셈을 오늘부터 다시 함)
+ *   node scripts/subagent-retro.js --retro-mode [auto|ask]            회사용(profile company)에서만: 회고 방식(config.json)을 찍거나 바꿈. 인자가 없으면 지금 값만 찍고, 설정 파일이 없거나 깨졌으면 ask. 개인용(profile personal)에서는 바꾸지 않고 그렇다고 알린 뒤 종료 코드 0
+ *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 늘 읽히는 줄(CLAUDE.md, @로 불러온 파일, paths 없는 rules)의 합이 기준(config.json의 claudeMdLimitLines, 기본 80. --docs의 프로젝트 CLAUDE.md 줄 수 표시도 같은 기준값)을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
+ *   node scripts/subagent-retro.js --docs [--since YYYY-MM-DD]       문서 내용 검토 대상을 찍음. 지난 회고 추출 시각 뒤(--since면 그 날 0시 뒤)의 대화에서 쓴 스킬(사용자가 고칠 수 있는 ~/.claude/skills와 그 프로젝트의 .claude/skills만. 플러그인 스킬과 키트 스킬은 뺌)과, 같은 구간 사용 기록의 프로젝트 CLAUDE.md 가운데 config.json의 docReviewHashes에 적힌 지난 검토 뒤 바뀐 것만, 한 번에 최대 5개. 프로젝트 CLAUDE.md는 줄 수와 기준(config.json의 claudeMdLimitLines, 기본 80) 초과 여부도 찍음. 아무것도 쓰지 않음
  *   node scripts/subagent-retro.js --docs-done <경로>...              검토를 마친 문서의 지금 내용 해시를 config.json의 docReviewHashes에 더함(다른 키는 그대로). 설정 파일이 없거나 깨졌거나 파일이 없으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --claim                            자동 회고를 시작해도 되는지 잠금으로 가림. 잡으면 ok, 다른 회고가 진행 중이면 busy(3시간 넘은 잠금은 버려진 것으로 보고 다시 잡음)
  *   node scripts/subagent-retro.js --release [--failed]               잠금만 풂. --failed를 붙이면 자동 회고가 실패한 것으로 세어 config.json의 retroFailures를 1 올리고, 이어 두 번 실패하면 회고 방식을 ask로 돌림. --mark도 회고 표시를 남기면 잠금을 풀고 횟수를 0으로 돌림
- *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 규칙 바로 고치기(autoApplyRules), 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
- *   node scripts/subagent-retro.js --slash "<인자>"                   슬래시 커맨드 인자(상태 보기, auto, ask, now, 그 밖은 사용법)와 같은 동작. 스킬은 인자가 auto, ask, now 중 하나와 정확히 같을 때만 부름. 항상 종료 코드 0
+ *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 바로 고치기와 애매할 때의 문턱(둘 다 profile이 정한 값), 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 그 구간 안에 시험 정의로 보낸 건수, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
+ *   node scripts/subagent-retro.js --slash "<인자>"                   슬래시 커맨드 인자(상태 보기, auto, ask, now, 그 밖은 사용법)와 같은 동작. 개인용(profile personal)에서 ask는 바꾸지 않고 set-profile company 안내만 찍음. 스킬은 인자가 auto, ask, now 중 하나와 정확히 같을 때만 부름. 항상 종료 코드 0
  *   node scripts/subagent-retro.js --kinds                            기록 전체에서 표에 없는 일 이름, 건수, 마지막 날짜만 찍음(새 일 이름을 짓기 전에 봄). config.json의 removedKinds에 든 이름에는 (사용자가 뺐거나 회고가 쪼갠 옛 이름)을, 표에 <이름>[기준] 꼴 칸이 있으면 (회고가 쪼갠 옛 이름)을 붙임
  *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 여덟 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 문서 내용 검토, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --restore-kind "<일 이름>"          사용자가 다시 넣으라고 한 일 이름을 removedKinds에서 뺌(비면 키를 지움). 다른 키는 그대로
  *   node scripts/subagent-retro.js --remove-def "<정의 이름>"          회고가 지운 정의 이름을 config.json의 removedDefs(배열)에 더함. 이미 있으면 그대로. 다른 키는 그대로, 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --restore-def "<정의 이름>"         정의를 다시 만들 때 그 이름을 removedDefs에서 뺌(비면 키를 지움). 다른 키는 그대로
  *   node scripts/subagent-retro.js --shortfalls                       지난 회고 메모와, 마지막 회고 뒤 사용 기록 메모의 `모자람:`과 `모자람(<태그>):` 줄을 찍음(아무것도 쓰지 않음)
- *   node scripts/subagent-retro.js --check-fable <agentId> [--project <폴더>]  Fable 5.1로 보낸 에이전트의 비용 기록 모델 열을 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견줘 Fable 여부, 사용 기록에 쓸 --def, 사용자에게 알릴 말을 찍음. --project는 세션을 연 폴더(기본은 지금 폴더). 아무것도 쓰지 않음
+ *   node scripts/subagent-retro.js --check-fable <agentId> [--project <폴더>]  Fable 5.1로 보낸 에이전트의 비용 기록 모델 열을 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견줘 Fable 여부, 그 판정의 뜻, 사용 기록에 쓸 --def, 사용자에게 알릴 말을 찍음. --project는 세션을 연 폴더(기본은 지금 폴더). 아무것도 쓰지 않음. `--check-fable --help`는 언제 돌리고 어떻게 읽는지 전부 찍음
  *   node scripts/subagent-retro.js --record-kit-hashes                키트가 통째로 바꾸는 설치본 파일(스크립트 폴더 전체, RETRO.md, GUIDE의 사용자 구역 밖, 정의의 description과 글쓰기 줄 밖, /retro 스킬)의 sha256을 config.json의 kitFileHashes에 적음(전체를 새로 씀). 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --check-kit-hashes [--kit <키트 폴더>]  설치본 파일을 kitFileHashes와 견줘 기록과 다른 파일(손으로 고쳤을 수 있음)과 없어진 파일을 찍음. removedDefs에 든 정의가 없는 것은 회고가 지운 것이라 따로 찍음. --kit을 주면 다른 파일 가운데 그 키트 폴더(subagent-system이 든 폴더)의 새 키트와 같은 파일에 표시를 붙임(업데이트가 이미 놓은 파일. 스킬은 $HOME/.claude를 절대 경로로 풀어 쓴 꼴도 같게 봄). 기록이 없으면 그렇다고 찍음. 아무것도 쓰지 않고 항상 종료 코드 0
  *   node scripts/subagent-retro.js --check                           표와 실제 배정이 어긋난 곳을 찍음(다른 정의로 보낸 기록, 정의 description과 표 칸의 차이, 정의 파일 없는 칸, removedDefs에 든 정의인데 표 칸에 일이 있는 칸). 문제가 있으면 종료 코드 1
- *   node scripts/subagent-retro.js --repeats [--since YYYY-MM-DD]    지난 회고 추출 시각 뒤(--since면 그 날 0시 뒤)의 대화에서 같은 꼴로 되풀이된 사용자 지시, Bash 명령, Agent 지시문을 종류별 상위 20개 찍음(아무것도 쓰지 않음. 후보는 같은 꼴 3번 이상, 세션 2개 이상. 기록이 없어도 종료 코드 0이고 --since 형식이 틀릴 때만 1)
+ *   node scripts/subagent-retro.js --repeats [--since YYYY-MM-DD]    최근 30일(--since면 그 날 0시 뒤)의 대화에서 같은 꼴로 되풀이된 사용자 지시, Bash 명령, Agent 지시문을 종류별 상위 20개 찍음. 회고마다 돌지 않고, 마지막으로 돈 날(config.json의 repeatsRunDate)에서 30일이 안 지났으면 건너뜀(--since를 주면 건너뛰지 않고 날짜도 남기지 않음). 설정 파일이 있으면 repeatsRunDate만 씀. 후보는 같은 꼴 3번 이상, 세션 2개 이상. 기록이 없어도 종료 코드 0이고 --since 형식이 틀릴 때만 1
  *   node scripts/subagent-retro.js --extract <파일>                   위에 더해 사용자 메시지를 <파일>에 씀
  *   node scripts/subagent-retro.js --messages <파일> --labels <파일>   정정을 반영해 다시 찍고 정정 기록에 덧붙임
  *   node scripts/subagent-retro.js --mark "<메모>" --messages <파일> --changed <N>   회고 경계 줄을 사용 기록에 덧붙임(N은 회고에서 실제로 바꾼 칸 수. 거절한 후보는 세지 않음). 그때의 표 모양(칸, 시험 표시, 최저선)도 같은 줄에 남겨 다음 회고들이 내림 실패를 셈
  *   node scripts/subagent-retro.js --log --project "<세션을 시작한 폴더의 절대 경로>" --def <정의> --kind "<일 종류>" --result ok|재지시|올림 --memo "<메모>"
- *                                     [--tokens N] [--tools N] [--secs N] [--date YYYY-MM-DD]   사용 기록 한 줄(9열)을 덧붙임. 메모에서 처음 보는 태그를 만나면 끝에 `새 태그 <T>(비슷한 기존 태그 <Y>, …)` 줄을 더함
+ *                                     [--tokens N] [--tools N] [--secs N] [--date YYYY-MM-DD]   사용 기록 한 줄(9열)을 덧붙임. `--log --help`는 인자와 메모 쓰는 법 전부를 찍음. 메모에서 처음 보는 태그를 만나면 끝에 `새 태그 <T>(비슷한 기존 태그 <Y>, …)` 줄을, 일 종류가 표에 없으면 `표에 없는 일 종류 <K>(가까운 표 이름 <N>, …)` 줄을 더함(기록은 그대로 남김)
  *   node scripts/subagent-retro.js --fix --project "<세션을 시작한 폴더의 절대 경로>" --signal 정정|모자람|개선|재발 --label "<이름표>" --where "<파일 경로>#<절 이름>" --how 문장|체크리스트|스크립트|훅|되돌림|물음|유지|무관 --memo "<메모>"
  *                                     고침 기록(records/fixes.tsv) 한 줄(9열)을 덧붙임. 시각, 범위, 기준점은 채워 줌
  *   node scripts/subagent-retro.js --fixes [--project <절대 경로>]        이름표마다 고친 뒤의 효과를 가려 처리할 것, 효과 표, 태그 목록을 찍음(아무것도 쓰지 않음. --project를 주면 그 프로젝트와 범위가 전역인 고침만 셈)
@@ -49,25 +50,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { askFirstOf } from './kitProfile.js';
 import { locateTranscript } from './subagent-usage.js';
+import { claudeMdVerdict } from './claudeMdTidy.js';
 import { CLAUDE_DIR, RECORDS_DIR, GUIDE_FILE, AGENTS_DIR, CONFIG_FILE, PROJECTS_ROOT, listSessions, readJsonl, sessionCwd, projectRoot, localDate, retentionDays, printTable, appendWithHeader, splitLines } from './claudeProjectPaths.js';
-import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, fixLineFromArgs, judgeFixes, fixItemLine, fixTableRows, fixTagLine, fixWarnLine, mergedLabelRows, isAbsolutePath, FIX_HEADER } from './subagentRetroHelpers.js';
+import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, fixLineFromArgs, judgeFixes, fixItemLine, fixTableRows, fixTagLine, fixWarnLine, mergedLabelRows, isAbsolutePath, FIX_HEADER, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
 
 const USAGE_FILE = path.join(RECORDS_DIR, 'subagent-usage.tsv');
 const COST_FILE = path.join(RECORDS_DIR, 'subagent-cost.tsv');
 const CORRECTIONS_FILE = path.join(RECORDS_DIR, 'subagent-corrections.tsv');
 const FIXES_FILE = path.join(RECORDS_DIR, 'fixes.tsv');
 const LOCK_FILE = path.join(RECORDS_DIR, 'retro.lock');
-const PENDING_FILE = path.join(RECORDS_DIR, 'retro-pending.md');
+// 환경 변수는 설치본의 제안 목록을 건드리지 않고 시험하려는 용도다.
+const PROPOSALS_FILE = process.env.SUBAGENT_PROPOSALS_FILE ?? path.join(CLAUDE_DIR, 'docs', 'PROPOSALS.md');
 const CORRECTIONS_HEADER = ['날짜', '프로젝트', '세션', '시각', '대상', 'agentId', '정의', '일 종류', '이름표', '메시지'].join('\t');
 const MESSAGES_HEADER = ['번호', '세션', '프로젝트', '시각', '끝난 에이전트', '앞 응답', '메시지'].join('\t');
 const MAX_SKIPPED_RATIO = 0.2;
 
 function parseArgs(argv) {
-  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, count: false, where: false, kinds: false, check: false, repeats: false, docs: false };
+  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, where: false, kinds: false, check: false, repeats: false, docs: false, report: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
-    if (key === 'count') opts.count = true;
+    if (key === 'report') opts.report = true;
     else if (key === 'where') opts.where = true;
     else if (key === 'kinds') opts.kinds = true;
     else if (key === 'check') opts.check = true;
@@ -95,10 +99,13 @@ function readCost() {
   return parseCost([readIfExists(COST_FILE)]);
 }
 
+// 라우팅 표는 GUIDE가 아니라 그 옆의 ROUTING_TABLE.md에 있다.
+const ROUTING_FILE = process.env.SUBAGENT_ROUTING_FILE ?? path.join(path.dirname(GUIDE_FILE), 'ROUTING_TABLE.md');
+
 // 표를 못 읽으면 빈 표로 비교해 모든 일 종류가 표 밖으로 잡히는 일이 없게 known을 null로 두고 까닭을 돌려준다.
 function readTable() {
-  if (!fs.existsSync(GUIDE_FILE)) return { known: null, pinned: new Set(), floors: new Map(), trials: [], cells: null, problems: [`GUIDE 파일이 없습니다: ${GUIDE_FILE}`] };
-  const { cells, problems } = parseRoutingTable(fs.readFileSync(GUIDE_FILE, 'utf8'));
+  if (!fs.existsSync(ROUTING_FILE)) return { known: null, pinned: new Set(), floors: new Map(), trials: [], cells: null, problems: [`라우팅 표 파일이 없습니다: ${ROUTING_FILE}`] };
+  const { cells, problems } = parseRoutingTable(fs.readFileSync(ROUTING_FILE, 'utf8'));
   if (problems.length) return { known: null, pinned: new Set(), floors: new Map(), trials: [], cells: null, problems };
   return { known: tableKindSet(cells), pinned: pinnedCellSet(cells), floors: floorMap(cells), trials: tableTrials(cells), cells, problems };
 }
@@ -108,11 +115,11 @@ const money = (v) => (v === null || v === undefined ? '모름' : `$${v.toFixed(3
 // 판정 한 줄. 대기는 아직 보내지 않은 것이라 판정이 없다.
 function trialText(v) {
   const head = `${v.cellDef ?? '?'} / ${kindLabel(v.kind)} → ${v.def}  ${v.state}${v.agentId ? `(${v.agentId})` : ''}`;
-  const twice = v.sentAgents > 1 ? `, 같은 시험을 ${v.sentAgents}건 보냄(첫 건으로 판정)` : '';
+  const many = v.sentAgents > 1 ? `, 같은 시험을 ${v.sentAgents}건 보냄(앞 ${v.judgedAgents}건의 중앙값으로 판정)` : '';
   if (v.state === '대기') return `${head}  판정: 아직 보내지 않음`;
-  const cost = v.cost !== undefined ? `, 시험 ${money(v.cost)}, 원래 칸 평균 ${money(v.baseline)}` : '';
-  const secs = v.seconds !== undefined ? `, 시험 ${v.seconds ?? '모름'}초, 원래 칸 평균 ${v.baselineSeconds === null ? '모름' : `${Math.round(v.baselineSeconds)}초`}` : '';
-  return `${head}  판정: ${v.verdict}${v.reason ? `(${v.reason})` : ''}${cost}${secs}${twice}`;
+  const cost = v.cost !== undefined ? `, 시험 중앙값 ${money(v.cost)}, 원래 칸 평균 ${money(v.baseline)}` : '';
+  const secs = v.seconds !== undefined ? `, 시험 중앙값 ${v.seconds ?? '모름'}초, 원래 칸 평균 ${v.baselineSeconds === null ? '모름' : `${Math.round(v.baselineSeconds)}초`}` : '';
+  return `${head}  판정: ${v.verdict}${v.reason ? `(${v.reason})` : ''}${cost}${secs}${many}`;
 }
 
 const trialName = (v) => `${v.cellDef ?? '?'} / ${kindLabel(v.kind)} → ${v.def}`;
@@ -202,8 +209,8 @@ function readDescriptions(cells) {
 
 // 종료 코드는 1(문제 있음)과 0(문제 없음)만 쓴다. 표를 못 읽은 것도 문제다.
 function printCheck() {
-  if (!fs.existsSync(GUIDE_FILE)) return fail(`GUIDE 파일이 없습니다: ${GUIDE_FILE}`);
-  const { cells, problems } = parseRoutingTable(fs.readFileSync(GUIDE_FILE, 'utf8'));
+  if (!fs.existsSync(ROUTING_FILE)) return fail(`라우팅 표 파일이 없습니다: ${ROUTING_FILE}`);
+  const { cells, problems } = parseRoutingTable(fs.readFileSync(ROUTING_FILE, 'utf8'));
   if (problems.length) return fail(`표를 읽지 못했습니다: ${problems.join('; ')}`);
   const hasUsage = fs.existsSync(USAGE_FILE);
   const r = checkRouting({ cells, usage: hasUsage ? parseUsage(fs.readFileSync(USAGE_FILE, 'utf8')).all : null, descriptions: readDescriptions(cells), removedDefs: readConfig().removedDefs });
@@ -243,25 +250,28 @@ function countByAgent(rows) {
 }
 
 // 회고가 CLAUDE.md를 읽을지 정하는 줄이다. 대상이 아니면 CLAUDE.md는 읽지 않는다.
+// 센 값은 설치와 업데이트 보고(kit-setup.js의 claudeMd)와 같은 늘 읽히는 줄의 합(claudeMdVerdict)이다. CLAUDE.md 한 파일의 줄 수가 아니다.
 function printClaudeMd() {
   const file = path.join(CLAUDE_DIR, 'CLAUDE.md');
   const { claudeMdKeptLines, claudeMdLimitLines } = readConfig();
-  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, claudeMdKeptLines, claudeMdLimitLines);
-  if (!sum.exists) return console.log(`\nCLAUDE.md 정리: CLAUDE.md 없음(${file})`);
-  const counts = `전체 ${sum.total}줄, 키트 구역 ${sum.kit}줄`;
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  if (text === null) return console.log(`\nCLAUDE.md 정리: CLAUDE.md 없음(${file})`);
+  const v = claudeMdVerdict({ configDir: CLAUDE_DIR, limit: claudeMdLimitLines, keptLines: claudeMdKeptLines });
+  const own = v.files.find((f) => f.kind === 'claude-md')?.lines ?? 0;
+  const counts = `늘 읽히는 줄 합 ${v.total}줄(CLAUDE.md ${own}줄, 키트 구역 ${claudeMdSummary(text).kit}줄)`;
   // 사용자가 회고 밖에서 줄여도 옛 값이 남아 다시 늘 때 기준 줄 수가 아니라 옛 값 + 여유 줄부터 제안되므로, 기준 이하가 되면 여기서 지운다.
   let cleared = '';
-  if (sum.total <= claudeMdLimitLines && sum.keptLines !== null) {
+  if (v.total <= claudeMdLimitLines && claudeMdKeptLines !== null) {
     try {
       const next = configTextWithoutKeptLines(readIfExists(CONFIG_FILE));
       if (next === null) throw new Error('설정 파일을 읽지 못했습니다');
       fs.writeFileSync(CONFIG_FILE, next);
-      cleared = `  (남겨 둔 ${sum.keptLines}줄 기록을 지웠습니다)`;
+      cleared = `  (남겨 둔 ${claudeMdKeptLines}줄 기록을 지웠습니다)`;
     } catch (e) {
-      cleared = `  (남겨 둔 ${sum.keptLines}줄 기록을 지우지 못했습니다: ${e.message})`;
+      cleared = `  (남겨 둔 ${claudeMdKeptLines}줄 기록을 지우지 못했습니다: ${e.message})`;
     }
   }
-  console.log(`\nCLAUDE.md 정리: ${sum.target ? '정리 제안 대상' : `정리 제안 대상 아님(${sum.reason})`}  ${counts}  ${file}${cleared}`);
+  console.log(`\nCLAUDE.md 정리: ${v.target ? '정리 제안 대상' : `정리 제안 대상 아님(${v.reason})`}  ${counts}  ${file}${cleared}`);
 }
 
 function printReport(parsed, costMap, correctionMap, showCorrections, table) {
@@ -283,15 +293,15 @@ function printReport(parsed, costMap, correctionMap, showCorrections, table) {
 
   const history = downFailHistory(parsed, costMap, correctionMap);
   const failNote = (kind) => (history.get(kind)?.count ? `  (내림 실패 ${history.get(kind).count}번)` : '');
-  const down = downCandidates(parsed.all, correctionMap, table.pinned, table.floors);
-  console.log('\n내려 보기 후보(파일 전체 마지막 5건이 모두 ok, 정정 없음. 표의 「(고정)」 칸, 바로 아래 칸이 최저선보다 아래인 칸, 「무조건 Opus」 영역, 사다리 밖 정의, opus-xhigh, fable-high, haiku-low는 뺌)');
+  const verdicts = table.trials.map((t) => trialVerdict(t, parsed.target, costMap, correctionMap));
+  const down = downCandidates(parsed.all, correctionMap, table.pinned, table.floors, costFailHistory(parsed, costMap, correctionMap, verdicts));
+  console.log('\n내려 보기 후보(→ 뒤는 다음에 시험할 정의. 비용으로 실패한 정의는 같은 모델의 한 칸 아래 effort로 대신함. 파일 전체 마지막 5건이 모두 ok, 정정 없음. 표의 「(고정)」 칸, 바로 아래 칸이 최저선보다 아래인 칸, 「무조건 Opus」 영역, 사다리 밖 정의, opus-xhigh, fable-high, haiku-low는 뺌)');
   if (!table.known) console.log(`  표를 읽지 못해 「(고정)」 칸과 최저선을 빼지 못했습니다. 아래 후보에 그런 칸이 섞여 있을 수 있습니다: ${table.problems.join('; ')}`);
-  for (const c of down) console.log(`  ${c.def} / ${c.kind}${failNote(c.kind)}`);
+  for (const c of down) console.log(`  ${c.def} / ${c.kind} → ${c.to}${failNote(c.kind)}`);
   if (!down.length) console.log('  없음');
 
-  const verdicts = table.trials.map((t) => trialVerdict(t, parsed.target, costMap, correctionMap));
   const runs = undecidedRuns(parsed, costMap, correctionMap);
-  console.log(`\n시험 표시(대기는 마지막 회고 뒤 그 정의와 일 종류 기록이 없음, 보냄은 있음. 시험한 1건이 ok이고 정정이 없을 때 어림 비용이 원래 칸의 회고 구간 평균보다 ${COST_SIMILAR_RATIO * 100}% 넘게 낮으면 통과, 평균의 ±${COST_SIMILAR_RATIO * 100}% 안이면 걸린 시간이 평균보다 짧을 때 통과)`);
+  console.log(`\n시험 표시(대기는 마지막 회고 뒤 그 정의와 일 종류 기록이 없음, 보냄은 있음. 시험이 보낸 순서대로 ${COST_TRIAL_MIN}~${COST_TRIAL_MAX}건 모이고 모두 ok이며 정정이 없을 때 어림 비용의 중앙값이 원래 칸의 회고 구간 평균보다 ${COST_SIMILAR_RATIO * 100}% 넘게 낮으면 통과, 평균의 ±${COST_SIMILAR_RATIO * 100}% 안이면 걸린 시간의 중앙값이 평균보다 짧을 때 통과. 올림이나 정정은 1건이어도 바로 실패, 모자라면 모으는 중)`);
   for (const v of verdicts) console.log(`  ${trialText(v)}${isRetrial(v.kind, v.def, table.floors) ? '  (최저선 다시 시험)' : ''}`);
   if (!table.known) console.log(`  표를 읽지 못해 시험 표시를 보지 못했습니다: ${table.problems.join('; ')}`);
   else if (!verdicts.length) console.log('  없음');
@@ -329,10 +339,10 @@ function printReport(parsed, costMap, correctionMap, showCorrections, table) {
 
   const plan = retrialPlan({ states: retrialHistory(parsed, costMap, correctionMap), retroCount: retroCountOf(parsed), floors: table.floors, cellOf, pinned: table.pinned, verdicts, all: parsed.all, costMap, correctionsByAgent: correctionMap });
   const reason = (w) => (w.modelChange ? `모델이 바뀜(${w.modelChange.from} → ${w.modelChange.to})` : `최저선을 단 뒤나 마지막 다시 시험 뒤 회고 ${w.interval}번`);
-  console.log(`최저선 다시 시험(최저선을 단 뒤 회고 ${RETRIAL_START}번이 지나면 바로 아래 정의로 1건. 실패하면 간격을 두 배로, 통과하면 처음으로. 최저선 아래 정의의 모델이 바뀌면 간격과 상관없이. 회고 한 번에 한 칸)`);
+  console.log(`최저선 다시 시험(최저선을 단 뒤 회고 ${RETRIAL_START}번이 지나면 바로 아래 정의로 2건 이상. 실패하면 간격을 두 배로, 통과하면 처음으로. 최저선 아래 정의의 모델이 바뀌면 간격과 상관없이. 회고 한 번에 한 칸)`);
   if (plan.proposal) {
     const p = plan.proposal;
-    console.log(`  제안: ${p.cellDef ?? '?'} / ${kindLabel(p.kind)}  최저선 ${p.floor} 아래 ${p.def} 정의로 1건 다시 시험(표에 「(시험: 다음 1건 \`${p.def}\`)」)  까닭: ${reason(p)}`);
+    console.log(`  제안: ${p.cellDef ?? '?'} / ${kindLabel(p.kind)}  최저선 ${p.floor} 아래 ${p.def} 정의로 2건 이상 다시 시험(표에 「(시험: 2건 이상 \`${p.def}\`)」)  까닭: ${reason(p)}`);
   } else console.log('  제안: 없음');
   for (const p of plan.deferred) console.log(`  다음 회고로 미룸: ${p.cellDef ?? '?'} / ${kindLabel(p.kind)}  까닭: ${reason(p)}`);
   for (const w of plan.waits) {
@@ -406,10 +416,25 @@ function repeatsRange(opts) {
   return { at, text: { boundary: '마지막 회고 표시', firstUsage: '사용 기록 첫 날짜 0시', none: '' }[source] };
 }
 
-// 파일은 쓰지 않고 찍기만 한다. 기록이 없는 컴퓨터에서도 실패하지 않아야 하므로 어느 경우든 종료 코드는 0이다.
+const addDays = (date, n) => localDate(new Date(date.getFullYear(), date.getMonth(), date.getDate() + n, 12));
+
+// --since가 없으면 마지막으로 돈 날(repeatsRunDate)에서 REPEATS_PERIOD_DAYS일이 지났을 때만 돌고, 범위는 오늘부터 그 기간 전 0시다.
+// 기록이 없는 컴퓨터에서도 실패하지 않아야 하므로 어느 경우든 종료 코드는 0이다(--since 형식 오류만 1).
 function printRepeats(opts) {
-  const { at: since, text: sinceText } = repeatsRange(opts);
-  if (!since) return console.log(`사용 기록이 없어 범위를 정하지 못했습니다(${USAGE_FILE}). --since YYYY-MM-DD로 범위를 줄 수 있습니다.`);
+  const today = todayForDue();
+  const todayText = localDate(today);
+  let since;
+  let sinceText;
+  if (opts.since !== null) ({ at: since, text: sinceText } = repeatsRange(opts));
+  else {
+    const last = readConfig().repeatsRunDate;
+    if (last && daysBetweenDates(last, todayText) < REPEATS_PERIOD_DAYS) {
+      const next = addDays(new Date(`${last}T12:00:00`), REPEATS_PERIOD_DAYS);
+      return console.log(`반복 찾기는 ${REPEATS_PERIOD_DAYS}일마다 한 번만 돕니다. 지난 실행 ${last}, 다음은 ${next}부터입니다. 지금 보려면 --since YYYY-MM-DD를 줍니다.`);
+    }
+    since = new Date(today.getFullYear(), today.getMonth(), today.getDate() - REPEATS_PERIOD_DAYS);
+    sinceText = `최근 ${REPEATS_PERIOD_DAYS}일`;
+  }
   if (!fs.existsSync(PROJECTS_ROOT)) return console.log(`대화 기록 폴더가 없습니다: ${PROJECTS_ROOT}`);
 
   const sessions = listSessions().filter((s) => s.mtime >= since.getTime());
@@ -437,6 +462,15 @@ function printRepeats(opts) {
     }
     printTable([['횟수', '세션 수', '프로젝트 수', '어림 토큰', '꼴', '예시'], ...ranked[kind].map((r) => [r.count, r.sessions, r.projects, r.tokens, clip(r.shape), clip(r.example)])], 6);
   }
+  if (opts.since === null) recordRepeatsRun(todayText);
+}
+
+// 설정 파일은 없으면 만들지 않는다. 남기지 못하면 다음 회고도 돌지만 그 사실을 알린다.
+function recordRepeatsRun(date) {
+  const next = configTextWithRepeatsDate(readIfExists(CONFIG_FILE), date);
+  if (next === null) return console.log(`\n설정 파일이 없거나 깨져 실행 날짜를 남기지 못했습니다: ${CONFIG_FILE}. 다음에도 30일 기다리지 않고 돕니다.`);
+  fs.writeFileSync(CONFIG_FILE, next);
+  console.log(`\nconfig.json의 repeatsRunDate에 ${date}를 남겼습니다. 다음 반복 찾기는 ${REPEATS_PERIOD_DAYS}일 뒤입니다.`);
 }
 
 function printLabelNames(history) {
@@ -536,7 +570,7 @@ function mark(opts) {
 // 머리줄이 없는 파일이라 새 파일도 줄만 덧붙이고, 파일을 다시 쓰지 않는다.
 function logUsage(args) {
   const { line, error } = usageLineFromArgs(args);
-  if (error) fail(`${error}\n사용법: node subagent-retro.js --log --project "<세션을 시작한 폴더의 절대 경로>" --def <정의> --kind "<일 종류>" --result ok|재지시|올림 --memo "<agentId 메모>" [--tokens N] [--tools N] [--secs N] [--date YYYY-MM-DD]`);
+  if (error) fail(`${error}\n자세한 사용법: node subagent-retro.js --log --help`);
   const known = newTagScan();
   fs.mkdirSync(RECORDS_DIR, { recursive: true });
   fs.appendFileSync(USAGE_FILE, line + '\n', 'utf8');
@@ -548,9 +582,20 @@ function logUsage(args) {
     const like = similarTags(t, names);
     console.log(like.length ? `새 태그 ${t}(비슷한 기존 태그 ${like.join(', ')})` : `새 태그 ${t}`);
   }
+  warnUnknownKind(line.split('\t')[3]);
 }
 
-// 새 태그인지 가리려고 고침 기록 이름표, 사용 기록 태그, 정정 이름표를 공백을 뺀 이름에서 대표 이름으로 잇는다.
+// 회고 경계와 미룸 줄은 일 종류가 아니라서 표에 없어도 경고하지 않는다.
+function warnUnknownKind(kind) {
+  const { known } = readTable();
+  if (!known || known.has(kind) || ['회고', '미룸'].includes(kind)) return;
+  const squash = (x) => x.replace(/\s+/g, '');
+  const near = [...known].filter((k) => squash(k).includes(squash(kind)) || squash(kind).includes(squash(k)));
+  const mark = readConfig().removedKinds.includes(kind) ? `  ${removedMark(kind, known)}` : '';
+  console.log(`표에 없는 일 종류 ${kind}${near.length ? `(가까운 표 이름 ${near.join(', ')})` : ''}${mark}`);
+}
+
+// 새 태그인지 가리려고 고침 기록 이름표, 사용 기록 태그, 정정 이름표를 공백을 뺀 이름에서 하나의 기준 이름으로 잇는다.
 function newTagScan() {
   const usage = fs.existsSync(USAGE_FILE) ? parseUsage(fs.readFileSync(USAGE_FILE, 'utf8')).all : [];
   const universe = tagUniverse({ fixes: parseFixes(readIfExists(FIXES_FILE)), usage, corrections: parseCorrections(readIfExists(CORRECTIONS_FILE)) });
@@ -566,6 +611,7 @@ const upLabel = (p) => `올림 에이전트 ${p.count}명: ${p.def} / ${kindLabe
 // 비용 기록은 날짜만 있어 미룸 줄 앞뒤를 못 가리므로, 미룰 때 그날 비용 기록에만 있던 건수를 남겨 --due가 그 수를 뺀 늘어난 몫만 새 기록으로 세게 한다.
 // 이미 미뤄 둔 건수 기준이 아직 안 찼으면(byCount가 false) 다시 미루지 않는다. 다시 미루면 건수 미룸 시작점이 뒤로 밀려 그 뒤 건수 기준이 차도 묻지 않고 건너뛴다.
 function snooze() {
+  if (readConfig().retroMode !== 'ask') return console.log('--snooze는 회고 방식이 묻기(ask)일 때만 뜻이 있습니다. 지금은 auto라 회고를 묻지 않고 뒤에서 돌려 미룰 질문이 없습니다. 아무것도 바꾸지 않았습니다.');
   if (!fs.existsSync(USAGE_FILE)) fail(`사용 기록이 없습니다: ${USAGE_FILE}`);
   const parsed = parseUsage(fs.readFileSync(USAGE_FILE, 'utf8'));
   // --due와 같은 보존 기간과 오늘로 판정해야 그때 물은 기준을 그대로 미룬다.
@@ -584,6 +630,10 @@ function snooze() {
 
 const readConfig = () => parseConfig(readIfExists(CONFIG_FILE));
 
+// 개인용은 config.json의 profile이 personal인 쪽이다. profile이 없는 설치본(업데이트 전)과 설정 파일이 없거나 깨졌으면 회사용으로 본다(kitProfile.js).
+const isPersonal = () => readConfig().profile === 'personal';
+const PERSONAL_ONLY_NOTE = (flag, why) => `${flag}는 회사용에서만 뜻이 있습니다. 지금은 개인용이라 ${why}. 아무것도 바꾸지 않았습니다. 묻기로 바꾸려면 kit-setup.js set-profile company입니다(개인용은 update가 retroMode를 auto로 되돌려 /${readConfig().commandName} ask는 받지 않습니다).`;
+
 function lockMtime() {
   try {
     return fs.statSync(LOCK_FILE).mtimeMs;
@@ -599,7 +649,8 @@ function releaseLock() {
   return true;
 }
 
-const pendingCount = () => countPending(readIfExists(PENDING_FILE));
+// 무엇을 묻는지는 profile이 정한다: 개인용은 사용자에게 묻는 여섯 종만, 회사용은 제안 목록 항목 전부를 물을 것으로 센다(회고 방식과 상관없음).
+const pendingCount = () => countPending(readIfExists(PROPOSALS_FILE), { onlyAsk: !askFirstOf(readConfig().profile) });
 
 // 여러 세션이 동시에 auto를 보고 회고를 두 번 띄우지 않게 잠금 파일을 배타적으로(wx) 만든다.
 // 오래된 잠금을 지우고 다시 만드는 사이에 다른 세션이 끼면 그쪽이 이기고 이쪽은 busy가 된다.
@@ -647,8 +698,9 @@ function saveMode(value) {
   fs.writeFileSync(CONFIG_FILE, configTextWithMode(readIfExists(CONFIG_FILE), value));
 }
 
-// 인자가 없으면 지금 값을 찍고, 값이 있으면 저장한 뒤 바뀐 값을 찍는다.
+// 회사용에서 쓴다. 인자가 없으면 지금 값을 찍고, 값이 있으면 저장한 뒤 바뀐 값을 찍는다.
 function retroMode(value) {
+  if (isPersonal()) return console.log(PERSONAL_ONLY_NOTE('--retro-mode', '회고 방식을 이 명령으로 바꾸지 않습니다'));
   if (value !== undefined) {
     if (!RETRO_MODES.includes(value)) fail(`--retro-mode는 ${RETRO_MODES.join(' 또는 ')}만 받습니다: ${value}`);
     saveMode(value);
@@ -778,6 +830,12 @@ function fableSettingFiles(cwd) {
   return [...new Set(files.map(real))].filter((f) => fs.existsSync(f));
 }
 
+// 무엇: 비용 기록의 모델 열이 Fable인지 설정과 견줘 가른다. 왜: 조직 설정, 강제 모델, 안전 분류기, fallbackModel 때문에 Fable로 보낸 호출이 다른 모델로 돌 수 있어서다(출처는 BACKGROUND.md의 「effort 고르기」).
+// 설정 파일은 위 우선순위로 읽어 ANTHROPIC_DEFAULT_FABLE_MODEL은 먼저 나온 값을, modelOverrides는 Fable 모델 ID 키마다 먼저 나온 대응을 쓴다.
+//   env가 파일 사이에서 변수마다 합쳐지는 것과 같게 본 것이고, 일반 설정 파일 사이에서 modelOverrides를 키별로 합치는지는 공식 문서로 확인되지 않았다.
+// 전제: 조직 관리 설정의 modelOverrides는 읽지 못해 ID에 claude-가 없는 값이 설정에서 대응을 못 찾으면 Fable이 아니라고 단정하지 않고 「Fable 확인 못함」으로 알린다.
+//   claude-fable-5-1이 없고 claude-fable-5만 든 것을 Fable 계열로 보는 것은 fable 별칭이 게이트웨이나 허용 목록 때문에 Fable 5로 풀릴 수 있어서다.
+//   modelOverrides는 키가 모델 ID라 5.1과 5를 가르고 ANTHROPIC_DEFAULT_FABLE_MODEL은 버전을 알 수 없다. rates.json에 Fable 5 요율이 없어 그 비용은 ?로 남는다.
 function checkFable(agentId, projectArg) {
   if (agentId === undefined || agentId.startsWith('--')) fail('--check-fable에는 agentId가 필요합니다: --check-fable <agentId> [--project <폴더>]');
   const entry = readCost().get(agentId);
@@ -792,12 +850,49 @@ function checkFable(agentId, projectArg) {
   console.log(`모델 열: ${entry ? entry.model || '(빈 값)' : '(비용 기록에 그 agentId 줄이 없음)'}`);
   console.log(`읽은 설정: ${files.length ? files.join(', ') : '(없음)'}`);
   console.log(`판정: ${v.label}`);
+  console.log(`뜻과 할 일: ${FABLE_VERDICT_NOTES[v.label]}`);
   console.log(`사용 기록 --def: ${v.def}`);
   if (v.memoNote) console.log(`사용 기록 --memo: ${agentId} ${v.memoNote}`);
   if (v.notice) console.log(`사용자에게 알릴 말: ${v.notice}`);
 }
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+const FABLE_HELP = [
+  '--check-fable <agentId> [--project <세션을 연 폴더>]',
+  '',
+  'Fable 5.1로 보낸 에이전트가 정말 Fable로 돌았는지 비용 기록으로 확인한다.',
+  '언제 돌리나: 실패하지 않고 끝났어도 다른 모델로 돌았을 수 있어서 Fable로 보낸 에이전트가 끝나면 매번 돌린다.',
+  '  다른 모델로 도는 경우: 조직이 Fable을 막았을 때, CLAUDE_CODE_SUBAGENT_MODEL_FORCE가 켜져 있을 때, 보안이나 생물 관련 요청이 안전 분류기에 걸려 다른 모델로 다시 돌 때,',
+  '  fallbackModel 사슬로 다른 모델에서 이어 돌 때, 사용 크레딧 동의 창에서 기본 모델로 바꾸거나 창을 닫았을 때(이 창이 서브에이전트 호출에도 뜰 수 있다고 보지만 공식 문서로 확인되지 않았다).',
+  '무엇을 보나: 기록 폴더 subagent-cost.tsv에서 그 에이전트 줄의 모델 열을 찾아 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견준다.',
+  '  모델 열에 claude-fable-5-1이나 claude-fable-5가 들어 있는지로 보고(공급자 꼴 ID도 알아본다), 아니면 설정의 modelOverrides 값이나 ANTHROPIC_DEFAULT_FABLE_MODEL 값과 같은지로 본다.',
+  '  모델 열은 그 에이전트의 마지막 요청 모델이라 중간에만 바뀐 것은 알 수 없다.',
+  '--project: 세션을 연 폴더. 지금 폴더가 세션을 연 폴더와 다르면 붙인다. CLAUDE_CONFIG_DIR을 쓰는 컴퓨터는 스크립트 경로의 $HOME/.claude를 그 폴더로 바꿔 넣는다.',
+  '출력: 모델 열, 읽은 설정, 판정, 뜻과 할 일, 사용 기록 --def(그대로 적는다), --memo에 덧붙일 말(있을 때), 사용자에게 알릴 말(있을 때, 그대로 알린다).',
+  '판정별 뜻:',
+  ...Object.entries(FABLE_VERDICT_NOTES).map(([label, note]) => `  ${label}: ${note}`),
+  '호출이 그 모델을 쓸 수 없다고 실패하면 다시 시도하지 않고 opus-xhigh 결과와 막힌 점을 사용자에게 보고한다. 에이전트가 돌지 않았으므로 fable-high 사용 기록은 적지 않는다.',
+].join('\n');
+
+const LOG_HELP = [
+  '--log --project "<세션을 시작한 폴더의 절대 경로>" --def <정의> --kind "<일 종류>" --result ok|재지시|올림 --memo "<메모>" [--tokens N] [--tools N] [--secs N] [--date YYYY-MM-DD]',
+  '',
+  '사용 기록(subagent-usage.tsv)에 한 줄(9열)을 덧붙인다. 여러 세션이 같은 파일에 쓰므로 파일을 직접 열어 쓰지 않고 이 명령으로 적는다.',
+  '필수: --project, --def, --kind, --result, --memo. 빠지거나 --result가 ok, 재지시, 올림이 아니면 아무것도 쓰지 않고 오류로 끝난다.',
+  '--tokens, --tools, --secs: 서브에이전트가 끝난 뒤 돌아오는 완료 알림의 사용량에서 읽은 값. 빼면 -로 적힌다. --date를 빼면 오늘(로컬) 날짜다.',
+  '--project: 세션을 시작한 폴더의 절대 경로. 워크트리에서 시작했으면 그 경로를 그대로 줘도 .claude/worktrees/<이름> 꼬리를 떼어 적는다. 이 스크립트가 아는 현재 폴더는 세션 중 cd로 바뀌었을 수 있어 생략값으로 쓰지 않는다.',
+  '--kind: 표 칸에 쉼표로 나열된 일 이름 하나를 그대로 적고 부연은 메모에 적는다. 표에 없으면 기록은 남기고 가까운 표 이름과 함께 경고하니 그 이름으로 다시 적는다.',
+  '  표에 맞는 칸이 없으면 짧은 명사구로 새 일 이름을 짓고(괄호는 이름 끝에만) 짓기 전에 --kinds로 이미 쓴 이름을 본다. 같은 일이면 그 이름을 쓴다.',
+  '  `(사용자가 뺐거나 회고가 쪼갠 옛 이름)`이 붙은 이름은 그 일을 맡겼으면 그대로 적고, `(회고가 쪼갠 옛 이름)`은 적지 않고 표의 `<이름>[<기준>]` 두 칸 가운데 맞는 쪽을 적는다.',
+  '--memo: 첫머리에 Agent 결과의 agentId. 결과가 재지시이면 「지시문 탓」과 지시에 빠졌던 것을 한 줄로.',
+  '  처음 보낼 때 표 칸보다 높은 정의로 보냈으면 `높임: <까닭>`을 붙인다(올림으로 다시 보낸 것은 뺀다). 회고가 표를 고칠지 습관을 고칠지 가르는 근거다.',
+  '  결과가 ok여도 서브에이전트 보고 끝 「지시에서 모자랐던 점」이 「없음」이 아니면 끝에 `모자람(<태그>): <요지 한 줄>`을 붙인다.',
+  '  일하는 방식과 규칙의 개선거리가 있으면 `개선(<태그>): <요지 한 줄>`도 붙인다(코드 개선거리는 보고에만 두고 적지 않는다).',
+  '  태그는 체크리스트 한 줄이나 규칙 하나를 가리키는 15자 안팎의 이름표이고 쉼표와 괄호는 쓰지 않는다. 한 줄에 쉼표로 여럿 둘 수 있다(`모자람(a,b)`).',
+  '  같은 것을 가리키면 기존 태그를 다시 쓰고, 처음 보는 태그와 함께 비슷한 기존 태그가 알려지면 그 태그를 다음부터 쓴다. 태그 없는 옛 꼴 `모자람: <요지>`는 읽지만 판정에는 들지 않는다.',
+  '값은 모두 큰따옴표로 감싼다. 값 안의 탭과 줄바꿈은 공백으로 바뀌고 %와 작은따옴표는 그대로 적힌다. 큰따옴표, $, 역따옴표는 셸이 먼저 풀어 버리니 메모에 넣지 않는다.',
+].join('\n');
 
 function walkFiles(dir) {
   const out = [];
@@ -904,7 +999,8 @@ function dueState() {
   const table = readTable();
   const d = retroDue(parsed, { costMap: readCost(), trialsPending: table.trials.length > 0, retentionDays: retentionDays(), now: todayForDue() });
   const lock = lockState(lockMtime());
-  return { d, lock, mode: readConfig().retroMode, pending: pendingCount(), parsed, table };
+  const mode = readConfig().retroMode;
+  return { d, lock, mode, pending: pendingCount(), parsed, table };
 }
 
 function dueLines(project = null) {
@@ -913,7 +1009,7 @@ function dueLines(project = null) {
   const lines = [head];
   if (d.upCells.length) lines.push(d.upCells.map(upLabel).join(', '));
   const toFix = judgeNow(project).items.length;
-  const extra = [lock === 'live' ? '회고 진행 중' : null, pending ? `물을 것 ${pending}건` : null, toFix ? `그 자리에서 고칠 것 ${toFix}건` : null].filter(Boolean);
+  const extra = [lock === 'live' ? '회고 진행 중' : null, pending && lock !== 'live' ? `물을 것 ${pending}건` : null, toFix ? `그 자리에서 고칠 것 ${toFix}건` : null].filter(Boolean);
   lines.push(`(사용 기록 ${d.usageCount}줄에 비용 기록에만 있는 ${d.count - d.usageCount}건을 더해 ${d.count}건으로 셌습니다. ${d.label}${d.byPeriod ? `. ${periodReason(d, todayForDue())}` : ''})${extra.length ? ' ' + extra.join(', ') : ''}`);
   return { head, lines, pending };
 }
@@ -939,12 +1035,14 @@ function printStatus() {
   console.log(`기간 기준: 보존 기간 ${d.retentionDays}일, ${d.periodAnchor ? periodState : '기준 날짜 없음(사용 기록이 비어 있음)'}`);
   console.log(`올림이 쌓인 칸: ${d.upCells.length ? d.upCells.map(upLabel).join(', ') : '없음'}`);
   console.log(`회고 잠금: ${lockText}`);
-  console.log(`물을 것: ${pending}건`);
-  console.log(`규칙 바로 고치기(autoApplyRules): ${readConfig().autoApplyRules ? '켬' : '끔'}`);
+  console.log(`물을 것(${isPersonal() ? '사용자에게 묻는 여섯 종만' : '제안 목록 전부'}): ${pending}건`);
+  const askFirst = askFirstOf(readConfig().profile);
+  console.log(`바로 고치기: ${askFirst ? '끔' : '켬'} (profile이 정함)`);
+  console.log(`애매할 때: ${askFirst ? '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기' : '작으면 하고 알림'} (profile이 정함)`);
   const { parsed, table } = dueState();
   // 시험을 보내기 전에 이미 보냈는지 가리는 줄이라, 정정과 비용이 필요한 판정은 회고 출력에만 찍는다.
   const trials = table.trials.map((t) => trialVerdict(t, parsed.target));
-  const trialState = !table.cells ? `표를 읽지 못함(${table.problems.join('; ')})` : trials.length ? trials.map((v) => `${v.cellDef} / ${kindLabel(v.kind)} → ${v.def} ${v.state}`).join(', ') : '없음';
+  const trialState = !table.cells ? `표를 읽지 못함(${table.problems.join('; ')})` : trials.length ? trials.map((v) => `${v.cellDef} / ${kindLabel(v.kind)} → ${v.def} ${v.state}(이 구간 안 ${v.sentAgents}건)`).join(', ') : '없음';
   console.log(`시험 표시: ${trialState}`);
   const retrials = trials.filter((v) => isRetrial(v.kind, v.def, table.floors));
   if (retrials.length) console.log(`최저선 다시 시험: ${retrials.map((v) => `${trialName(v)} ${v.state}`).join(', ')}`);
@@ -966,6 +1064,8 @@ function slash(raw) {
     }
     return;
   }
+  // 개인용은 profile이 회고 방식의 원본이라 --retro-mode처럼 바꾸지 않고 길만 알린다.
+  if (arg === 'ask' && isPersonal()) return console.log(`/${name} ask는 개인용(profile personal)에서 받지 않습니다. 회고 방식을 바꾸지 않았습니다. 묻기로 돌리려면 kit-setup.js set-profile company입니다(update가 개인용의 retroMode를 auto로 되돌립니다). 다시 켜려면 /${name} auto입니다.`);
   if (arg === 'auto' || arg === 'ask') {
     const before = readConfig().retroMode;
     saveMode(arg);
@@ -980,20 +1080,22 @@ function slash(raw) {
 // 묻기를 마친 뒤 메인이 줄 수를 직접 세지 않고 적게 하려는 것이다. 설정 파일은 없으면 만들지 않는다.
 function claudeMdDone() {
   const file = path.join(CLAUDE_DIR, 'CLAUDE.md');
+  const exists = fs.existsSync(file);
   const limit = readConfig().claudeMdLimitLines;
-  const sum = claudeMdSummary(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, null, limit);
+  // keptLines는 null로 줘 이번 줄 수를 그대로 적게 한다. 판정에 쓰는 합은 printClaudeMd와 같은 claudeMdVerdict다.
+  const sum = claudeMdVerdict({ configDir: CLAUDE_DIR, limit, keptLines: null });
   if (!fs.existsSync(CONFIG_FILE)) fail(`설정 파일이 없어 claudeMdKeptLines를 쓰지 못했습니다: ${CONFIG_FILE}`);
   const text = fs.readFileSync(CONFIG_FILE, 'utf8');
-  const over = sum.exists && sum.total > limit;
+  const over = exists && sum.over;
   const next = over ? configTextWithKeptLines(text, sum.total) : configTextWithoutKeptLines(text);
   if (next === null) fail(`설정 파일이 깨져 claudeMdKeptLines를 쓰지 못했습니다: ${CONFIG_FILE}`);
   if (over) {
     fs.writeFileSync(CONFIG_FILE, next);
-    return console.log(`CLAUDE.md ${sum.total}줄: claudeMdKeptLines에 ${sum.total}줄을 적었습니다`);
+    return console.log(`늘 읽히는 줄 합 ${sum.total}줄: claudeMdKeptLines에 ${sum.total}줄을 적었습니다`);
   }
   const had = 'claudeMdKeptLines' in JSON.parse(text);
   if (had) fs.writeFileSync(CONFIG_FILE, next);
-  const head = sum.exists ? `CLAUDE.md ${sum.total}줄: ${limit}줄 이하라` : 'CLAUDE.md 없음:';
+  const head = exists ? `늘 읽히는 줄 합 ${sum.total}줄: ${limit}줄 이하라` : 'CLAUDE.md 없음:';
   console.log(`${head} claudeMdKeptLines를 ${had ? '지웠습니다' : '지울 것이 없어 그대로 뒀습니다'}`);
 }
 
@@ -1079,8 +1181,32 @@ function docsDone(files) {
   for (const f of files) console.log(`docReviewHashes에 적었습니다: ${path.resolve(f)}`);
 }
 
+// 사용법은 이 파일 머리 주석의 실행 목록을 그대로 찍어 두 곳이 어긋나지 않게 한다.
+function usageText() {
+  const head = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0];
+  return head.split('\n').filter((l) => /^ \*  /.test(l) || l === ' * 실행:').map((l) => l.replace(/^ \* ?/, '')).join('\n');
+}
+
+// 인자 이름 전체. 여기 없는 --이름은 오타로 보고 아무 일도 하지 않는다.
+const KNOWN_FLAGS = new Set([
+  '--help', '--report', '--where', '--due', '--project', '--snooze', '--retro-mode', '--claude-md-done', '--docs', '--since', '--docs-done', '--claim', '--release', '--failed', '--status', '--slash',
+  '--kinds', '--remove-kind', '--restore-kind', '--remove-def', '--restore-def', '--shortfalls', '--check-fable', '--record-kit-hashes', '--check-kit-hashes', '--kit', '--check', '--repeats',
+  '--extract', '--messages', '--labels', '--mark', '--changed', '--fixes', '--fix', '--signal', '--label', '--how', '--log', '--def', '--kind', '--result', '--memo', '--tokens', '--tools', '--secs', '--date',
+]);
+
+function usageError(message) {
+  console.error(`${message}\n\n${usageText()}`);
+  process.exitCode = 1;
+}
+
 function main() {
   const args = process.argv.slice(2);
+  const help = args.includes('--help') || args.includes('-h');
+  if (args.includes('--log') && help) return console.log(LOG_HELP);
+  if (args.includes('--check-fable') && help) return console.log(FABLE_HELP);
+  if (!args.length || help) return console.log(usageText());
+  const unknown = args.filter((a) => a.startsWith('--') && !KNOWN_FLAGS.has(a));
+  if (unknown.length) return usageError(`알 수 없는 인자입니다: ${unknown.join(', ')}`);
   const slashAt = args.indexOf('--slash');
   if (slashAt >= 0) return slash(args[slashAt + 1]);
   const modeAt = args.indexOf('--retro-mode');
@@ -1139,10 +1265,8 @@ function main() {
     return printKinds(readUsage(), table);
   }
 
-  // 기록이 아직 없는 것은 정상 상태라 오류로 끝내지 않는다.
-  if (opts.count && !fs.existsSync(USAGE_FILE)) return console.log(`사용 기록이 없습니다: ${USAGE_FILE}`);
+  if (!opts.report && opts.extract === null && opts.labels === null) return usageError('실행할 일을 고르는 인자가 없습니다.');
   const parsed = readUsage();
-  if (opts.count) return console.log(parsed.target.length);
   const costMap = readCost();
   const table = readTable();
   if (opts.labels !== null) return applyLabels(opts, parsed, costMap, table);

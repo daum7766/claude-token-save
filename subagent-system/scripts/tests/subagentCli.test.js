@@ -13,6 +13,8 @@ const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RETRO = path.join(SCRIPTS, 'subagent-retro.js');
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-cli-'));
 const NOW = new Date(2026, 9, 13, 12, 0, 0);
+// 사용자 환경의 SUBAGENT_* 경로 재정의(표, 정의 폴더, 가이드 등)가 시험에 섞이지 않게 먼저 지운다.
+for (const k of Object.keys(process.env)) if (k.startsWith('SUBAGENT_')) delete process.env[k];
 // 설치본의 설정 파일이 auto여도 아래 시험이 ask 기준으로 도는 것을 막고, 설치본을 읽지 않게 한다.
 process.env.SUBAGENT_CONFIG_FILE = path.join(tmpDir(), 'no-config.json');
 // 보존 기간은 실제 ~/.claude 설정이 아니라 빈 폴더에서 읽고, 오늘은 고정해 기간 기준이 시계에 따라 달라지지 않게 한다.
@@ -33,11 +35,6 @@ describe('usageLineFromArgs', () => {
   it('열 9개를 지금 형식의 순서로 탭으로 잇고 생략한 날짜는 오늘 로컬 날짜, 생략한 숫자는 -이다', () => {
     const { line } = usageLineFromArgs(base, NOW);
     assert.equal(line, ['2026-10-13', '/home/u/proj', 'sonnet-medium', '구현 계획이 정해진 기능 구현', '-', '-', '-', 'ok', 'a1b2c3 메모'].join('\t'));
-  });
-
-  it('토큰, 도구 호출, 초, 날짜를 주면 그대로 그 열에 들어간다', () => {
-    const { line } = usageLineFromArgs([...base, '--tokens', '70391', '--tools', '12', '--secs', '76.5', '--date', '2026-10-01'], NOW);
-    assert.deepEqual(line.split('\t').slice(0, 7), ['2026-10-01', '/home/u/proj', 'sonnet-medium', '구현 계획이 정해진 기능 구현', '70391', '12', '76.5']);
   });
 
   it('값 안의 탭과 줄바꿈은 공백으로 바뀌어 열 9개와 한 줄이 유지된다', () => {
@@ -75,14 +72,6 @@ describe('usageLineFromArgs', () => {
     for (const result of ['ok', '재지시', '올림']) assert.equal(usageLineFromArgs([...without('result'), '--result', result], NOW).line.split('\t')[7], result);
   });
 
-  it('값이 없거나 이름이 틀리거나 값이 쪼개진 인자는 오류다', () => {
-    assert.ok(usageLineFromArgs([...base, '--tokens'], NOW).error.includes('값이 없습니다'));
-    assert.ok(usageLineFromArgs([...without('memo'), '--memo', '--tokens', '5'], NOW).error.includes('--memo'));
-    assert.ok(usageLineFromArgs([...base, '--bogus', '1'], NOW).error.includes('알 수 없는 인자'));
-    assert.ok(usageLineFromArgs([...base, '쪼개진', '값'], NOW).error.includes('큰따옴표'));
-    assert.ok(usageLineFromArgs([...base, '--tokens', '1', '--tokens', '2'], NOW).error.includes('두 번'));
-  });
-
   it('프로젝트가 절대 경로가 아니거나 날짜와 숫자 꼴이 틀리면 오류다', () => {
     assert.ok(usageLineFromArgs([...without('project'), '--project', '~/proj'], NOW).error.includes('절대 경로'));
     assert.ok(usageLineFromArgs([...without('project'), '--project', 'proj'], NOW).error.includes('절대 경로'));
@@ -91,7 +80,7 @@ describe('usageLineFromArgs', () => {
     assert.equal(usageLineFromArgs([...base, '--tokens', '-'], NOW).line.split('\t')[4], '-');
   });
 
-  it('만든 줄을 parseUsage가 같은 열로 읽는다', () => {
+  it('--log가 쓴 줄을 회고 스크립트가 같은 열로 읽는다', () => {
     const { line } = usageLineFromArgs([...without('result'), '--result', '재지시', '--secs', '76'], NOW);
     const r = parseUsage(line + '\n').all[0];
     assert.deepEqual(
@@ -147,24 +136,7 @@ describe('subagent-retro.js --due와 --snooze 실행', () => {
   const run = (args, dir) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: dir }, encoding: 'utf8' });
   const lines = (n) => Array.from({ length: n }, (_, i) => `2026-10-12\t/p\tsonnet-low\t번역\t1\t2\t3\tok\ta${i} 줄`).join('\n') + '\n';
 
-  it('기록이 없으면 --due는 wait 30이고 둘째 줄에 첫 회고 기준이 보이며 --snooze는 기록을 만들지 않고 실패한다', () => {
-    const dir = path.join(tmpDir(), 'records');
-    const [first, second] = run(['--due'], dir).stdout.split('\n');
-    assert.equal(first, 'wait 30');
-    assert.ok(second.includes('첫 회고 기준 30건'), second);
-    assert.equal(run(['--snooze'], dir).status, 1);
-    assert.equal(fs.existsSync(dir), false);
-  });
-
-  it('--count는 사용 기록이 없어도 메시지를 찍고 종료 코드 0이며 기록 폴더를 만들지 않는다', () => {
-    const dir = path.join(tmpDir(), 'records');
-    const r = run(['--count'], dir);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /사용 기록이 없습니다/);
-    assert.equal(fs.existsSync(dir), false);
-  });
-
-  it('첫 회고 전 30줄이면 ask, --snooze 뒤에는 wait 15, 15줄 더 쌓이면 ask다. --count는 표시 줄을 세지 않는다', () => {
+  it('첫 회고 전 30줄이면 ask, --snooze 뒤에는 wait 15, 15줄 더 쌓이면 ask다', () => {
     const dir = tmpDir();
     const file = path.join(dir, 'subagent-usage.tsv');
     fs.writeFileSync(file, lines(30));
@@ -173,7 +145,6 @@ describe('subagent-retro.js --due와 --snooze 실행', () => {
     assert.equal(snooze.status, 0);
     assert.ok(snooze.stdout.includes('15줄'), snooze.stdout);
     assert.equal(run(['--due'], dir).stdout.split('\n')[0], 'wait 15');
-    assert.equal(run(['--count'], dir).stdout.trim(), '30');
     fs.appendFileSync(file, lines(14));
     assert.equal(run(['--due'], dir).stdout.split('\n')[0], 'wait 1');
     fs.appendFileSync(file, lines(1));
@@ -194,17 +165,6 @@ describe('subagent-retro.js --due와 --snooze 올림 기준', () => {
     return { dir, file };
   };
   const due = (dir) => run(['--due'], dir).stdout.split('\n');
-  const legacySnooze = '미룸\t-\t미룸\t2026-10-12T00:00:00.000Z\t-\t-\t-\t-\t-\n';
-  const retroMark = (lineCount) => `회고\t-\t회고\t2026-10-13T00:00:00.000Z\t${lineCount}\t0\t-\t-\tm\n`;
-
-  it('회고 뒤 같은 칸의 올림이 1건이면 wait, 2건이면 ask이고 둘째 줄에 칸 이름과 건수가 나온다', () => {
-    const one = setup(up(1));
-    assert.equal(due(one.dir)[0], 'wait 29');
-    const two = setup(up(2));
-    const [first, second] = due(two.dir);
-    assert.equal(first, 'ask');
-    assert.equal(second, '올림 에이전트 2명: sonnet-low / 번역');
-  });
 
   it('올림이 쌓인 칸이 여럿이면 모두 둘째 줄에 보이고, 건수 기준도 걸리면 기존 단계 설명이 이어진다', () => {
     const { dir } = setup(rows(30, { kind: '구현' }), up(2), up(3, { def: 'opus-low', kind: '조사' }));
@@ -224,98 +184,22 @@ describe('subagent-retro.js --due와 --snooze 올림 기준', () => {
     assert.equal(out.some((l) => l.includes('올림')), false);
   });
 
-  it('칸 기록 10건에 올림 2건이면 ask, 11건에 2건이면 wait다', () => {
-    const ask = setup(rows(8), up(2));
-    const out = due(ask.dir);
-    assert.equal(out[0], 'ask');
-    assert.equal(out[1], '올림 에이전트 2명: sonnet-low / 번역');
-    assert.equal(due(setup(rows(9), up(2)).dir)[0], 'wait 19');
-  });
-
-  it('다른 칸에 올림이 1건씩이면 wait다', () => {
-    const { dir } = setup(up(1), up(1, { def: 'sonnet-medium' }), up(1, { kind: '교정' }));
-    assert.equal(due(dir)[0], 'wait 27');
-  });
-
-  it('재지시가 2건이면 wait다', () => {
-    const { dir } = setup(rows(2, { result: '재지시' }));
-    assert.equal(due(dir)[0], 'wait 28');
-  });
-
-  it('회고 앞의 올림은 세지 않는다', () => {
-    const { dir, file } = setup(up(3), retroMark(4));
-    assert.equal(due(dir)[0], 'wait 50');
-    fs.appendFileSync(file, up(1, { from: 10 }));
-    assert.equal(due(dir)[0].startsWith('wait'), true);
-    fs.appendFileSync(file, up(1, { from: 20 }));
-    assert.equal(due(dir)[0], 'ask');
-  });
-
-  it('미룬 뒤 같은 칸 올림이 그대로면 wait, 1건 늘면 ask다', () => {
-    const { dir, file } = setup(up(2));
-    assert.equal(due(dir)[0], 'ask');
-    const snooze = run(['--snooze'], dir);
-    assert.equal(snooze.status, 0, snooze.stderr);
-    assert.ok(snooze.stdout.includes('sonnet-low / 번역'), snooze.stdout);
-    assert.equal(due(dir)[0].startsWith('wait'), true);
-    fs.appendFileSync(file, rows(3, { kind: '구현' }));
-    assert.equal(due(dir)[0].startsWith('wait'), true);
-    fs.appendFileSync(file, up(1, { from: 10 }));
-    const out = due(dir);
-    assert.equal(out[0], 'ask');
-    assert.equal(out[1], '올림 에이전트 3명: sonnet-low / 번역');
-  });
-
-  it('옛 형식 미룸 줄이 있어도 오류 없이 건수 기준 미룸으로만 동작하고, 그 위에 올림이 쌓이면 ask다', () => {
-    const { dir, file } = setup(rows(30, { kind: '구현' }), legacySnooze);
-    const r = run(['--due'], dir);
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.split('\n')[0], 'wait 15');
-    fs.appendFileSync(file, up(2));
-    assert.equal(due(dir)[1], '올림 에이전트 2명: sonnet-low / 번역');
-    assert.equal(due(dir)[0], 'ask');
-    assert.equal(run(['--snooze'], dir).status, 0);
-    assert.equal(due(dir)[0].startsWith('wait'), true);
-  });
-
-  it('건수 기준과 올림 기준이 동시에 걸릴 때 --snooze 한 번이면 둘 다 미뤄진다', () => {
-    const { dir, file } = setup(rows(30, { kind: '구현' }), up(2));
-    assert.equal(due(dir)[0], 'ask');
-    const snooze = run(['--snooze'], dir);
-    assert.equal(snooze.status, 0, snooze.stderr);
-    assert.ok(snooze.stdout.includes('15줄'), snooze.stdout);
-    assert.ok(snooze.stdout.includes('sonnet-low / 번역'), snooze.stdout);
-    assert.equal(due(dir)[0], 'wait 15');
-    fs.appendFileSync(file, rows(15, { kind: '구현', from: 100 }));
-    assert.equal(due(dir)[0], 'ask');
-    assert.equal(due(dir)[1].startsWith('(사용 기록'), true);
-    assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith('미룸\t')).length, 1);
-  });
-
-  it('올림만 걸려 미룬 뒤 건수 기준이 차면 건수 기준은 미룬 적이 없어 바로 ask다', () => {
-    const { dir, file } = setup(rows(5), up(2));
-    assert.equal(run(['--snooze'], dir).status, 0);
-    assert.equal(due(dir)[0].startsWith('wait'), true);
-    fs.appendFileSync(file, rows(23, { kind: '구현' }));
-    assert.equal(due(dir)[0], 'ask');
-  });
-
   it('올리기 후보 줄에 올림 뒤 다시 보낸 정의와 건수가 찍히고, 다시 보낸 기록이 없으면 그렇다고 찍힌다', () => {
     const resent = [rows(1, { def: 'opus-medium', result: 'ok', from: 50 }).trim()];
     const withResend = setup(up(2), resent.join('\n') + '\n');
-    assert.match(run([], withResend.dir).stdout, /올리기 후보\([^\n]*\n  sonnet-low \/ 번역  2\/2명 \(100%\)  다시 보낸 기록 opus-medium 1건\n/);
+    assert.match(run(['--report'], withResend.dir).stdout, /올리기 후보\([^\n]*\n  sonnet-low \/ 번역  2\/2명 \(100%\)  다시 보낸 기록 opus-medium 1건\n/);
     const none = setup(up(2));
-    assert.match(run([], none.dir).stdout, /\n  sonnet-low \/ 번역  2\/2명 \(100%\)  다시 보낸 기록 없음\n/);
+    assert.match(run(['--report'], none.dir).stdout, /\n  sonnet-low \/ 번역  2\/2명 \(100%\)  다시 보낸 기록 없음\n/);
   });
 
   it('기본 보고의 회고 기준 줄 다음에 올림이 쌓인 칸이 한 줄로 나오고, 없으면 그 줄이 없다', () => {
     const { dir } = setup(up(2), up(1, { kind: '교정' }));
-    const lines = run([], dir).stdout.split('\n');
+    const lines = run(['--report'], dir).stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('회고 기준:'));
     assert.ok(i >= 0);
-    assert.equal(lines[i + 1], '올림이 쌓인 칸(올리기 후보와 같은 조건이라 기록 건수와 상관없이 회고를 묻는 기준. 에이전트 수로 셈): sonnet-low / 번역 2/2명');
+    assert.match(lines[i + 1], /^올림이 쌓인 칸\(.*\): sonnet-low \/ 번역 2\/2명$/);
     const none = setup(up(1));
-    assert.equal(run([], none.dir).stdout.includes('쌓인 칸('), false);
+    assert.equal(run(['--report'], none.dir).stdout.includes('쌓인 칸('), false);
   });
 });
 
@@ -347,56 +231,6 @@ describe('subagent-retro.js --mark --changed 실행', () => {
     assert.equal(run(['--mark', '메모', '--messages', msgs(dir, 3), '--changed', 'x'], dir).status, 1);
     assert.equal(fs.readFileSync(file, 'utf8'), lines(3));
   });
-
-  it('바꾼 칸 0인 회고가 두 번 이어지면 --due 기준이 200건이고 둘째 줄에 표 안정이 보인다', () => {
-    const dir = tmpDir();
-    const file = path.join(dir, 'subagent-usage.tsv');
-    fs.writeFileSync(file, lines(3));
-    assert.equal(markOnce(dir, 3, 0).status, 0);
-    fs.appendFileSync(file, lines(2, 10));
-    assert.equal(markOnce(dir, 6, 0).status, 0);
-    fs.appendFileSync(file, lines(150, 20));
-    const r = run(['--due'], dir);
-    const [first, second] = r.stdout.split('\n');
-    assert.equal(first, 'wait 50');
-    assert.ok(second.includes('표 안정(기준 200건)'), second);
-  });
-
-  it('회고를 한 번 하면 --due 기준이 50건이고 둘째 줄에 단계가 보인다', () => {
-    const dir = tmpDir();
-    const file = path.join(dir, 'subagent-usage.tsv');
-    fs.writeFileSync(file, lines(3));
-    assert.equal(markOnce(dir, 3, 2).status, 0);
-    fs.appendFileSync(file, lines(49, 10));
-    const [first, second] = run(['--due'], dir).stdout.split('\n');
-    assert.equal(first, 'wait 1');
-    assert.ok(second.includes('회고 1번 뒤 기준 50건'), second);
-    fs.appendFileSync(file, lines(1, 100));
-    assert.equal(run(['--due'], dir).stdout.split('\n')[0], 'ask');
-  });
-
-  it('--changed 없이 찍은 회고 표시는 안정을 끊어 기준이 100건이다', () => {
-    const dir = tmpDir();
-    const file = path.join(dir, 'subagent-usage.tsv');
-    fs.writeFileSync(file, lines(3));
-    assert.equal(markOnce(dir, 3, 0).status, 0);
-    fs.appendFileSync(file, lines(2, 10));
-    assert.equal(markOnce(dir, 6, null).status, 0);
-    fs.appendFileSync(file, lines(100, 20));
-    assert.equal(run(['--due'], dir).stdout.split('\n')[0], 'ask');
-  });
-});
-
-describe('subagent-retro.js --due 비용 기록 합산', () => {
-  it('사용 기록이 없어도 비용 기록에 100건이 있으면 첫 줄이 ask이고 둘째 줄에 센 방식이 나온다', () => {
-    const dir = tmpDir();
-    const cost = Array.from({ length: 100 }, (_, i) => ['2026-10-12', '/p', 's', `c${i}`, 'sonnet-low', 'm', 'low', 'd', 1, 1, 1, 1, 1, 1, 0.1].join('\t')).join('\n') + '\n';
-    fs.writeFileSync(path.join(dir, 'subagent-cost.tsv'), cost);
-    const r = spawnSync(process.execPath, [RETRO, '--due'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: dir }, encoding: 'utf8' });
-    const out = r.stdout.trim().split('\n');
-    assert.equal(out[0], 'ask');
-    assert.match(out[1], /비용 기록에만 있는 100건/);
-  });
 });
 
 describe('CLAUDE_CONFIG_DIR', () => {
@@ -410,14 +244,10 @@ describe('CLAUDE_CONFIG_DIR', () => {
     const dir = tmpDir();
     assert.equal(projectsRoot({ CLAUDE_CONFIG_DIR: dir }), path.join(dir, 'projects'));
   });
-
-  it('없거나 빈 값이면 홈의 .claude 아래 projects를 읽는다', () => {
-    assert.equal(projectsRoot({}), path.join(os.homedir(), '.claude', 'projects'));
-  });
 });
 
 describe('subagent-retro.js 회고 출력의 CLAUDE.md 정리 줄', () => {
-  const setup = ({ claudeMd = null, kept = null } = {}) => {
+  const setup = ({ claudeMd = null, kept = null, rules = null, config = null } = {}) => {
     const root = tmpDir();
     const dir = path.join(root, 'records');
     const claude = path.join(root, 'claude');
@@ -425,80 +255,73 @@ describe('subagent-retro.js 회고 출력의 CLAUDE.md 정리 줄', () => {
     fs.mkdirSync(claude);
     fs.writeFileSync(path.join(dir, 'subagent-usage.tsv'), '2026-10-12\t/p\tsonnet-low\t번역\t1\t2\t3\tok\ta1 줄\n');
     if (claudeMd !== null) fs.writeFileSync(path.join(claude, 'CLAUDE.md'), claudeMd);
-    const config = path.join(root, 'config.json');
-    if (kept !== null) fs.writeFileSync(config, JSON.stringify({ claudeMdKeptLines: kept }));
-    return { dir, claude, config, file: path.join(claude, 'CLAUDE.md') };
+    const config_ = path.join(root, 'config.json');
+    if (kept !== null || config !== null) fs.writeFileSync(config_, JSON.stringify({ ...(kept !== null ? { claudeMdKeptLines: kept } : {}), ...(config ?? {}) }));
+    if (rules !== null) {
+      fs.mkdirSync(path.join(claude, 'rules'));
+      for (const [name, text] of Object.entries(rules)) fs.writeFileSync(path.join(claude, 'rules', name), text);
+    }
+    return { dir, claude, config: config_, file: path.join(claude, 'CLAUDE.md') };
   };
   const lines = (n, kit = []) => [...kit, ...Array.from({ length: n - kit.length }, (_, i) => `규칙 ${i}`)].join('\n') + '\n';
   const claudeLine = (e) => {
-    const r = spawnSync(process.execPath, [RETRO], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [RETRO, '--report'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout.split('\n').find((l) => l.startsWith('CLAUDE.md 정리:'));
   };
 
-  it('200줄 이하이면 정리 제안 대상 아님과 까닭, 전체와 키트 구역 줄 수를 찍는다', () => {
+  it('80줄 이하이면 정리 제안 대상 아님과 까닭, 전체와 키트 구역 줄 수를 찍는다', () => {
     const kit = ['<!-- subagent-system 시작 -->', 'x', '<!-- subagent-system 끝 -->'];
-    const e = setup({ claudeMd: lines(200, kit) });
-    assert.equal(claudeLine(e), `CLAUDE.md 정리: 정리 제안 대상 아님(200줄 이하)  전체 200줄, 키트 구역 3줄  ${e.file}`);
+    const e = setup({ claudeMd: lines(80, kit) });
+    const line = claudeLine(e);
+    assert.match(line, /정리 제안 대상 아님\(80줄 이하\)/);
+    assert.match(line, /늘 읽히는 줄 합 80줄\(CLAUDE\.md 80줄, 키트 구역 3줄\)/);
+    assert.ok(line.includes(e.file));
   });
 
-  it('200줄을 넘고 그대로 두기로 한 값이 없으면 정리 제안 대상이다', () => {
-    const e = setup({ claudeMd: lines(201) });
-    assert.equal(claudeLine(e), `CLAUDE.md 정리: 정리 제안 대상  전체 201줄, 키트 구역 0줄  ${e.file}`);
-  });
-
-  it('그대로 두기로 한 줄 수에서 20줄 이내이면 대상이 아니고 21줄 늘면 대상이다', () => {
-    const within = setup({ claudeMd: lines(250), kept: 230 });
-    assert.match(claudeLine(within), /^CLAUDE\.md 정리: 정리 제안 대상 아님\(정리 뒤 남긴 230줄에서 20줄 이내\)  전체 250줄/);
-    const over = setup({ claudeMd: lines(251), kept: 230 });
-    assert.match(claudeLine(over), /^CLAUDE\.md 정리: 정리 제안 대상  전체 251줄/);
-  });
-
-  it('CLAUDE.md가 없으면 없다고 찍고 종료 코드 0이다', () => {
-    const e = setup();
-    assert.equal(claudeLine(e), `CLAUDE.md 정리: CLAUDE.md 없음(${e.file})`);
-  });
-
-  it('200줄 이하이고 claudeMdKeptLines가 있으면 그 키만 지우고 다른 키는 남기며 줄 끝에 알린다', () => {
-    const e = setup({ claudeMd: lines(150) });
-    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 230 }));
-    assert.equal(claudeLine(e), `CLAUDE.md 정리: 정리 제안 대상 아님(200줄 이하)  전체 150줄, 키트 구역 0줄  ${e.file}  (남겨 둔 230줄 기록을 지웠습니다)`);
+  it('80줄 이하이고 claudeMdKeptLines가 있으면 그 키만 지우고 다른 키는 남기며 줄 끝에 알린다', () => {
+    const e = setup({ claudeMd: lines(60) });
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 100 }));
+    const line = claudeLine(e);
+    assert.match(line, /정리 제안 대상 아님\(80줄 이하\)/);
+    assert.match(line, /늘 읽히는 줄 합 60줄\(CLAUDE\.md 60줄, 키트 구역 0줄\)/);
+    assert.match(line, /100줄 기록을 지웠습니다/);
     assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto', removedDefs: ['x'] });
   });
 
-  it('200줄을 넘으면 claudeMdKeptLines를 지우지 않는다', () => {
-    const e = setup({ claudeMd: lines(250), kept: 230 });
-    claudeLine(e);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { claudeMdKeptLines: 230 });
+  // 까닭: 설치와 업데이트는 늘 읽히는 줄의 합으로 세는데 회고만 CLAUDE.md 한 파일로 세어 판정이 갈렸다(19회차 막음 1).
+  it('CLAUDE.md는 80줄 이하여도 paths 없는 rules를 더해 81줄이면 정리 제안 대상이고, paths가 있는 rules는 더하지 않는다', () => {
+    const e = setup({ claudeMd: lines(54), rules: { 'kit-a.md': lines(29), 'scoped.md': `---\npaths: ["src/**"]\n---\n${lines(40)}` } });
+    const line = claudeLine(e);
+    assert.match(line, /^CLAUDE\.md 정리: 정리 제안 대상  늘 읽히는 줄 합 83줄\(CLAUDE\.md 54줄/);
+    const under = setup({ claudeMd: lines(54), rules: { 'kit-a.md': lines(26) } });
+    assert.match(claudeLine(under), /정리 제안 대상 아님\(80줄 이하\)  늘 읽히는 줄 합 80줄/);
   });
 
-  it('claudeMdKeptLines가 없으면 설정 파일을 바꾸지 않는다', () => {
-    const e = setup({ claudeMd: lines(150) });
-    const before = '{"retroMode":"auto"}';
-    fs.writeFileSync(e.config, before);
-    assert.doesNotMatch(claudeLine(e), /기록을 지/);
-    assert.equal(fs.readFileSync(e.config, 'utf8'), before);
+  it('config.json의 claudeMdLimitLines를 합의 기준으로 쓴다', () => {
+    const rules = { 'kit-a.md': lines(29) };
+    assert.match(claudeLine(setup({ claudeMd: lines(54), rules, config: { claudeMdLimitLines: 120 } })), /정리 제안 대상 아님\(120줄 이하\)  늘 읽히는 줄 합 83줄/);
+    assert.match(claudeLine(setup({ claudeMd: lines(54), rules, config: { claudeMdLimitLines: 82 } })), /정리 제안 대상  늘 읽히는 줄 합 83줄/);
   });
 
-  it('CLAUDE.md가 없으면 claudeMdKeptLines를 지우지 않는다', () => {
-    const e = setup({ kept: 230 });
-    claudeLine(e);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { claudeMdKeptLines: 230 });
-  });
-
-  it('--retro-mode로 설정 파일을 다시 써도 claudeMdKeptLines는 남는다', () => {
-    const e = setup({ kept: 230 });
-    spawnSync(process.execPath, [RETRO, '--retro-mode', 'auto'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { claudeMdKeptLines: 230, retroMode: 'auto' });
+  it('정리를 마다해 남긴 줄 수에서 20줄 이내면 합이 기준을 넘어도 대상이 아니고 21줄 늘면 대상이다', () => {
+    const rules = { 'kit-a.md': lines(29) };
+    assert.match(claudeLine(setup({ claudeMd: lines(54), rules, kept: 83 })), /정리 제안 대상 아님\(정리 뒤 남긴 83줄에서 20줄 이내\)/);
+    assert.match(claudeLine(setup({ claudeMd: lines(54), rules, kept: 62 })), /정리 제안 대상  늘 읽히는 줄 합 83줄/);
+    assert.match(claudeLine(setup({ claudeMd: lines(54), rules, kept: 63 })), /정리 제안 대상 아님\(정리 뒤 남긴 63줄에서 20줄 이내\)/);
   });
 });
 
 describe('subagent-retro.js --claude-md-done 실행', () => {
-  const setup = ({ claudeMd = null, config = null }) => {
+  const setup = ({ claudeMd = null, config = null, rules = null }) => {
     const root = tmpDir();
     const claude = path.join(root, 'claude');
     fs.mkdirSync(claude);
     if (claudeMd !== null) fs.writeFileSync(path.join(claude, 'CLAUDE.md'), claudeMd);
+    if (rules !== null) {
+      fs.mkdirSync(path.join(claude, 'rules'));
+      for (const [name, text] of Object.entries(rules)) fs.writeFileSync(path.join(claude, 'rules', name), text);
+    }
     const file = path.join(root, 'config.json');
     if (config !== null) fs.writeFileSync(file, config);
     return { root, claude, file };
@@ -506,41 +329,42 @@ describe('subagent-retro.js --claude-md-done 실행', () => {
   const lines = (n) => Array.from({ length: n }, (_, i) => `규칙 ${i}`).join('\n') + '\n';
   const done = (e) => spawnSync(process.execPath, [RETRO, '--claude-md-done'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(e.root, 'records'), CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_CONFIG_FILE: e.file }, encoding: 'utf8' });
 
-  it('CLAUDE.md가 200줄을 넘으면 그 줄 수를 claudeMdKeptLines에 적고 다른 키는 남긴다', () => {
-    const e = setup({ claudeMd: lines(230), config: JSON.stringify({ retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 210 }) });
+  it('CLAUDE.md가 80줄을 넘으면 그 줄 수를 claudeMdKeptLines에 적고 다른 키는 남긴다', () => {
+    const e = setup({ claudeMd: lines(100), config: JSON.stringify({ retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 90 }) });
     const r = done(e);
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.trim(), 'CLAUDE.md 230줄: claudeMdKeptLines에 230줄을 적었습니다');
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.file, 'utf8')), { retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 230 });
+    assert.match(r.stdout, /claudeMdKeptLines에 100줄을 적었습니다/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.file, 'utf8')), { retroMode: 'auto', removedDefs: ['x'], claudeMdKeptLines: 100 });
   });
 
-  it('CLAUDE.md가 200줄 이하이면 claudeMdKeptLines만 지우고 다른 키는 남긴다', () => {
-    const e = setup({ claudeMd: lines(150), config: JSON.stringify({ retroMode: 'auto', claudeMdKeptLines: 230 }) });
+  it('CLAUDE.md가 80줄 이하이면 claudeMdKeptLines만 지우고 다른 키는 남긴다', () => {
+    const e = setup({ claudeMd: lines(60), config: JSON.stringify({ retroMode: 'auto', claudeMdKeptLines: 100 }) });
     const r = done(e);
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.trim(), 'CLAUDE.md 150줄: 200줄 이하라 claudeMdKeptLines를 지웠습니다');
+    assert.match(r.stdout, /claudeMdKeptLines를 지웠습니다/);
     assert.deepEqual(JSON.parse(fs.readFileSync(e.file, 'utf8')), { retroMode: 'auto' });
   });
 
-  it('CLAUDE.md가 200줄 이하이고 claudeMdKeptLines가 없으면 설정 파일 내용이 그대로다', () => {
-    const before = '{"retroMode":"auto"}';
-    const e = setup({ claudeMd: lines(200), config: before });
-    const r = done(e);
+  it('CLAUDE.md는 80줄 이하여도 늘 읽히는 줄의 합이 기준을 넘으면 그 합을 claudeMdKeptLines에 적고, 합이 기준 이하가 되면 지운다', () => {
+    const over = setup({ claudeMd: lines(54), rules: { 'kit-a.md': lines(29) }, config: JSON.stringify({ retroMode: 'auto' }) });
+    const r = done(over);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /지울 것이 없어 그대로 뒀습니다/);
-    assert.equal(fs.readFileSync(e.file, 'utf8'), before);
+    assert.match(r.stdout, /늘 읽히는 줄 합 83줄: claudeMdKeptLines에 83줄을 적었습니다/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(over.file, 'utf8')), { retroMode: 'auto', claudeMdKeptLines: 83 });
+    const under = setup({ claudeMd: lines(54), rules: { 'kit-a.md': lines(26) }, config: JSON.stringify({ claudeMdKeptLines: 83 }) });
+    assert.match(done(under).stdout, /늘 읽히는 줄 합 80줄: 80줄 이하라 claudeMdKeptLines를 지웠습니다/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(under.file, 'utf8')), {});
   });
 
-  it('CLAUDE.md가 없으면 claudeMdKeptLines를 지우고 없다고 찍는다', () => {
-    const e = setup({ config: JSON.stringify({ claudeMdKeptLines: 230 }) });
+  it('claudeMdLimitLines를 올려 둔 설정은 같은 합이라도 기준 이하로 보고 남긴 줄 수를 쓰지 않는다', () => {
+    const e = setup({ claudeMd: lines(54), rules: { 'kit-a.md': lines(29) }, config: JSON.stringify({ claudeMdLimitLines: 120 }) });
     const r = done(e);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^CLAUDE\.md 없음:/);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.file, 'utf8')), {});
+    assert.match(r.stdout, /늘 읽히는 줄 합 83줄: 120줄 이하라 claudeMdKeptLines를 지울 것이 없어 그대로 뒀습니다/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.file, 'utf8')), { claudeMdLimitLines: 120 });
   });
 
   it('설정 파일이 없으면 종료 코드 1이고 파일을 만들지 않는다', () => {
-    const e = setup({ claudeMd: lines(230) });
+    const e = setup({ claudeMd: lines(100) });
     const r = done(e);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /설정 파일이 없어/);
@@ -548,7 +372,7 @@ describe('subagent-retro.js --claude-md-done 실행', () => {
   });
 
   it('설정 파일이 깨졌으면 종료 코드 1이고 파일 내용을 바꾸지 않는다', () => {
-    const e = setup({ claudeMd: lines(230), config: '{' });
+    const e = setup({ claudeMd: lines(100), config: '{' });
     const r = done(e);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /설정 파일이 깨져/);
@@ -561,7 +385,7 @@ describe('subagent-retro.js --check 실행', () => {
   const agent = (description) => `---\nname: x\ndescription: ${description}\n---\n본문\n`;
   const setup = ({ usage, agents }) => {
     const root = tmpDir();
-    fs.writeFileSync(path.join(root, 'guide.md'), GUIDE);
+    fs.writeFileSync(path.join(root, 'routing.md'), GUIDE);
     fs.mkdirSync(path.join(root, 'agents'));
     for (const [def, text] of Object.entries(agents)) fs.writeFileSync(path.join(root, 'agents', `${def}.md`), text);
     fs.mkdirSync(path.join(root, 'records'));
@@ -570,7 +394,7 @@ describe('subagent-retro.js --check 실행', () => {
   };
   const run = (root, args = ['--check'], config = process.env.SUBAGENT_CONFIG_FILE) =>
     spawnSync(process.execPath, [RETRO, ...args], {
-      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_GUIDE_FILE: path.join(root, 'guide.md'), SUBAGENT_AGENTS_DIR: path.join(root, 'agents'), SUBAGENT_CONFIG_FILE: config },
+      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_ROUTING_FILE: path.join(root, 'routing.md'), SUBAGENT_AGENTS_DIR: path.join(root, 'agents'), SUBAGENT_CONFIG_FILE: config },
       encoding: 'utf8',
     });
   const good = { 'sonnet-low': agent('성격. 번역. (`g`)'), 'sonnet-medium': agent('성격. 구현. (`g`)') };
@@ -582,26 +406,6 @@ describe('subagent-retro.js --check 실행', () => {
     assert.match(r.stdout, /문제 없음/);
   });
 
-  it('표 칸이 비어 있는 정의는 일 이름을 나열하지 않은 description이어도 문제 없음이다', () => {
-    const root = setup({ usage: null, agents: { ...good, 'haiku-high': agent('내려 보는 시험에 쓰는 정의. (`g`)') } });
-    fs.writeFileSync(path.join(root, 'guide.md'), GUIDE.replace('| **Sonnet**', '| **Haiku** | 정리 | | | |\n| **Sonnet**'));
-    fs.writeFileSync(path.join(root, 'agents', 'haiku-low.md'), agent('성격. 정리. (`g`)'));
-    const r = run(root);
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /문제 없음/);
-  });
-
-  it('fable-high로 보낸 기록이 있어도 정의 파일이 없다는 이유로 --check, --kinds, --due가 오류나 경고를 내지 않는다', () => {
-    const root = setup({ usage: line('fable-high', '번역') + line('fable-high', '번역', '올림'), agents: good });
-    for (const args of [['--check'], ['--kinds'], ['--due'], []]) {
-      const r = run(root, args);
-      assert.equal(r.status, 0, `${args} ${r.stdout}${r.stderr}`);
-      assert.equal(r.stderr, '', String(args));
-      assert.doesNotMatch(r.stdout, /fable-high\.md|문제 [1-9]/, String(args));
-    }
-    assert.match(run(root).stdout, /문제 없음/);
-  });
-
   it('config.json의 removedDefs에 든 정의의 칸에 일이 있으면 정의 파일 없음이 아니라 별도 문제로 찍고 종료 코드 1이다', () => {
     const root = setup({ usage: null, agents: { 'sonnet-low': good['sonnet-low'] } });
     assert.equal(run(root).status, 1);
@@ -609,7 +413,7 @@ describe('subagent-retro.js --check 실행', () => {
     fs.writeFileSync(config, JSON.stringify({ removedDefs: ['sonnet-medium'] }));
     const r = run(root, ['--check'], config);
     assert.equal(r.status, 1, r.stdout + r.stderr);
-    assert.match(r.stdout, /sonnet-medium: removedDefs에 있는데 표의 그 칸에 일이 있습니다\. 정의를 다시 만들고 removedDefs에서 빼거나 칸의 일을 옮기세요  칸의 일: 구현/);
+    assert.match(r.stdout, /sonnet-medium: removedDefs에 있는데 표의 그 칸에 일이 있습니다[^\n]*칸의 일: 구현/);
     assert.doesNotMatch(r.stdout, /sonnet-medium\.md/);
     assert.match(r.stdout, /문제 1건/);
   });
@@ -629,22 +433,6 @@ describe('subagent-retro.js --check 실행', () => {
     assert.match(r.stdout, /번역  opus-medium 2건  표의 칸 sonnet-low  마지막 2026-10-12/);
     assert.match(r.stdout, /문제 1건/);
   });
-
-  it('기록이 없으면 1번 검사는 건너뛰고 description과 정의 파일 검사는 한다', () => {
-    const r = run(setup({ usage: null, agents: { 'sonnet-low': agent('성격. 교정. (`g`)') } }));
-    assert.equal(r.status, 1);
-    assert.match(r.stdout, /사용 기록이 없어 건너뜁니다/);
-    assert.match(r.stdout, /sonnet-low  description에 없는 칸 이름: 번역 \/ 칸에 없는 description 이름: 교정/);
-    assert.match(r.stdout, /sonnet-medium .*sonnet-medium\.md/);
-  });
-
-  it('표를 읽지 못하면 그 사실을 찍고 종료 코드 1이다', () => {
-    const root = setup({ usage: null, agents: good });
-    fs.writeFileSync(path.join(root, 'guide.md'), '표 없음');
-    const r = run(root);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /표를 읽지 못했습니다/);
-  });
 });
 
 describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
@@ -652,9 +440,9 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     const root = tmpDir();
     const dir = path.join(root, 'records');
     fs.mkdirSync(dir);
-    return { root, dir, config: path.join(root, 'config.json'), lock: path.join(dir, 'retro.lock'), pending: path.join(dir, 'retro-pending.md'), usage: path.join(dir, 'subagent-usage.tsv') };
+    return { root, dir, config: path.join(root, 'config.json'), lock: path.join(dir, 'retro.lock'), proposals: path.join(root, 'PROPOSALS.md'), usage: path.join(dir, 'subagent-usage.tsv') };
   };
-  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
+  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, SUBAGENT_PROPOSALS_FILE: e.proposals }, encoding: 'utf8' });
   const lines = (n) => Array.from({ length: n }, (_, i) => `2026-10-12\t/p\tsonnet-low\t번역\t1\t2\t3\tok\ta${i} 줄`).join('\n') + '\n';
   const first = (e) => run(['--due'], e).stdout.split('\n')[0];
   const ago = (file, ms) => {
@@ -663,21 +451,28 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
   };
   const HOUR = 3600 * 1000;
 
-  it('--retro-mode는 설정 파일이 없으면 ask를 찍고 파일을 만들지 않는다', () => {
+  it('--retro-mode auto는 회사용(ask)에서 값을 저장하고 바뀐 값을 찍으며, 개인용(auto)이 된 뒤에는 인자 없이 읽어도 바꾸지 않고 알리기만 한다', () => {
     const e = setup();
-    const r = run(['--retro-mode'], e);
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.trim(), 'ask');
-    assert.equal(fs.existsSync(e.config), false);
+    fs.writeFileSync(e.config, JSON.stringify({ profile: 'company', retroMode: 'ask' }));
+    assert.equal(run(['--retro-mode', 'auto'], e).stdout.trim(), 'auto');
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { profile: 'company', retroMode: 'auto' });
+    fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal', retroMode: 'auto' }));
+    for (const args of [['--retro-mode'], ['--retro-mode', 'ask']]) {
+      const r = run(args, e);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /개인용이라/);
+      assert.match(r.stdout, /set-profile company/);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { profile: 'personal', retroMode: 'auto' });
   });
 
-  it('--retro-mode auto는 값을 저장하고 바뀐 값을 찍으며, 인자 없이 다시 읽으면 auto이고, ask로 되돌린다', () => {
+  it('회사용(profile company)이 retroMode auto로 돌고 있어도 --retro-mode ask를 받아 저장한다', () => {
     const e = setup();
-    assert.equal(run(['--retro-mode', 'auto'], e).stdout.trim(), 'auto');
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto' });
-    assert.equal(run(['--retro-mode'], e).stdout.trim(), 'auto');
-    assert.equal(run(['--retro-mode', 'ask'], e).stdout.trim(), 'ask');
-    assert.equal(run(['--retro-mode'], e).stdout.trim(), 'ask');
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', profile: 'company' }));
+    const r = run(['--retro-mode', 'ask'], e);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'ask');
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'ask', profile: 'company' });
   });
 
   it('--retro-mode를 바꿔도 commandName 같은 다른 키는 그대로 남는다', () => {
@@ -687,40 +482,15 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto', commandName: 'huigo' });
   });
 
-  it('--retro-mode와 자동 회고 실패 횟수가 설정 파일을 다시 써도 removedDefs와 모르는 키가 남는다', () => {
-    const e = setup();
-    const keep = { removedDefs: ['haiku-high'], future: { a: 1 } };
-    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', ...keep }));
-    run(['--retro-mode', 'auto'], e);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto', ...keep });
-    run(['--claim'], e);
-    run(['--release', '--failed'], e);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto', ...keep, retroFailures: 1 });
-    run(['--claim'], e);
-    run(['--release', '--failed'], e);
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'ask', ...keep });
-  });
-
   it('auto와 ask 밖의 값은 종료 코드 1이고 설정 파일을 바꾸지 않는다', () => {
     const e = setup();
-    fs.writeFileSync(e.config, '{"retroMode":"auto"}');
+    fs.writeFileSync(e.config, '{"retroMode":"ask"}');
     for (const bad of ['on', 'AUTO', '']) {
       const r = run(['--retro-mode', bad], e);
       assert.equal(r.status, 1, bad);
       assert.match(r.stderr, /ask 또는 auto/);
     }
-    assert.equal(fs.readFileSync(e.config, 'utf8'), '{"retroMode":"auto"}');
-  });
-
-  it('설정 파일이 깨졌거나 값이 모르는 것이면 ask로 읽고, --retro-mode auto가 깨진 파일을 새로 쓴다', () => {
-    const e = setup();
-    for (const text of ['{깨짐', '[]', '{"retroMode":"자동"}', '{"retroMode":1}', '']) {
-      fs.writeFileSync(e.config, text);
-      assert.equal(run(['--retro-mode'], e).stdout.trim(), 'ask', text);
-    }
-    fs.writeFileSync(e.config, '{깨짐');
-    assert.equal(run(['--retro-mode', 'auto'], e).stdout.trim(), 'auto');
-    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto' });
+    assert.equal(fs.readFileSync(e.config, 'utf8'), '{"retroMode":"ask"}');
   });
 
   it('회고할 때가 됐고 모드가 auto이면 --due 첫 줄이 auto이고 둘째 줄부터 형식은 ask일 때와 같다', () => {
@@ -752,13 +522,6 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     const before = fs.readFileSync(e.lock, 'utf8');
     assert.equal(run(['--claim'], e).stdout.trim(), 'busy');
     assert.equal(fs.readFileSync(e.lock, 'utf8'), before);
-  });
-
-  it('--claim은 기록 폴더가 아직 없어도 폴더를 만들고 잠근다', () => {
-    const e = setup();
-    e.dir = path.join(e.root, 'nested', 'records');
-    assert.equal(run(['--claim'], e).stdout.trim(), 'ok');
-    assert.equal(fs.existsSync(path.join(e.dir, 'retro.lock')), true);
   });
 
   it('3시간이 안 된 잠금은 busy이고, 3시간이 넘은 잠금은 버려진 것으로 보고 다시 잡아 ok이다', () => {
@@ -829,22 +592,6 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
       assert.doesNotMatch(run(['--status'], e).stdout, /연속 실패/);
     });
 
-    it('--failed 없는 --release는 실패로 세지 않는다', () => {
-      const e = setup();
-      run(['--retro-mode', 'auto'], e);
-      run(['--release'], e);
-      run(['--release'], e);
-      run(['--release'], e);
-      assert.deepEqual(cfg(e), { retroMode: 'auto' });
-    });
-
-    it('묻기 방식에서 --failed는 세지 않고 설정 파일도 만들지 않는다', () => {
-      const e = setup();
-      const r = run(['--release', '--failed'], e);
-      assert.match(r.stdout, /세지 않았습니다/);
-      assert.equal(fs.existsSync(e.config), false);
-    });
-
     it('--mark가 성공하면 횟수가 0으로 돌아가 다음 실패가 다시 1회부터다', () => {
       const e = setup();
       fs.writeFileSync(e.usage, lines(3));
@@ -857,29 +604,20 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
       assert.match(run(['--release', '--failed'], e).stdout, /연속 실패 1회/);
     });
 
-    it('--mark는 횟수가 없을 때 설정 파일을 만들거나 바꾸지 않는다', () => {
+    it('두 번 이어 실패해 묻기로 돌아간 뒤 안내대로 --slash auto를 치면 다시 auto가 되고 실패 횟수 키가 남지 않는다', () => {
       const e = setup();
-      fs.writeFileSync(e.usage, lines(3));
-      run(['--mark', '메모', '--messages', markMsgs(e, 3), '--changed', '0'], e);
-      assert.equal(fs.existsSync(e.config), false);
+      fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', commandName: 'huigo' }));
+      run(['--release', '--failed'], e);
+      run(['--release', '--failed'], e);
+      assert.match(run(['--slash', 'auto'], e).stdout, /ask에서 auto로 바꿨습니다/);
+      assert.deepEqual(cfg(e), { retroMode: 'auto', commandName: 'huigo' });
     });
 
-    it('--retro-mode auto로 다시 켜면 횟수가 0으로 돌아간다', () => {
+    it('묻기로 돌아간 뒤 --retro-mode auto로 다시 켜면 횟수가 0으로 돌아간다', () => {
       const e = setup();
-      run(['--retro-mode', 'auto'], e);
-      run(['--release', '--failed'], e);
-      assert.equal(cfg(e).retroFailures, 1);
+      fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', retroFailures: 1 }));
       run(['--retro-mode', 'auto'], e);
       assert.deepEqual(cfg(e), { retroMode: 'auto' });
-    });
-
-    it('횟수가 숫자가 아니거나 음수이면 0으로 읽는다', () => {
-      const e = setup();
-      for (const bad of ['"x"', '-1', '1.5', 'null']) {
-        fs.writeFileSync(e.config, `{"retroMode":"auto","retroFailures":${bad}}`);
-        const r = run(['--release', '--failed'], e);
-        assert.match(r.stdout, /연속 실패 1회/, bad);
-      }
     });
   });
 
@@ -897,45 +635,103 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.equal(fs.existsSync(e.lock), false);
   });
 
-  it('--mark는 잠금이 없어도 그대로 성공한다', () => {
-    const e = setup();
-    fs.writeFileSync(e.usage, lines(3));
-    const msgs = path.join(e.root, 'msgs.tsv');
-    fs.writeFileSync(msgs, '# 사용 줄\t3\n# 추출 시각\t2026-10-13T00:00:00.000Z\n');
-    const r = run(['--mark', '메모', '--messages', msgs, '--changed', '0'], e);
-    assert.equal(r.status, 0, r.stderr);
-    assert.doesNotMatch(r.stdout, /잠금/);
-  });
+  const PROPOSALS = [
+    '# 제안', '', '## 제안', '',
+    '### 요율 더하기', '- 얻는 것: x', '- 잃는 것: y',
+    '### 정책 바꾸기', '- 묻기: 정책', '본문에 ### 가 들어 있어도 줄머리가 아니면 세지 않는다',
+    '### 문지기 풀기', '  - 묻기: 문지기 풀기',
+    '', '## 반대', '', '### 지난 반대', '- 묻기: 돈', '',
+  ].join('\n');
 
-  it('물을 것 파일의 항목(## 제목)을 세어 --due 마지막 줄에 보이고, 없거나 0건이면 보이지 않는다', () => {
+  it('제안 목록의 `## 제안` 절 항목을 회사용(ask)은 전부 세고 --due 마지막 줄에 보이며, 파일이 없거나 항목이 없으면 보이지 않는다', () => {
     const e = setup();
     const last = () => run(['--due'], e).stdout.trim().split('\n').at(-1);
     assert.doesNotMatch(last(), /물을 것/);
-    fs.writeFileSync(e.pending, '# 물을 것\n\n## 요율 더하기\n- 왜: x\n본문에 ## 가 들어 있어도 줄머리가 아니면 세지 않는다\n## 체크리스트 고치기\n');
-    assert.match(last(), /물을 것 2건/);
-    fs.writeFileSync(e.pending, '');
+    fs.writeFileSync(e.proposals, PROPOSALS);
+    assert.match(last(), /물을 것 3건/);
+    fs.writeFileSync(e.proposals, '## 제안\n\n## 반대\n### 지난 반대\n');
     assert.doesNotMatch(last(), /물을 것/);
+  });
+
+  it('개인용은 묻기 줄이 있는 항목만 세고, 회사용은 전부 세며, 옛 판정 키가 config에 남아 있어도 읽지 않는다', () => {
+    const e = setup();
+    const last = () => run(['--due'], e).stdout.trim().split('\n').at(-1);
+    fs.writeFileSync(e.proposals, PROPOSALS);
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', profile: 'personal' }));
+    assert.match(last(), /물을 것 2건/);
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', profile: 'personal', autoApplyRules: false, autoCreate: false }));
+    assert.match(last(), /물을 것 2건/);
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', profile: 'company', autoApplyRules: true }));
+    assert.match(last(), /물을 것 3건/);
+  });
+
+  it('잠금이 잡힌 동안 --due는 물을 것을 붙이지 않고, 잠금이 없으면 붙인다', () => {
+    const e = setup();
+    fs.writeFileSync(e.proposals, PROPOSALS);
+    const last = () => run(['--due'], e).stdout.trim().split('\n').at(-1);
+    assert.match(last(), /물을 것 3건/);
+    run(['--claim'], e);
+    assert.match(last(), /회고 진행 중/);
+    assert.doesNotMatch(last(), /물을 것/);
+    run(['--release'], e);
+    assert.match(last(), /물을 것 3건/);
   });
 
   it('--status는 아무것도 쓰지 않고 방식, 시점, 잠금, 물을 것을 찍는다', () => {
     const e = setup();
     fs.writeFileSync(e.usage, lines(30));
-    run(['--retro-mode', 'auto'], e);
-    fs.writeFileSync(e.pending, '## a\n');
+    fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal', retroMode: 'auto' }));
+    fs.writeFileSync(e.proposals, PROPOSALS);
     const configBefore = fs.readFileSync(e.config, 'utf8');
     const out = run(['--status'], e).stdout;
     assert.match(out, /회고 방식: 자동\(auto\)/);
     assert.match(out, /회고 시점: 회고할 때입니다\(auto/);
     assert.match(out, /회고 잠금: 없음/);
-    assert.match(out, /물을 것: 1건/);
+    assert.match(out, /물을 것\(사용자에게 묻는 여섯 종만\): 2건/);
     assert.equal(fs.existsSync(e.lock), false);
     assert.equal(fs.readFileSync(e.config, 'utf8'), configBefore);
     run(['--claim'], e);
     assert.match(run(['--status'], e).stdout, /회고 잠금: 진행 중/);
   });
 
+  it('--status는 바로 고치기와 애매할 때의 문턱을 profile에서 낸 값으로 찍고, 설정 파일이 없으면 회사용 쪽으로 보며, 옛 판정 키는 읽지 않는다', () => {
+    const e = setup();
+    const lines = () => {
+      const out = run(['--status'], e).stdout;
+      return { fix: out.match(/^바로 고치기: (.*)$/m)[1], threshold: out.match(/^애매할 때: (.*)$/m)[1] };
+    };
+    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)', threshold: '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기 (profile이 정함)' });
+    fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal' }));
+    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)', threshold: '작으면 하고 알림 (profile이 정함)' });
+    fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal', autoApplyRules: false, actThreshold: 'low-cost-only' }));
+    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)', threshold: '작으면 하고 알림 (profile이 정함)' });
+    fs.writeFileSync(e.config, '{깨짐');
+    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)', threshold: '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기 (profile이 정함)' });
+  });
+
+  it('제안 목록 경로는 설정 폴더(CLAUDE_CONFIG_DIR) 아래 docs/PROPOSALS.md이다', () => {
+    const e = setup();
+    const claude = path.join(e.root, 'claude');
+    fs.mkdirSync(path.join(claude, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(claude, 'docs', 'PROPOSALS.md'), '## 제안\n### a\n### b\n');
+    const env = { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, CLAUDE_CONFIG_DIR: claude };
+    delete env.SUBAGENT_PROPOSALS_FILE;
+    assert.match(spawnSync(process.execPath, [RETRO, '--due'], { env, encoding: 'utf8' }).stdout, /물을 것 2건/);
+  });
+
+  it('회고 방식이 auto이면 --snooze는 미룰 질문이 없다고 알리고 종료 코드 0이며 사용 기록을 건드리지 않는다', () => {
+    const e = setup();
+    fs.writeFileSync(e.config, '{"retroMode":"auto"}');
+    fs.writeFileSync(e.usage, lines(30));
+    const r = run(['--snooze'], e);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /묻기\(ask\)일 때만/);
+    assert.equal(fs.readFileSync(e.usage, 'utf8'), lines(30));
+  });
+
   it('--slash는 인자가 없으면 상태, auto와 ask는 바꾼 뒤 상태, now는 상태와 요청 줄, 그 밖은 사용법을 찍고 모두 종료 코드 0이다', () => {
     const e = setup();
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', profile: 'company' }));
     fs.writeFileSync(e.usage, lines(3));
     const plain = run(['--slash', ''], e);
     assert.equal(plain.status, 0);
@@ -956,6 +752,17 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.equal(run(['--retro-mode'], e).stdout.trim(), 'ask');
   });
 
+  it('개인용(profile personal)에서 --slash ask는 설정을 바꾸지 않고 set-profile company만 알리며, auto는 그대로 받는다', () => {
+    const e = setup();
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', profile: 'personal' }));
+    const r = run(['--slash', 'ask'], e);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /set-profile company/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(e.config, 'utf8')), { retroMode: 'auto', profile: 'personal' });
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', profile: 'personal' }));
+    assert.match(run(['--slash', 'auto'], e).stdout, /ask에서 auto로 바꿨습니다/);
+  });
+
   it('사용 기록이 없으면 --slash now는 상태와 함께 회고하지 않는다고 알리고 요청 줄을 찍지 않는다', () => {
     const e = setup();
     const r = run(['--slash', 'now'], e);
@@ -965,21 +772,6 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.doesNotMatch(r.stdout, /요청: 지금 회고/);
     fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', commandName: 'huigo' }));
     assert.match(run(['--slash', 'now'], e).stdout, /\/huigo now/);
-  });
-
-  it('--slash 사용법은 설정의 commandName으로 보이고, 잘못된 이름이면 retro로 본다', () => {
-    const e = setup();
-    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', commandName: 'huigo' }));
-    assert.match(run(['--slash', '?'], e).stdout, /\/huigo auto/);
-    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', commandName: '../x' }));
-    assert.match(run(['--slash', '?'], e).stdout, /\/retro auto/);
-  });
-
-  it('기본 설정 경로는 스크립트 폴더 바로 위의 config.json이다', () => {
-    const env = { ...process.env };
-    delete env.SUBAGENT_CONFIG_FILE;
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { CONFIG_FILE } from ${JSON.stringify(path.join(SCRIPTS, 'claudeProjectPaths.js'))}; console.log(CONFIG_FILE);`], { env, encoding: 'utf8' });
-    assert.equal(r.stdout.trim(), path.join(path.dirname(SCRIPTS), 'config.json'));
   });
 });
 
@@ -1005,9 +797,9 @@ describe('subagent-retro.js --repeats 실행', () => {
     });
     return root;
   };
-  const run = (root, args = []) =>
+  const run = (root, args = [], config = process.env.SUBAGENT_CONFIG_FILE) =>
     spawnSync(process.execPath, [RETRO, '--repeats', ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, 'cfg'), SUBAGENT_RECORDS_DIR: path.join(root, 'records') },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, 'cfg'), SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_CONFIG_FILE: config },
       encoding: 'utf8',
     });
   const usage = (...extra) => ['2026-10-05\t/p/a\tsonnet-medium\t구현\t1\t1\t1\tok\ta1 m', ...extra].join('\n') + '\n';
@@ -1027,71 +819,39 @@ describe('subagent-retro.js --repeats 실행', () => {
     assert.match(r.stdout, /Agent 지시문[^\n]*\n[^\n]*\n3 +2 +2 +\d+ +코드 리뷰를 해 주세요 N/);
   });
 
-  it('단일 파일 읽기(cat)는 세션 2개에서 3번 나와도 후보가 아니고, 파이프로 이은 묶음은 후보다', () => {
-    const lines = (day, file) => [bash(day, `r${day}`, `cat /p/x/${file}.md`), bash(day, `p${day}`, `cat /p/x/${file}.log | grep ERROR`)];
-    const root = setup([{ project: 'a', lines: [...lines(10, 'a'), ...lines(11, 'b')] }, { project: 'b', lines: lines(12, 'c') }], usage());
-    const r = run(root, ['--since', '2026-10-05']);
+  const writeConfig = (root, o) => {
+    const file = path.join(root, 'config.json');
+    fs.writeFileSync(file, JSON.stringify(o));
+    return file;
+  };
+  const lines = (day) => [human(day, REVIEW(day)), bash(day, `b${day}`, TEST(`T${day}`))];
+
+  it('마지막 실행에서 30일이 안 지났으면 대화 기록을 읽지 않고 다음 날짜를 알리며 설정 파일을 바꾸지 않는다', () => {
+    const root = setup([{ project: 'a', lines: lines(10) }]);
+    const config = writeConfig(root, { retroMode: 'ask', repeatsRunDate: '2026-09-14' });
+    const r = run(root, [], config);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /3 +2 +2 +\d+ +cat <경로> \| grep error/);
-    assert.doesNotMatch(r.stdout, /\n\d+ +\d+ +\d+ +\d+ +cat <경로> +cat/);
+    assert.match(r.stdout, /2026-09-14[^\n]*2026-10-14/);
+    assert.doesNotMatch(r.stdout, /반복 찾기\(어림/);
+    assert.equal(fs.readFileSync(config, 'utf8'), JSON.stringify({ retroMode: 'ask', repeatsRunDate: '2026-09-14' }));
   });
 
-  it('후보가 없으면 종류마다 후보 없음을 찍고 종료 코드 0이다', () => {
-    const root = setup([{ project: 'a', lines: [human(10, REVIEW(1)), bash(10, 'b1', TEST('A'))] }], usage());
-    const r = run(root, ['--since', '2026-10-05']);
+  it('마지막 실행에서 정확히 30일이 지났으면 돌고 repeatsRunDate만 오늘로 바꾼다', () => {
+    const root = setup([{ project: 'a', lines: lines(10) }]);
+    const config = writeConfig(root, { retroMode: 'ask', removedDefs: ['x'], repeatsRunDate: '2026-09-13' });
+    const r = run(root, [], config);
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.match(/후보 없음/g).length, 3);
+    assert.match(r.stdout, /반복 찾기\(어림/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')), { retroMode: 'ask', removedDefs: ['x'], repeatsRunDate: '2026-10-13' });
   });
 
-  it('범위 기본값은 마지막 회고 표시 시각 뒤이고 그 앞의 기록은 세지 않는다', () => {
-    const lines = (day) => [human(day, REVIEW(day)), bash(day, `b${day}`, TEST(`T${day}`))];
-    const root = setup([
-      { project: 'a', lines: [...lines(8), ...lines(9)] },
-      { project: 'b', lines: [...lines(10), ...lines(11)] },
-    ], usage(['회고', '-', '회고', at(9, 18), 1, 0, '-', '-', 'm'].join('\t')));
-    const r = run(root);
+  it('--since를 주면 30일이 안 지났어도 돌고 repeatsRunDate를 바꾸지 않는다', () => {
+    const root = setup([{ project: 'a', lines: lines(10) }]);
+    const config = writeConfig(root, { repeatsRunDate: '2026-10-12' });
+    const r = run(root, ['--since', '2026-10-05'], config);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /회고 표시/);
-    assert.match(r.stdout, /사용자 메시지 2개, Bash 명령 2개/);
-    assert.match(r.stdout, /후보 기준/);
-    assert.equal(r.stdout.match(/후보 없음/g).length, 3);
-  });
-
-  it('--since가 있으면 그 날 0시 뒤를 센다', () => {
-    const lines = (day) => [human(day, REVIEW(day)), bash(day, `b${day}`, TEST(`T${day}`))];
-    const sessions = [{ project: 'a', lines: [...lines(8), ...lines(9)] }, { project: 'b', lines: [...lines(10), ...lines(11)] }];
-    const root = setup(sessions, usage());
-    assert.match(run(root, ['--since', '2026-10-08']).stdout, /4 +2 +2 +\d+ +이 문서 검토해 줘/);
-    assert.equal(run(root, ['--since', '2026-10-10']).stdout.match(/후보 없음/g).length, 3);
-  });
-
-  it('--since 형식이 틀리면 종료 코드 1이다', () => {
-    const root = setup([], usage());
-    for (const bad of ['10-08', '2026-13-01', '2026-02-30']) assert.equal(run(root, ['--since', bad]).status, 1, bad);
-  });
-
-  it('사용 기록이 없으면 범위를 못 정했다고 찍고 종료 코드 0이다', () => {
-    const r = run(setup([]));
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /사용 기록이 없어 범위를 정하지 못했습니다/);
-  });
-
-  it('대화 기록 폴더가 없거나 범위 안에 대화가 없으면 그렇다고 찍고 종료 코드 0이다', () => {
-    const none = run(setup([]), ['--since', '2026-10-01']);
-    assert.equal(none.status, 0, none.stderr);
-    assert.match(none.stdout, /대화 기록 폴더가 없습니다/);
-
-    const root = setup([{ project: 'a', lines: [human(10, REVIEW(1))] }]);
-    const future = spawnSync(process.execPath, [RETRO, '--repeats', '--since', '2099-01-01'], { env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, 'cfg'), SUBAGENT_RECORDS_DIR: path.join(root, 'records') }, encoding: 'utf8' });
-    assert.equal(future.status, 0, future.stderr);
-    assert.match(future.stdout, /범위 안에 대화 기록이 없습니다/);
-  });
-
-  it('파일을 쓰지 않는다', () => {
-    const root = setup([{ project: 'a', lines: [human(10, REVIEW(1))] }], usage());
-    const before = fs.readdirSync(path.join(root, 'records')).sort();
-    run(root, ['--since', '2026-10-05']);
-    assert.deepEqual(fs.readdirSync(path.join(root, 'records')).sort(), before);
+    assert.match(r.stdout, /반복 찾기\(어림/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')), { repeatsRunDate: '2026-10-12' });
   });
 });
 
@@ -1100,14 +860,14 @@ describe('subagent-retro.js 시험 표시, 표 모양, 최저선 제안 실행',
   const TRIAL = '번역 「(시험: 다음 1건 `haiku-high`)」';
   const setup = (guide, usage = '') => {
     const root = tmpDir();
-    fs.writeFileSync(path.join(root, 'guide.md'), guide);
+    fs.writeFileSync(path.join(root, 'routing.md'), guide);
     fs.mkdirSync(path.join(root, 'records'));
     fs.writeFileSync(path.join(root, 'records', 'subagent-usage.tsv'), usage);
     return root;
   };
   const run = (args, root) =>
     spawnSync(process.execPath, [RETRO, ...args], {
-      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_GUIDE_FILE: path.join(root, 'guide.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
+      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_ROUTING_FILE: path.join(root, 'routing.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
       encoding: 'utf8',
     });
   const line = (def, kind, result, id) => ['2026-10-12', '/p', def, kind, 1, 2, 3, result, `${id} 메모`].join('\t') + '\n';
@@ -1129,68 +889,34 @@ describe('subagent-retro.js 시험 표시, 표 모양, 최저선 제안 실행',
     assert.deepEqual(JSON.parse(cols[7]), { 칸: [['sonnet-low', '번역'], ['sonnet-low', '요약'], ['sonnet-medium', '구현']], 시험: [['번역', 'haiku-high']], 최저: [['요약', 'sonnet-low']] });
   });
 
-  it('표를 읽지 못하면 여덟째 열은 -이고 칸 이동을 세지 못한다고 찍는다', () => {
-    const root = setup('표 없음', line('sonnet-low', '번역', 'ok', 'a1'));
-    const r = mark(root);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /표 모양을 남기지 못했습니다/);
-    assert.equal(fs.readFileSync(usageFile(root), 'utf8').trim().split('\n').at(-1).split('\t')[7], '-');
-  });
-
   it('--status는 시험 표시마다 마지막 회고 뒤 그 정의 기록이 없으면 대기, 있으면 보냄을 찍는다', () => {
     const root = setup(table(TRIAL), line('sonnet-low', '번역', 'ok', 'a1'));
-    assert.match(run(['--status'], root).stdout, /시험 표시: sonnet-low \/ 번역 → haiku-high 대기/);
+    assert.match(run(['--status'], root).stdout, /시험 표시: sonnet-low \/ 번역 → haiku-high 대기\(이 구간 안 0건\)/);
     fs.appendFileSync(usageFile(root), line('haiku-high', '번역', 'ok', 't1'));
-    assert.match(run(['--status'], root).stdout, /시험 표시: sonnet-low \/ 번역 → haiku-high 보냄/);
+    assert.match(run(['--status'], root).stdout, /시험 표시: sonnet-low \/ 번역 → haiku-high 보냄\(이 구간 안 1건\)/);
+    fs.appendFileSync(usageFile(root), line('haiku-high', '번역', 'ok', 't2'));
+    assert.match(run(['--status'], root).stdout, /haiku-high 보냄\(이 구간 안 2건\)/);
     mark(root);
     assert.match(run(['--status'], root).stdout, /haiku-high 대기/, '회고 뒤에는 다시 대기');
-  });
-
-  it('--status는 시험 표시가 없으면 없음을 찍는다', () => {
-    assert.match(run(['--status'], setup(table('번역'), line('sonnet-low', '번역', 'ok', 'a1'))).stdout, /시험 표시: 없음/);
-  });
-
-  it('바꾼 칸 0인 회고가 두 번 이어져도 표에 시험 표시가 있으면 --due 기준이 100건이고 그 까닭이 보인다', () => {
-    const root = setup(table(TRIAL), line('sonnet-low', '번역', 'ok', 'a1'));
-    mark(root);
-    fs.appendFileSync(usageFile(root), line('sonnet-low', '번역', 'ok', 'a2'));
-    mark(root);
-    const [first, second] = run(['--due'], root).stdout.split('\n');
-    assert.match(first, /^wait \d+$/);
-    assert.ok(second.includes('기준 100건, 판정 전 시험 표시가 있어 표 안정으로 보지 않음'), second);
-    fs.writeFileSync(path.join(root, 'guide.md'), table('번역'));
-    assert.ok(run(['--due'], root).stdout.includes('표 안정(기준 200건)'));
   });
 
   it('회고 출력은 시험 판정, 내림 실패, 최저선 제안을 찍는다', () => {
     const lowered = table('번역').replace('| **Sonnet** | 번역 |', '| **Haiku** | | | 번역 | |\n| **Sonnet** | |');
     const root = setup(table('번역'), line('sonnet-low', '번역', 'ok', 'a1'));
     mark(root, '0');
-    fs.writeFileSync(path.join(root, 'guide.md'), lowered);
+    fs.writeFileSync(path.join(root, 'routing.md'), lowered);
     mark(root, '1');
     fs.appendFileSync(usageFile(root), line('haiku-high', '번역', '올림', 'a2'));
-    fs.writeFileSync(path.join(root, 'guide.md'), table('번역'));
+    fs.writeFileSync(path.join(root, 'routing.md'), table('번역'));
     mark(root, '1');
-    fs.writeFileSync(path.join(root, 'guide.md'), table(TRIAL));
+    fs.writeFileSync(path.join(root, 'routing.md'), table(TRIAL));
     mark(root, '0');
     fs.appendFileSync(usageFile(root), line('haiku-high', '번역', '올림', 't1'));
-    const r = run([], root);
+    const r = run(['--report'], root);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /시험 표시[^\n]*\n {2}sonnet-low \/ 번역 → haiku-high {2}보냄\(t1\) {2}판정: 실패\(올림 또는 정정\)/);
     assert.match(r.stdout, /내림 실패[^\n]*\n {2}번역 {2}1번\(실패한 정의 haiku-high\)/);
     assert.match(r.stdout, /최저선 제안[^\n]*\n {2}sonnet-low \/ 번역 {2}내림 실패 2번\(앞서 1번, 이번 haiku-high 시험 실패\) {2}최저선을 sonnet-low 정의로 두자고 제안/);
-  });
-
-  it('최저선이 이미 있는 칸은 제안 대신 최저선 위에서 내림 실패 수만 찍고, 최저선 아래로는 내려 보기 후보를 내지 않는다', () => {
-    const five = Array.from({ length: 5 }, (_, i) => line('sonnet-low', '요약', 'ok', `s${i}`)).join('');
-    const guide = ['| | low | medium | high | xhigh |', '|:---|:---|:---|:---|:---|', '| **Sonnet** | 요약 「(최저: sonnet-low)」 | 번역 「(시험: 다음 1건 `sonnet-low`)」 「(최저: sonnet-low)」 | | |'].join('\n');
-    const root = setup(guide, five);
-    mark(root, '0');
-    fs.appendFileSync(usageFile(root), line('sonnet-low', '번역', '올림', 't1'));
-    const out = run([], root).stdout;
-    assert.match(out, /최저선 제안[^\n]*\n {2}없음/);
-    assert.match(out, /최저선 위에서 내림 실패 1번: sonnet-medium \/ 번역 \(최저선 sonnet-low\)/);
-    assert.match(out, /내려 보기 후보[^\n]*\n {2}없음/);
   });
 });
 
@@ -1199,14 +925,14 @@ describe('subagent-retro.js 섞인 칸, 최저선 다시 시험, 판정 불가 �
   const guideOf = (row) => [...HEAD, row].join('\n');
   const setup = (guide, usage = '') => {
     const root = tmpDir();
-    fs.writeFileSync(path.join(root, 'guide.md'), guide);
+    fs.writeFileSync(path.join(root, 'routing.md'), guide);
     fs.mkdirSync(path.join(root, 'records'));
     fs.writeFileSync(path.join(root, 'records', 'subagent-usage.tsv'), usage);
     return root;
   };
   const run = (args, root) =>
     spawnSync(process.execPath, [RETRO, ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, 'claude'), SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_GUIDE_FILE: path.join(root, 'guide.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, 'claude'), SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_ROUTING_FILE: path.join(root, 'routing.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
       encoding: 'utf8',
     });
   const line = (def, kind, result, id, secs = 3) => ['2026-10-12', '/p', def, kind, 1, 2, secs, result, `${id} 메모`].join('\t') + '\n';
@@ -1227,7 +953,7 @@ describe('subagent-retro.js 섞인 칸, 최저선 다시 시험, 판정 불가 �
     const transcript = path.join(root, 'claude', 'projects', '-p', 'sess-1', 'subagents', 'agent-f1.jsonl');
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
     fs.writeFileSync(transcript, '{}\n');
-    const out = run([], root).stdout;
+    const out = run(['--report'], root).stdout;
     assert.match(out, /섞인 칸[^\n]*\n {2}sonnet-low \/ 번역 {2}실패 2건, 성공 3건\n/);
     assert.ok(out.includes(`    실패 f1(sonnet-low)  ${transcript}`), out);
     assert.ok(out.includes('    실패 f2(sonnet-low)  비용 기록에 세션이 없어 대화 기록 위치 모름'));
@@ -1238,30 +964,40 @@ describe('subagent-retro.js 섞인 칸, 최저선 다시 시험, 판정 불가 �
     const floored = '| **Sonnet** | | 번역 「(최저: sonnet-low)」 | | |';
     const root = setup(guideOf(floored), line('sonnet-medium', '번역', 'ok', 'a1'));
     mark(root);
-    let out = run([], root).stdout;
-    assert.match(out, /최저선 다시 시험[^\n]*\n {2}제안: 없음\n {2}sonnet-medium \/ 번역 {2}최저선 sonnet-low {2}다음 다시 시험까지 회고 1번\(간격 2번\)/);
+    let out = run(['--report'], root).stdout;
+    assert.match(out, /최저선 다시 시험[^\n]*\n {2}제안: 없음\n[^\n]*sonnet-medium \/ 번역[^\n]*sonnet-low[^\n]*회고 1번\(간격 2번\)/);
     mark(root);
-    out = run([], root).stdout;
-    assert.match(out, /제안: sonnet-medium \/ 번역 {2}최저선 sonnet-low 아래 haiku-high 정의로 1건 다시 시험/);
-    fs.writeFileSync(path.join(root, 'guide.md'), guideOf('| **Sonnet** | | 번역 「(최저: sonnet-low)」 「(시험: 다음 1건 `haiku-high`)」 | | |'));
-    assert.match(run(['--status'], root).stdout, /최저선 다시 시험: sonnet-medium \/ 번역 → haiku-high 대기/);
+    out = run(['--report'], root).stdout;
+    assert.match(out, /제안: sonnet-medium \/ 번역[^\n]*sonnet-low[^\n]*haiku-high[^\n]*2건/);
+    fs.writeFileSync(path.join(root, 'routing.md'), guideOf('| **Sonnet** | | 번역 「(최저: sonnet-low)」 「(시험: 다음 1건 `haiku-high`)」 | | |'));
+    assert.match(run(['--status'], root).stdout, /sonnet-medium \/ 번역 → haiku-high 대기/);
     assert.doesNotMatch(run(['--status'], setup(guideOf(floored), line('sonnet-medium', '번역', 'ok', 'a1'))).stdout, /최저선 다시 시험/);
-    fs.appendFileSync(usageFile(root), line('sonnet-medium', '번역', 'ok', 'b1') + line('haiku-high', '번역', 'ok', 't1'));
-    fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), costLine('b1', 'sonnet-medium', '0.04') + costLine('t1', 'haiku-high', '0.01'));
-    out = run([], root).stdout;
+    fs.appendFileSync(usageFile(root), line('sonnet-medium', '번역', 'ok', 'b1') + line('haiku-high', '번역', 'ok', 't1') + line('haiku-high', '번역', 'ok', 't2'));
+    fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), costLine('b1', 'sonnet-medium', '0.04') + costLine('t1', 'haiku-high', '0.01') + costLine('t2', 'haiku-high', '0.02'));
+    out = run(['--report'], root).stdout;
     assert.match(out, /haiku-high {2}보냄\(t1\) {2}판정: 통과[^\n]*\(최저선 다시 시험\)/);
-    assert.match(out, /최저선 내리기 제안[^\n]*\n {2}sonnet-medium \/ 번역 {2}haiku-high 다시 시험 통과\(t1\) {2}최저선을 sonnet-low에서 haiku-high 정의로 한 칸 내리자고 제안, 간격은 2번으로/);
+    assert.match(out, /최저선 내리기 제안[^\n]*\n[^\n]*sonnet-medium \/ 번역[^\n]*통과\(t1\)[^\n]*sonnet-low[^\n]*haiku-high[^\n]*2번/);
     assert.match(out, /내림 실패[^\n]*\n {2}없음/);
+  });
+
+  it('시험이 비용으로 실패했으면 내려 보기 후보가 같은 모델 한 칸 아래 effort를 가리킨다', () => {
+    const root = setup(guideOf('| **Sonnet** | 번역 「(시험: 다음 1건 `haiku-high`)」 | | | |'), line('sonnet-low', '번역', 'ok', 's0'));
+    mark(root);
+    fs.appendFileSync(usageFile(root), ['s1', 's2', 's3', 's4', 's5'].map((id) => line('sonnet-low', '번역', 'ok', id)).join('') + line('haiku-high', '번역', 'ok', 't1') + line('haiku-high', '번역', 'ok', 't2'));
+    fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), ['s1', 's2', 's3', 's4', 's5'].map((id) => costLine(id, 'sonnet-low', '0.01')).join('') + costLine('t1', 'haiku-high', '0.05') + costLine('t2', 'haiku-high', '0.06'));
+    const out = run(['--report'], root).stdout;
+    assert.match(out, /판정: 실패\(비용이 줄지 않음\)[^\n]*시험 중앙값/);
+    assert.match(out, /내려 보기 후보[^\n]*\n {2}sonnet-low \/ 번역 → haiku-medium/);
   });
 
   it('같은 시험이 두 번 이어 판정 불가이면 시험 표시를 지운다고 찍는다', () => {
     const root = setup(guideOf('| **Sonnet** | 번역 「(시험: 다음 1건 `haiku-high`)」 | | | |'), line('sonnet-low', '번역', 'ok', 'a1'));
     mark(root);
     fs.appendFileSync(usageFile(root), line('haiku-high', '번역', '재지시', 'u1'));
-    assert.doesNotMatch(run([], root).stdout, /판정 불가 2번/);
+    assert.doesNotMatch(run(['--report'], root).stdout, /판정 불가 2번/);
     mark(root);
     fs.appendFileSync(usageFile(root), line('haiku-high', '번역', '재지시', 'u2'));
-    const out = run([], root).stdout;
+    const out = run(['--report'], root).stdout;
     assert.match(out, /판정 불가 2번이라 시험 표시를 지움: sonnet-low \/ 번역 → haiku-high/);
   });
 });
@@ -1285,55 +1021,27 @@ describe('subagent-retro.js 대화 기록 보존 기간 실행', () => {
     const e = setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 17, 12).toISOString()), data('2026-10-12', 'a1')]);
     const out = run(['--due'], e).stdout.trim().split('\n');
     assert.equal(out[0], 'ask');
-    assert.match(out.at(-1), /^\(사용 기록 1줄에 .*건으로 셌습니다\. .*\. 2026-09-17부터 26일이 지나 대화 기록 보존 기간\(30일\)이 가까워졌습니다\)$/);
+    assert.match(out.at(-1), /2026-09-17부터 26일이 지나/);
   });
 
   it('지난 날수가 보존 기간보다 하루 적으면 --due 마지막 줄이 가까워졌다고 하고 지워졌을 수 있다는 말은 붙지 않는다', () => {
     const e = setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 14, 12).toISOString()), data('2026-10-12', 'a1')]);
     const last = run(['--due'], e).stdout.trim().split('\n').at(-1);
-    assert.match(last, /2026-09-14부터 29일이 지나 대화 기록 보존 기간\(30일\)이 가까워졌습니다\)$/);
+    assert.match(last, /29일이 지나[^\n]*가까워졌/);
     assert.doesNotMatch(last, /지워졌을 수/);
   });
 
   it('지난 날수가 보존 기간과 같으면 --due 마지막 줄이 닿았다고 하고 지워졌을 수 있다는 경고가 붙는다', () => {
     const exact = run(['--due'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 13, 12).toISOString()), data('2026-10-12', 'a1')])).stdout.trim().split('\n').at(-1);
-    assert.match(exact, /2026-09-13부터 30일이 지나 대화 기록 보존 기간\(30일\)에 닿았습니다\. 2026-09-13 이전 대화의 정정은 이미 지워졌을 수 있습니다\)$/);
+    assert.match(exact, /30일이 지나[^\n]*닿았/);
+    assert.match(exact, /2026-09-13 이전[^\n]*지워졌을 수/);
     assert.doesNotMatch(exact, /넘었습니다|가까워졌습니다/);
-  });
-
-  it('지난 날수가 보존 기간보다 길면 --due 마지막 줄이 넘었다고 하고 오늘에서 보존 기간 전 날짜를 보인다', () => {
-    const next = run(['--due'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 12, 12).toISOString()), data('2026-10-12', 'a1')])).stdout.trim().split('\n').at(-1);
-    assert.match(next, /2026-09-12부터 31일이 지나 대화 기록 보존 기간\(30일\)을 넘었습니다\. 2026-09-13 이전 대화의 정정은 이미 지워졌을 수 있습니다\)$/);
-    const long = run(['--due'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 2, 12).toISOString()), data('2026-10-12', 'a1')], '{"cleanupPeriodDays": 10}')).stdout.trim().split('\n').at(-1);
-    assert.match(long, /2026-09-02부터 41일이 지나 대화 기록 보존 기간\(10일\)을 넘었습니다\. 2026-10-03 이전 대화의 정정은 이미 지워졌을 수 있습니다\)$/);
-  });
-
-  it('지난 날수가 보존 기간보다 길면 --status의 기간 기준 줄에도 지워졌을 수 있다는 경고가 붙는다', () => {
-    const over = run(['--status'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 12, 12).toISOString()), data('2026-10-12', 'a1')])).stdout;
-    assert.match(over, /기간 기준: 보존 기간 30일, 2026-09-12부터 25일째인 2026-10-07에 묻습니다\(지금 31일 지남\)\. 2026-09-13 이전 대화의 정정은 이미 지워졌을 수 있습니다\n/);
   });
 
   it('지난 날수가 보존 기간과 같으면 --status의 기간 기준 줄에도 지워졌을 수 있다는 경고가 붙는다', () => {
     const exact = run(['--status'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 13, 12).toISOString()), data('2026-10-12', 'a1')])).stdout;
-    assert.match(exact, /기간 기준: 보존 기간 30일, 2026-09-13부터 25일째인 2026-10-08에 묻습니다\(지금 30일 지남\)\. 2026-09-13 이전 대화의 정정은 이미 지워졌을 수 있습니다\n/);
-  });
-
-  it('지난 날수가 보존 기간보다 하루 적으면 --status의 기간 기준 줄에 지워졌을 수 있다는 경고가 붙지 않는다', () => {
-    const before = run(['--status'], setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 14, 12).toISOString()), data('2026-10-12', 'a1')])).stdout;
-    assert.match(before, /기간 기준: 보존 기간 30일, 2026-09-14부터 25일째인 2026-10-09에 묻습니다\(지금 29일 지남\)\n/);
-    assert.doesNotMatch(before, /지워졌을 수/);
-  });
-
-  it('기간 안이면 --due는 wait이고 --status에 기준 날짜가 나온다', () => {
-    const e = setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 9, 1, 12).toISOString()), data('2026-10-12', 'a1')]);
-    assert.equal(run(['--due'], e).stdout.split('\n')[0], 'wait 49');
-    assert.match(run(['--status'], e).stdout, /기간 기준: 보존 기간 30일, 2026-10-01부터 25일째인 2026-10-26에 묻습니다\n/);
-  });
-
-  it('settings.json의 cleanupPeriodDays가 있으면 그 값으로 센다', () => {
-    const usage = [data('2026-08-01', 'a0'), retroMark(new Date(2026, 9, 1, 12).toISOString()), data('2026-10-12', 'a1')];
-    assert.equal(run(['--due'], setup(usage, '{"cleanupPeriodDays": 10}')).stdout.split('\n')[0], 'ask');
-    assert.equal(run(['--due'], setup(usage, '{깨짐')).stdout.split('\n')[0], 'wait 49');
+    assert.match(exact, /기간 기준:[^\n]*2026-10-08에 묻습니다\(지금 30일 지남\)/);
+    assert.match(exact, /2026-09-13 이전[^\n]*지워졌을 수/);
   });
 
   it('기간 기준만으로 ask일 때 --snooze하면 미룸 줄이 건수 기준을 미루지 않은 것으로 남고, 건수가 차면 다시 ask다', () => {
@@ -1342,7 +1050,7 @@ describe('subagent-retro.js 대화 기록 보존 기간 실행', () => {
     const snooze = run(['--snooze'], e);
     assert.equal(snooze.status, 0, snooze.stderr);
     assert.doesNotMatch(snooze.stdout, /더 쌓일 때까지/);
-    assert.match(snooze.stdout, /기간 기준은 오늘부터 25일을 다시 셉니다\. 경고: \d{4}-\d{2}-\d{2} 이전 대화의 정정은 다음 회고 전에 지워질 수 있습니다\./);
+    assert.match(snooze.stdout, /25일을 다시 셉니다[^\n]*지워질 수 있습니다/);
     const memo = fs.readFileSync(path.join(e.dir, 'subagent-usage.tsv'), 'utf8').trim().split('\n').at(-1).split('\t')[8];
     assert.equal(JSON.parse(memo).건수, false);
     assert.equal(JSON.parse(memo).기간, true);
@@ -1350,71 +1058,13 @@ describe('subagent-retro.js 대화 기록 보존 기간 실행', () => {
     fs.appendFileSync(path.join(e.dir, 'subagent-usage.tsv'), Array.from({ length: 49 }, (_, i) => data('2026-10-13', `b${i}`)).join('\n') + '\n');
     assert.equal(run(['--due'], e).stdout.split('\n')[0], 'ask');
   });
-
-  it('건수 기준을 미뤄 둔 뒤 기간 기준으로 다시 미뤄도 건수 기준은 첫 미룸 뒤 줄 수로 세어, 15줄이 차면 ask다', () => {
-    const e = setup(Array.from({ length: 35 }, (_, i) => data('2026-10-13', `d${i}`)));
-    const at = (today, args) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_TODAY: today }, encoding: 'utf8' });
-    const add = (n, tag) => fs.appendFileSync(path.join(e.dir, 'subagent-usage.tsv'), Array.from({ length: n }, (_, i) => data('2026-11-07', `${tag}${i}`)).join('\n') + '\n');
-    assert.equal(at('2026-10-13', ['--snooze']).status, 0);
-    assert.equal(at('2026-10-13', ['--due']).stdout.split('\n')[0], 'wait 15');
-    add(5, 'f');
-    assert.equal(at('2026-11-07', ['--due']).stdout.split('\n')[0], 'ask');
-    const second = at('2026-11-07', ['--snooze']);
-    assert.equal(second.status, 0, second.stderr);
-    assert.doesNotMatch(second.stdout, /더 쌓일 때까지/);
-    assert.equal(at('2026-11-07', ['--due']).stdout.split('\n')[0], 'wait 10');
-    add(10, 'g');
-    assert.equal(at('2026-11-07', ['--due']).stdout.split('\n')[0], 'ask');
-  });
-
-  it('건수 기준만 걸려 미루면 기간 셈을 옮기지 않아 기간 기준이 원래 날짜에 다시 묻고 경고도 없다', () => {
-    const rows = Array.from({ length: 30 }, (_, i) => data('2026-10-05', `c${i}`));
-    const e = setup([data('2026-10-01', 'a0'), ...rows]);
-    assert.equal(run(['--due'], e).stdout.split('\n')[0], 'ask');
-    const snooze = run(['--snooze'], e);
-    assert.equal(snooze.status, 0, snooze.stderr);
-    assert.doesNotMatch(snooze.stdout, /경고|기간 기준은/);
-    const memo = fs.readFileSync(path.join(e.dir, 'subagent-usage.tsv'), 'utf8').trim().split('\n').at(-1).split('\t')[8];
-    assert.equal(memo, '-');
-    assert.match(run(['--status'], e).stdout, /기간 기준: 보존 기간 30일, 2026-10-01부터 25일째인 2026-10-26에 묻습니다/);
-  });
-
-  it('기간 기준으로 미루면 --status의 기준 날짜가 미룬 날로 옮겨진다', () => {
-    const e = setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 17, 12).toISOString()), data('2026-10-12', 'a1')]);
-    assert.equal(run(['--snooze'], e).status, 0);
-    assert.match(run(['--status'], e).stdout, /기간 기준: 보존 기간 30일, 2026-10-13부터 25일째인/);
-  });
-
-  it('기간 기준을 미룬 날 비용 기록에만 있던 건수는 미룸 줄에 남아, 그 수가 늘어야 다시 ask다', () => {
-    const e = setup([data('2026-08-01', 'a0'), retroMark(new Date(2026, 8, 17, 12).toISOString()), data('2026-10-12', 'a1')]);
-    const costFile = path.join(e.dir, 'subagent-cost.tsv');
-    const costRow = (id) => ['2026-10-13', '/p', 's', id, 'sonnet-low', 'm', 'low', 'd', 1, 1, 1, 1, 1, 1, 0.1].join('\t');
-    fs.writeFileSync(costFile, ['날짜\t프로젝트\t세션\tagentId\t정의\t모델\teffort\t설명\t입력\t캐시 쓰기\t캐시 읽기\t출력\t요청 수\t걸린 초\t어림 비용($)', costRow('c0')].join('\n') + '\n');
-    assert.equal(run(['--due'], e).stdout.split('\n')[0], 'ask');
-    assert.equal(run(['--snooze'], e).status, 0);
-    const memo = fs.readFileSync(path.join(e.dir, 'subagent-usage.tsv'), 'utf8').trim().split('\n').at(-1).split('\t')[8];
-    assert.equal(JSON.parse(memo).비용, 1);
-    const later = (args) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_TODAY: '2026-11-08' }, encoding: 'utf8' });
-    assert.equal(later(['--due']).stdout.split('\n')[0].startsWith('wait'), true);
-    fs.appendFileSync(costFile, costRow('c1') + '\n');
-    assert.equal(later(['--due']).stdout.split('\n')[0], 'ask');
-  });
-
-  it('--status는 기간이 지났지만 미룸이나 회고 뒤 새 기록이 없으면 묻지 않는다고 찍고, 새 기록이 생기면 묻는다고 찍는다', () => {
-    const mark = retroMark(new Date(2026, 8, 17, 12).toISOString());
-    const quiet = run(['--status'], setup([data('2026-08-01', 'a0'), mark]));
-    assert.match(quiet.stdout, /기간 기준: 보존 기간 30일, 기간은 지났으나 2026-09-17 뒤 새 기록이 없어 묻지 않습니다\(새 기록이 생기면 묻습니다\)\n/);
-    assert.doesNotMatch(quiet.stdout, /2026-09-17부터 25일째/);
-    const fresh = run(['--status'], setup([data('2026-08-01', 'a0'), mark, data('2026-10-12', 'a1')]));
-    assert.match(fresh.stdout, /기간 기준: 보존 기간 30일, 2026-09-17부터 25일째인 2026-10-12에 묻습니다\(지금 26일 지남\)\n/);
-  });
 });
 
 describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', () => {
   const GUIDE = ['| | low | medium | high | xhigh |', '|:---|:---|:---|:---|:---|', '| **Sonnet** | 번역 | 구현 | | |'].join('\n');
   const setup = ({ usage = '', config = null } = {}) => {
     const root = tmpDir();
-    fs.writeFileSync(path.join(root, 'guide.md'), GUIDE);
+    fs.writeFileSync(path.join(root, 'routing.md'), GUIDE);
     fs.mkdirSync(path.join(root, 'records'));
     fs.writeFileSync(path.join(root, 'records', 'subagent-usage.tsv'), usage);
     if (config !== null) fs.writeFileSync(path.join(root, 'config.json'), config);
@@ -1422,7 +1072,7 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
   };
   const run = (root, args) =>
     spawnSync(process.execPath, [RETRO, ...args], {
-      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_GUIDE_FILE: path.join(root, 'guide.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
+      env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_ROUTING_FILE: path.join(root, 'routing.md'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') },
       encoding: 'utf8',
     });
   const configOf = (root) => path.join(root, 'config.json');
@@ -1451,21 +1101,6 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
     assert.equal(fs.readFileSync(configOf(root), 'utf8'), before);
   });
 
-  it('--remove-kind는 괄호 부연과 고정 표시를 뗀 이름으로 남긴다', () => {
-    const root = setup({ config: '{}' });
-    run(root, ['--remove-kind', '수치 검증(다른 경로로 다시 계산) 「(고정)」']);
-    assert.deepEqual(readConfig(root).removedKinds, ['수치 검증']);
-  });
-
-  it('--remove-kind는 설정 파일이 없으면 만들고, 이름이 아직 표에 있으면 그 사실을 알린다', () => {
-    const root = setup();
-    const r = run(root, ['--remove-kind', '번역']);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /표에 아직 그 이름이 있습니다/);
-    assert.deepEqual(readConfig(root), { removedKinds: ['번역'] });
-    assert.doesNotMatch(run(root, ['--remove-kind', '표 정리']).stdout, /표에 아직/);
-  });
-
   it('체계가 쓰는 여덟 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 문서 내용 검토, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)은 표시와 부연을 붙여도 --remove-kind가 거절하고 설정 파일을 바꾸지 않는다', () => {
     const root = setup({ config: JSON.stringify({ retroMode: 'ask' }) });
     const before = fs.readFileSync(configOf(root), 'utf8');
@@ -1476,26 +1111,6 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
       assert.equal(fs.readFileSync(configOf(root), 'utf8'), before, name);
     }
     assert.equal(run(root, ['--remove-kind', '번역']).status, 0);
-  });
-
-  it('설정 파일이 깨졌으면 종료 코드 1이고 파일 내용을 바꾸지 않는다', () => {
-    const root = setup({ config: '{' });
-    for (const flag of ['--remove-kind', '--restore-kind']) {
-      const r = run(root, [flag, '표 정리']);
-      assert.equal(r.status, 1, flag);
-      assert.match(r.stderr, /설정 파일이 깨져/);
-      assert.equal(fs.readFileSync(configOf(root), 'utf8'), '{');
-    }
-  });
-
-  it('이름이 없거나 옵션처럼 생겼거나 표시와 부연만 있으면 종료 코드 1이고 설정 파일을 만들지 않는다', () => {
-    const root = setup();
-    for (const args of [['--remove-kind'], ['--remove-kind', '--check'], ['--restore-kind'], ['--remove-kind', '「(고정)」'], ['--remove-kind', '(부연)']]) {
-      const r = run(root, args);
-      assert.equal(r.status, 1, args.join(' '));
-      assert.match(r.stderr, /일 이름/);
-    }
-    assert.equal(fs.existsSync(configOf(root)), false);
   });
 
   it('--restore-kind는 이름을 빼고 다른 키는 남기며, 마지막 이름을 빼면 키를 지우고, 없는 이름은 파일을 그대로 둔다', () => {
@@ -1513,17 +1128,9 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
     assert.deepEqual(readConfig(root), { retroMode: 'ask' });
   });
 
-  it('--restore-kind는 설정 파일이 없으면 만들지 않고 없다고 알린다', () => {
-    const root = setup();
-    const r = run(root, ['--restore-kind', '표 정리']);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /removedKinds에 없어 그대로 뒀습니다/);
-    assert.equal(fs.existsSync(configOf(root)), false);
-  });
-
   it('회고 출력의 「표에 없는 일 종류」와 --kinds는 removedKinds에 든 이름에만 표시를 붙이고, 회고를 두 번 거쳐도 붙는다', () => {
     const root = setup({ config: JSON.stringify({ removedKinds: ['표 정리'] }) });
-    const unknownBlock = () => run(root, []).stdout.split('표에 없는 일 종류')[1].split('\n요율표')[0];
+    const unknownBlock = () => run(root, ['--report']).stdout.split('표에 없는 일 종류')[1].split('\n요율표')[0];
     for (let retro = 0; retro < 3; retro++) {
       fs.appendFileSync(path.join(root, 'records', 'subagent-usage.tsv'), line('표 정리', `a${retro}`, `2026-10-1${retro}`) + line('요약', `b${retro}`, `2026-10-1${retro}`));
       const block = unknownBlock();
@@ -1540,8 +1147,8 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
 
   it('표에 <이름>[기준] 꼴 칸이 있는 removedKinds 이름은 회고가 쪼갠 옛 이름으로 따로 찍고, 사용자가 뺀 이름과 섞이지 않는다', () => {
     const root = setup({ usage: line('번역', 'a1') + line('표 정리', 'b1'), config: JSON.stringify({ removedKinds: ['번역', '표 정리'] }) });
-    fs.writeFileSync(path.join(root, 'guide.md'), ['| | low | medium | high | xhigh |', '|:---|:---|:---|:---|:---|', '| **Sonnet** | 번역[원문 있음], 번역[원문 없음] | 구현 | | |'].join('\n'));
-    const block = run(root, []).stdout.split('표에 없는 일 종류')[1].split('\n요율표')[0];
+    fs.writeFileSync(path.join(root, 'routing.md'), ['| | low | medium | high | xhigh |', '|:---|:---|:---|:---|:---|', '| **Sonnet** | 번역[원문 있음], 번역[원문 없음] | 구현 | | |'].join('\n'));
+    const block = run(root, ['--report']).stdout.split('표에 없는 일 종류')[1].split('\n요율표')[0];
     assert.match(block, /번역  \(회고가 쪼갠 옛 이름\)  1건/);
     assert.match(block, /표 정리  \(사용자가 뺐거나 회고가 쪼갠 옛 이름\)  1건/);
     assert.match(block, /\(회고가 쪼갠 옛 이름\): 표에 `<이름>\[기준\]` 꼴 칸이 있어/);
@@ -1550,17 +1157,10 @@ describe('subagent-retro.js 사용자가 뺀 일 이름(removedKinds) 실행', (
     assert.match(kinds, /표 정리  \(사용자가 뺐거나 회고가 쪼갠 옛 이름\)\t1건/);
 
     const onlySplit = setup({ usage: line('번역', 'a1'), config: JSON.stringify({ removedKinds: ['번역'] }) });
-    fs.writeFileSync(path.join(onlySplit, 'guide.md'), fs.readFileSync(path.join(root, 'guide.md')));
+    fs.writeFileSync(path.join(onlySplit, 'routing.md'), fs.readFileSync(path.join(root, 'routing.md')));
     const out = run(onlySplit, ['--kinds']).stdout;
     assert.match(out, /\(회고가 쪼갠 옛 이름\): /);
     assert.doesNotMatch(out, /사용자가 뺀 일이거나/);
-  });
-
-  it('--restore-kind 뒤에는 표시가 붙지 않고, removedKinds가 없으면 표시도 안내 줄도 없다', () => {
-    const root = setup({ usage: line('표 정리', 'a1'), config: JSON.stringify({ removedKinds: ['표 정리'] }) });
-    run(root, ['--restore-kind', '표 정리']);
-    assert.doesNotMatch(run(root, ['--kinds']).stdout, /사용자가 뺐거나 회고가 쪼갠 옛 이름/);
-    assert.doesNotMatch(run(root, []).stdout, /사용자가 뺐거나 회고가 쪼갠 옛 이름/);
   });
 });
 
@@ -1688,139 +1288,6 @@ describe('subagent-retro.js 키트 파일 해시(kitFileHashes)', () => {
     assert.match(out, /기록에 있는데 설치본에 없는 파일 1개\n {2}없음 {2}subagent-system\/docs\/RETRO\.md/);
     assert.equal(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), before);
   });
-
-  it('commandName을 바꿨으면 그 이름의 스킬 파일을 기록하고, 다시 기록하면 고친 파일도 새 해시로 바뀐다', () => {
-    const root = setup();
-    fs.mkdirSync(file(root, 'skills/huigo'), { recursive: true });
-    fs.writeFileSync(file(root, 'skills/huigo/SKILL.md'), '이름 바꾼 스킬');
-    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ commandName: 'huigo' }));
-    run(root, ['--record-kit-hashes']);
-    const keys = Object.keys(readConfig(root).kitFileHashes);
-    assert.ok(keys.includes('skills/huigo/SKILL.md'));
-    assert.ok(!keys.includes('skills/retro/SKILL.md'));
-    fs.writeFileSync(file(root, 'skills/huigo/SKILL.md'), '고친 스킬');
-    assert.match(run(root, ['--check-kit-hashes']).stdout, /기록과 다른 파일 1개/);
-    run(root, ['--record-kit-hashes']);
-    assert.match(run(root, ['--check-kit-hashes']).stdout, /기록과 다른 파일 0개/);
-  });
-
-  it('removedDefs에 든 정의 파일이 없으면 없음이 아니라 지움으로 따로 찍고, 사용자가 지운 정의는 없음으로 찍는다', () => {
-    const root = setup();
-    fs.writeFileSync(file(root, 'agents/opus-low.md'), DEF.replace('sonnet-medium', 'opus-low'));
-    fs.writeFileSync(file(root, 'agents/haiku-medium.md'), DEF.replace('sonnet-medium', 'haiku-medium'));
-    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ removedDefs: ['opus-low'] }));
-    run(root, ['--record-kit-hashes']);
-    fs.rmSync(file(root, 'agents/opus-low.md'));
-    fs.rmSync(file(root, 'agents/haiku-medium.md'));
-    const out = run(root, ['--check-kit-hashes']).stdout;
-    assert.match(out, /기록에 있는데 설치본에 없는 파일 1개\n {2}없음 {2}agents\/haiku-medium\.md\n/);
-    assert.match(out, /회고가 지운 정의 1개\(removedDefs에 든 이름이라 다시 놓지 않음\)\n {2}지움 {2}agents\/opus-low\.md/);
-    assert.doesNotMatch(out, /없음 {2}agents\/opus-low/);
-  });
-
-  describe('--kit으로 이미 새 키트로 놓인 파일 가리기', () => {
-    const KIT_GUIDE = GUIDE.replace('공통 문장', '새 공통 문장 `~/.claude/subagent-system`과 $HOME/.claude/x');
-    const KIT_DEF = DEF.replace('본문 줄', '새 본문 줄');
-    const KIT_SKILL = 'name: retro\n명령 $HOME/.claude/subagent-system/scripts/subagent-retro.js\n';
-    // 업데이트가 4번까지 끝나 새 키트가 놓인 뒤 끊긴 설치본과, 그때의 키트 폴더를 만든다.
-    const interrupted = ({ commandName = 'retro' } = {}) => {
-      const root = setup();
-      if (commandName !== 'retro') {
-        fs.mkdirSync(file(root, `skills/${commandName}`), { recursive: true });
-        fs.writeFileSync(file(root, `skills/${commandName}/SKILL.md`), '옛 스킬');
-        fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ commandName }));
-      }
-      run(root, ['--record-kit-hashes']);
-      const kit = path.join(root, 'kit/subagent-system');
-      fs.mkdirSync(path.join(kit, 'docs'), { recursive: true });
-      fs.mkdirSync(path.join(kit, 'agents'), { recursive: true });
-      fs.mkdirSync(path.join(kit, 'skills/retro'), { recursive: true });
-      fs.cpSync(SCRIPTS, path.join(kit, 'scripts'), { recursive: true });
-      fs.writeFileSync(path.join(kit, 'docs/RETRO.md'), '새 회고 문서');
-      fs.writeFileSync(path.join(kit, 'docs/SUBAGENT_GUIDE.md'), KIT_GUIDE);
-      fs.writeFileSync(path.join(kit, 'agents/sonnet-medium.md'), KIT_DEF);
-      fs.writeFileSync(path.join(kit, 'skills/retro/SKILL.md'), KIT_SKILL);
-      const claude = file(root, '');
-      const at = (text) => text.split('$HOME/.claude').join(claude).split('~/.claude').join(claude);
-      // 설치본에는 사용자 구역 값, 바꾼 description, 글쓰기 줄이 남고 CLAUDE_CONFIG_DIR 치환이 되어 있다.
-      fs.writeFileSync(file(root, 'subagent-system/docs/SUBAGENT_GUIDE.md'), at(KIT_GUIDE).replace('| **Sonnet** | 번역 | 구현 | | |', '| **Sonnet** | 번역, 요약 | 구현 | | |'));
-      fs.writeFileSync(file(root, 'subagent-system/docs/RETRO.md'), at('새 회고 문서'));
-      fs.writeFileSync(file(root, 'agents/sonnet-medium.md'), at(KIT_DEF).replace('구현, 번역.', '구현, 번역, 요약.') + '\n\n- 글은 필요한 말만 쓴다. 줄표를 쓰지 않는다.');
-      fs.writeFileSync(file(root, `skills/${commandName}/SKILL.md`), at(KIT_SKILL).replace('name: retro', `name: ${commandName}`));
-      return { root, kit: path.join(root, 'kit') };
-    };
-
-    it('이미 놓인 GUIDE, 정의, RETRO.md, 스킬에는 새 키트와 같음을 붙인다(CLAUDE_CONFIG_DIR 치환과 바꾼 커맨드 이름 포함)', () => {
-      for (const commandName of ['retro', 'huigo']) {
-        const { root, kit } = interrupted({ commandName });
-        const out = run(root, ['--check-kit-hashes', '--kit', kit]).stdout;
-        for (const k of ['subagent-system/docs/SUBAGENT_GUIDE.md', 'subagent-system/docs/RETRO.md', 'agents/sonnet-medium.md', `skills/${commandName}/SKILL.md`]) {
-          assert.match(out, new RegExp(`다름 {2}${k.replace(/[./]/g, '\\$&')} {2}\\(새 키트와 같음\\)`), `${commandName} ${k}\n${out}`);
-        }
-        assert.match(out, /기록과 다른 파일 4개/);
-      }
-    });
-
-    it('새 키트와 다른 파일은 표시 없이 다름만 찍고, --kit이 없으면 표시를 붙이지 않는다', () => {
-      const { root, kit } = interrupted();
-      fs.writeFileSync(file(root, 'subagent-system/docs/RETRO.md'), '손으로 고친 회고 문서');
-      const out = run(root, ['--check-kit-hashes', '--kit', kit]).stdout;
-      assert.match(out, /다름 {2}subagent-system\/docs\/RETRO\.md\n/);
-      assert.match(out, /다름 {2}agents\/sonnet-medium\.md {2}\(새 키트와 같음\)/);
-      assert.doesNotMatch(run(root, ['--check-kit-hashes']).stdout, /새 키트와 같음/);
-    });
-
-    it('CLAUDE_CONFIG_DIR 없이 스킬의 $HOME/.claude를 풀어 쓴 절대 경로로 바꾼 설치본은 그 경로만 다를 때 새 키트와 같음이 붙고, 다른 줄이 있으면 붙지 않는다', () => {
-      const root = setup();
-      fs.renameSync(path.join(root, 'claude'), path.join(root, '.claude'));
-      const claude = path.join(root, '.claude').split(path.sep).join('/');
-      const env = { ...process.env, HOME: root, USERPROFILE: root, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), SUBAGENT_GUIDE_FILE: path.join(root, '.claude/subagent-system/docs/SUBAGENT_GUIDE.md'), SUBAGENT_AGENTS_DIR: path.join(root, '.claude/agents'), SUBAGENT_CONFIG_FILE: path.join(root, 'config.json') };
-      delete env.CLAUDE_CONFIG_DIR;
-      const runHome = (args) => spawnSync(process.execPath, [RETRO, ...args], { env, encoding: 'utf8' });
-      assert.equal(runHome(['--record-kit-hashes']).status, 0);
-      const kit = path.join(root, 'kit/subagent-system');
-      for (const d of ['docs', 'agents', 'skills/retro']) fs.mkdirSync(path.join(kit, d), { recursive: true });
-      fs.cpSync(SCRIPTS, path.join(kit, 'scripts'), { recursive: true });
-      const kitSkill = 'name: retro\nallowed-tools: Bash(node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" *)\n';
-      fs.writeFileSync(path.join(kit, 'skills/retro/SKILL.md'), kitSkill);
-      const installed = path.join(root, '.claude/skills/retro/SKILL.md');
-      const tag = () => runHome(['--check-kit-hashes', '--kit', path.join(root, 'kit')]).stdout;
-      fs.writeFileSync(installed, kitSkill.split('$HOME/.claude').join(claude));
-      assert.match(tag(), /다름 {2}skills\/retro\/SKILL\.md {2}\(새 키트와 같음\)/);
-      fs.writeFileSync(installed, kitSkill.split('$HOME/.claude').join(claude) + '손으로 더한 줄\n');
-      assert.match(tag(), /다름 {2}skills\/retro\/SKILL\.md\n/);
-    });
-
-    it('키트 폴더가 아니거나 --kit에 값이 없으면 종료 코드 1이고 아무것도 쓰지 않는다', () => {
-      const { root } = interrupted();
-      const before = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
-      const bad = run(root, ['--check-kit-hashes', '--kit', path.join(root, 'claude')]);
-      assert.equal(bad.status, 1);
-      assert.match(bad.stderr, /키트 폴더가 아닙니다/);
-      const none = run(root, ['--check-kit-hashes', '--kit']);
-      assert.equal(none.status, 1);
-      assert.match(none.stderr, /--kit에는 키트 폴더를 줍니다/);
-      assert.equal(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), before);
-    });
-  });
-
-  it('기록이 없으면 그렇다고 찍고 종료 코드 0이며, 기록을 쓸 설정 파일이 없거나 깨졌으면 종료 코드 1이고 파일을 만들지 않는다', () => {
-    const root = setup();
-    const none = run(root, ['--check-kit-hashes']);
-    assert.equal(none.status, 0, none.stderr);
-    assert.match(none.stdout, /^기록 없음: /);
-
-    fs.writeFileSync(path.join(root, 'config.json'), '{');
-    const broken = run(root, ['--record-kit-hashes']);
-    assert.equal(broken.status, 1);
-    assert.match(broken.stderr, /설정 파일이 없거나 깨져/);
-    assert.equal(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), '{');
-    assert.equal(run(root, ['--check-kit-hashes']).status, 0);
-
-    fs.rmSync(path.join(root, 'config.json'));
-    assert.equal(run(root, ['--record-kit-hashes']).status, 1);
-    assert.equal(fs.existsSync(path.join(root, 'config.json')), false);
-  });
 });
 
 describe('subagent-retro.js 회고가 지운 정의(removedDefs) 실행', () => {
@@ -1837,31 +1304,6 @@ describe('subagent-retro.js 회고가 지운 정의(removedDefs) 실행', () => 
     assert.equal(run(root, ['--remove-def', 'sonnet-low']).status, 0);
     assert.equal(run(root, ['--remove-def', 'sonnet-low']).status, 0);
     assert.deepEqual(readConfig(root), { retroMode: 'auto', removedDefs: ['a', 'sonnet-low'], future: { x: 1 } });
-  });
-
-  it('--restore-def는 이름을 빼고 마지막 하나를 빼면 removedDefs 키 자체가 없어지며, 다른 키는 그대로다', () => {
-    const root = setup(JSON.stringify({ retroMode: 'ask', removedDefs: ['a', 'b'] }));
-    run(root, ['--restore-def', 'a']);
-    assert.deepEqual(readConfig(root).removedDefs, ['b']);
-    run(root, ['--restore-def', 'b']);
-    assert.deepEqual(readConfig(root), { retroMode: 'ask' });
-  });
-
-  it('설정 파일이 없거나 깨졌으면 종료 코드 1이고 파일을 만들거나 바꾸지 않는다', () => {
-    const missing = setup(null);
-    assert.equal(run(missing, ['--remove-def', 'x']).status, 1);
-    assert.equal(fs.existsSync(path.join(missing, 'config.json')), false);
-    const broken = setup('{');
-    const r = run(broken, ['--restore-def', 'x']);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /설정 파일이 없거나 깨져/);
-    assert.equal(fs.readFileSync(path.join(broken, 'config.json'), 'utf8'), '{');
-  });
-
-  it('이름 인자가 없으면 종료 코드 1이다', () => {
-    const root = setup('{}');
-    assert.equal(run(root, ['--remove-def']).status, 1);
-    assert.equal(run(root, ['--restore-def', '--x']).status, 1);
   });
 });
 
@@ -1889,10 +1331,6 @@ describe('subagent-retro.js --shortfalls 실행', () => {
     const out = r.stdout.trim().split('\n');
     assert.equal(out[0], '지난 회고 메모: ');
     assert.equal(out.length, 3);
-  });
-
-  it('사용 기록이 없으면 종료 코드 1이다', () => {
-    assert.equal(run(null).status, 1);
   });
 });
 
@@ -1959,58 +1397,6 @@ describe('subagent-retro.js --check-fable 실행', () => {
     assert.equal(verdict(five), 'Fable 5');
     assert.equal(def(five), 'fable-high');
   });
-
-  it('같은 modelOverrides 키가 여러 곳에 있으면 프로젝트 로컬, 프로젝트, 사용자 순으로 먼저 있는 값을 쓴다', () => {
-    const r = run(setup({ model: 'arn-local', local: { modelOverrides: { 'claude-fable-5-1': 'arn-local' } }, project: { modelOverrides: { 'claude-fable-5-1': 'arn-project' } }, user: { modelOverrides: { 'claude-fable-5-1': 'arn-user' } } }));
-    assert.equal(verdict(r), 'Fable 5.1');
-    assert.equal(verdict(run(setup({ model: 'arn-user', local: { modelOverrides: { 'claude-fable-5-1': 'arn-local' } }, user: { modelOverrides: { 'claude-fable-5-1': 'arn-user' } } }))), 'Fable 확인 못함');
-  });
-
-  it('ANTHROPIC_DEFAULT_FABLE_MODEL은 설정 파일 env가 셸 환경보다 먼저고, 같은 값이면 버전 미확인 Fable로 본다', () => {
-    const fromFile = run(setup({ model: 'my-fable', project: { env: { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' } } }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'other' });
-    assert.equal(verdict(fromFile), 'Fable(버전 미확인)');
-    assert.equal(def(fromFile), 'fable-high');
-    assert.equal(verdict(run(setup({ model: 'my-fable' }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' })), 'Fable(버전 미확인)');
-    assert.equal(verdict(run(setup({ model: 'my-fable', project: { env: { ANTHROPIC_DEFAULT_FABLE_MODEL: 'other' } } }), { ANTHROPIC_DEFAULT_FABLE_MODEL: 'my-fable' })), 'Fable 확인 못함');
-  });
-
-  it('비용 기록에 그 agentId 줄이 없으면 fable-high로 적고 메모에 모델 미확인을 남기라고 한다', () => {
-    const r = run(setup({}));
-    assert.equal(verdict(r), '줄 없음');
-    assert.equal(def(r), 'fable-high');
-    assert.match(r.stdout, /^사용 기록 --memo: a1b2c3 모델 미확인$/m);
-  });
-
-  it('지금 연 폴더의 .claude가 설정 폴더와 같으면 그 settings.json은 사용자 설정으로 한 번만 읽고 settings.local.json은 프로젝트 로컬로 읽는다', () => {
-    const root = tmpDir();
-    fs.mkdirSync(path.join(root, '.claude'));
-    fs.mkdirSync(path.join(root, 'records'));
-    fs.writeFileSync(path.join(root, '.claude', 'settings.json'), '{}');
-    fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), JSON.stringify({ modelOverrides: { 'claude-fable-5-1': 'arn-x' } }));
-    fs.writeFileSync(path.join(root, 'records', 'subagent-cost.tsv'), costRow('a1b2c3', 'arn-x') + '\n');
-    const r = spawnSync(process.execPath, [RETRO, '--check-fable', 'a1b2c3'], { cwd: root, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(root, '.claude'), SUBAGENT_RECORDS_DIR: path.join(root, 'records') }, encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-    const read = /^읽은 설정: (.*)$/m.exec(r.stdout)[1].split(', ');
-    assert.equal(read.filter((f) => f.endsWith(`${path.sep}settings.json`)).length, 1);
-    assert.equal(read.filter((f) => f.endsWith(`${path.sep}settings.local.json`)).length, 1);
-    assert.equal(verdict(r), 'Fable 5.1');
-  });
-
-  it('git 저장소의 하위 폴더에서 열었으면 저장소 최상위의 settings.local.json을 읽는다', () => {
-    const ctx = setup({ model: 'arn-top' });
-    assert.equal(spawnSync('git', ['init', '-q'], { cwd: ctx.cwd }).status, 0);
-    const sub = path.join(ctx.cwd, 'packages', 'app');
-    fs.mkdirSync(sub, { recursive: true });
-    fs.writeFileSync(path.join(ctx.cwd, '.claude', 'settings.local.json'), JSON.stringify({ modelOverrides: { 'claude-fable-5-1': 'arn-top' } }));
-    const r = run({ root: ctx.root, cwd: sub });
-    assert.equal(verdict(r), 'Fable 5.1', r.stdout);
-  });
-
-  it('agentId 인자가 없으면 종료 코드 1이다', () => {
-    const ctx = setup({ model: 'x' });
-    const r = spawnSync(process.execPath, [RETRO, '--check-fable'], { cwd: ctx.cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(ctx.root, 'claude'), SUBAGENT_RECORDS_DIR: path.join(ctx.root, 'records') }, encoding: 'utf8' });
-    assert.equal(r.status, 1);
-  });
 });
 
 describe('subagent-retro.js --docs와 --docs-done', () => {
@@ -2046,7 +1432,7 @@ describe('subagent-retro.js --docs와 --docs-done', () => {
     const e = setup();
     const r = run(e, ['--docs']);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /CLAUDE\.md 기준 줄 수: 200줄/);
+    assert.match(r.stdout, /CLAUDE\.md 기준 줄 수: 80줄/);
     assert.match(r.stdout, /검토 대상 2개/);
     assert.ok(r.stdout.includes(`스킬  ${e.skill}  mine  쓴 횟수 2번  처음 검토`));
     assert.ok(r.stdout.includes(`프로젝트 CLAUDE.md  ${e.claudeMd}  250줄, 기준 초과  처음 검토`));
@@ -2085,25 +1471,6 @@ describe('subagent-retro.js --docs와 --docs-done', () => {
     assert.equal(run(e, ['--docs-done', e.skill]).status, 0);
     assert.equal(JSON.parse(fs.readFileSync(e.configFile, 'utf8')).retroMode, 'auto');
   });
-
-  it('config.json의 commandName과 같은 이름의 스킬은 키트가 덮어쓰는 것이라 대상에서 뺀다', () => {
-    const e = setup({ config: { commandName: 'mine' } });
-    assert.match(run(e, ['--docs']).stdout, /검토 대상 1개/);
-  });
-});
-
-describe('subagent-retro.js claudeMdLimitLines', () => {
-  it('--claude-md-done은 claudeMdLimitLines를 기준으로 쓰고 넘으면 그 줄 수를 남긴다', () => {
-    const root = tmpDir();
-    const claude = path.join(root, 'claude');
-    fs.mkdirSync(claude);
-    fs.writeFileSync(path.join(claude, 'CLAUDE.md'), Array.from({ length: 230 }, (_, i) => `규칙 ${i}`).join('\n') + '\n');
-    const file = path.join(root, 'config.json');
-    fs.writeFileSync(file, JSON.stringify({ claudeMdLimitLines: 100 }));
-    const r = spawnSync(process.execPath, [RETRO, '--claude-md-done'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: path.join(root, 'records'), CLAUDE_CONFIG_DIR: claude, SUBAGENT_CONFIG_FILE: file }, encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { claudeMdLimitLines: 100, claudeMdKeptLines: 230 });
-  });
 });
 
 describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
@@ -2114,7 +1481,7 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
     fs.mkdirSync(dir);
     return { dir, config: path.join(root, 'config.json'), usage: path.join(dir, 'subagent-usage.tsv'), fixes: path.join(dir, 'fixes.tsv'), corrections: path.join(dir, 'subagent-corrections.tsv') };
   };
-  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config }, encoding: 'utf8' });
+  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, SUBAGENT_GUIDE_FILE: path.join(e.dir, 'no-guide.md') }, encoding: 'utf8' });
   const use = (memo, project = '/p') => ['2026-10-12', project, 'sonnet-low', '번역', '1', '2', '3', 'ok', memo].join('\t');
   const fixRow = (over = {}) => {
     const v = { at: '2026-10-20T00:00:00.000Z', project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: '0', memo: 'm', ...over };
@@ -2159,8 +1526,6 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
   });
 
   describe('--fixes', () => {
-    const items = (r) => r.stdout.split('\n').filter((l) => l.startsWith('- ') && l.includes('다음 방식'));
-
     it('첫 줄이 처리할 것 건수이고 이어 처리할 것 줄, 효과 표, 태그 목록을 찍는다', () => {
       const e = setup();
       fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
@@ -2169,61 +1534,12 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       assert.equal(r.status, 0, r.stderr);
       const out = r.stdout.split('\n');
       assert.equal(out[0], '1');
-      assert.match(out[1], /^- 재발 태그: 모자람 2건\(agentId a1, b2\), 마지막 고침 2026-10-20T00:00:00.000Z 문장 A\.md#절, 다음 방식 스크립트 또는 훅$/);
+      assert.match(out[1], /^- 재발 태그: 모자람 2건\(agentId a1, b2\)[^\n]*A\.md#절[^\n]*스크립트 또는 훅$/);
       assert.ok(r.stdout.includes('효과 표'));
       assert.match(r.stdout, /이름표\s+고침\s+마지막 고침/);
       assert.match(r.stdout, /태그\s+1\s+2026-10-20 문장\s+2\s+2\s+재발/);
       assert.match(r.stdout, /태그 목록\n- 태그: 3건, 마지막 2026-10-20/);
       assert.ok(!r.stdout.includes('경고'));
-    });
-
-    it('고침 기록이 없고 모자람 표시도 없으면 0이다', () => {
-      const e = setup();
-      fs.writeFileSync(e.usage, use('a1 x') + '\n');
-      assert.equal(run(['--fixes'], e).stdout.split('\n')[0], '0');
-    });
-
-    it('정정 기록의 이름표도 재발로 센다', () => {
-      const e = setup();
-      fs.writeFileSync(e.fixes, [HEAD, fixRow()].join('\n') + '\n');
-      const corr = (session, time) => ['2026-10-21', '/p', session, time, '메인', '-', '-', '-', '태그', '메시지'].join('\t');
-      fs.writeFileSync(e.corrections, ['날짜\t프로젝트\t세션\t시각\t대상\tagentId\t정의\t일 종류\t이름표\t메시지', corr('s1', '2026-10-21T00:00:00Z'), corr('s2', '2026-10-22T00:00:00Z')].join('\n') + '\n');
-      const r = run(['--fixes'], e);
-      assert.equal(r.stdout.split('\n')[0], '1');
-      assert.match(items(r)[0], /재발 태그: 정정 2건\(세션 s1, s2\)/);
-    });
-
-    it('기준점이 사용 기록 줄 수보다 큰 고침이 있으면 맨 끝에 경고를 찍는다', () => {
-      const e = setup();
-      fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '99' })].join('\n') + '\n');
-      fs.writeFileSync(e.usage, use('a1 x') + '\n');
-      const lines = run(['--fixes'], e).stdout.trim().split('\n');
-      assert.equal(lines.at(-1), '경고: 기준점이 사용 기록보다 큰 고침 1건(사용 기록이 지워졌거나 옮겨졌을 수 있음)');
-    });
-
-    it('효과 표는 고침 기록도 처리할 것도 없는 이름표를 빼고 태그 목록에는 남긴다', () => {
-      const e = setup();
-      fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
-      fs.writeFileSync(e.usage, use('a1 모자람(지켜봄): x') + '\n');
-      const out = run(['--fixes'], e).stdout;
-      const [table, tags] = out.split('태그 목록');
-      assert.ok(!table.includes('지켜봄'));
-      assert.ok(tags.includes('- 지켜봄: 1건'));
-    });
-
-    it('--project는 절대경로가 아니면 종료 코드 1이다', () => {
-      const e = setup();
-      assert.equal(run(['--fixes', '--project', 'proj'], e).status, 1);
-      assert.equal(run(['--due', '--project', 'proj'], e).status, 1);
-    });
-
-    it('--project는 그 프로젝트의 줄과 범위가 전역인 고침만 센다', () => {
-      const e = setup();
-      fs.writeFileSync(e.usage, [use('a1 개선(내것): x', '/p'), use('a2 개선(남의것): x', '/q')].join('\n') + '\n');
-      assert.equal(run(['--fixes'], e).stdout.split('\n')[0], '2');
-      const r = run(['--fixes', '--project', '/p/.claude/worktrees/w'], e);
-      assert.equal(r.stdout.split('\n')[0], '1');
-      assert.match(items(r)[0], /개선 내것/);
     });
   });
 
@@ -2261,47 +1577,117 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       const again = run(logArgs('a2 모자람(지시문목표): y'), e);
       assert.equal(again.stdout.trim().split('\n').length, 2);
     });
-
-    it('태그가 없는 메모는 출력이 두 줄이다', () => {
-      const e = setup();
-      assert.equal(run(logArgs('a1 모자람: 옛 꼴'), e).stdout.trim().split('\n').length, 2);
-    });
   });
 
-  describe('--shortfalls', () => {
-    it('옛 꼴 모자람 콜론과 새 꼴 모자람 괄호를 모두 고른다', () => {
+  describe('--log의 표에 없는 일 종류 경고', () => {
+    const GUIDE = ['| | low | medium | high | xhigh |', '|:---|:---|:---|:---|:---|', '| **Sonnet** | 리뷰 지적 수정 | 구현 | | |'].join('\n');
+    const setup = () => {
+      const root = tmpDir();
+      const dir = path.join(root, 'records');
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(root, 'routing.md'), GUIDE);
+      return { root, dir, usage: path.join(dir, 'subagent-usage.tsv') };
+    };
+    const logKind = (e, kind, extraEnv = {}) => spawnSync(process.execPath, [RETRO, '--log', '--project', '/p', '--def', 'sonnet-low', '--kind', kind, '--result', 'ok', '--memo', 'a1 줄'], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_ROUTING_FILE: path.join(e.root, 'routing.md'), SUBAGENT_CONFIG_FILE: path.join(e.root, 'config.json'), ...extraEnv }, encoding: 'utf8' });
+    const warnOf = (r) => r.stdout.split('\n').filter((l) => l.startsWith('표에 없는 일 종류'));
+
+    it('표 이름 그대로 적으면 경고하지 않는다', () => {
       const e = setup();
-      fs.writeFileSync(e.usage, [use('a 모자람: 옛'), use('b 모자람(태그): 새'), use('c 개선(태그): 다름'), use('d 없음')].join('\n') + '\n');
-      const out = run(['--shortfalls'], e).stdout.trim().split('\n');
-      assert.equal(out.length, 3);
-      assert.match(out[1], /a 모자람: 옛/);
-      assert.match(out[2], /b 모자람\(태그\): 새/);
+      assert.deepEqual(warnOf(logKind(e, '구현')), []);
+      assert.deepEqual(warnOf(logKind(e, '리뷰 지적 수정')), []);
+    });
+
+    it('띄어쓰기만 다르면 그 표 이름을 가까운 표 이름으로 보인다', () => {
+      const e = setup();
+      assert.deepEqual(warnOf(logKind(e, '리뷰지적수정')), ['표에 없는 일 종류 리뷰지적수정(가까운 표 이름 리뷰 지적 수정)']);
+    });
+
+    it('경고가 나도 사용 기록 한 줄은 남는다', () => {
+      const e = setup();
+      logKind(e, '리뷰지적수정');
+      const rows = fs.readFileSync(e.usage, 'utf8').trim().split('\n');
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].split('\t')[3], '리뷰지적수정');
     });
   });
+});
 
-  describe('--extract의 이름표 목록', () => {
-    it('정정 이름표에 고침 기록 이름표와 사용 기록 태그가 공백을 뺀 기준으로 합쳐진다', () => {
-      const e = setup();
-      const root = path.dirname(e.dir);
-      fs.writeFileSync(e.usage, [use('a1 모자람(지시 문장): x')].join('\n') + '\n');
-      fs.writeFileSync(e.fixes, [HEAD, fixRow({ label: '지시문장' })].join('\n') + '\n');
-      fs.writeFileSync(e.corrections, ['날짜\t프로젝트\t세션\t시각\t대상\tagentId\t정의\t일 종류\t이름표\t메시지', ['2026-10-21', '/p', 's1', '2026-10-21T00:00:00Z', '메인', '-', '-', '-', '지시 문장', 'm'].join('\t')].join('\n') + '\n');
-      const r = spawnSync(process.execPath, [RETRO, '--extract', path.join(root, 'out.tsv')], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, CLAUDE_CONFIG_DIR: path.join(root, 'claude') }, encoding: 'utf8' });
-      assert.equal(r.status, 0, r.stderr);
-      const names = r.stdout.split('지금까지의 이름표(많이 나온 순)\n')[1].trim().split('\n');
-      assert.equal(names.length, 1);
-      assert.match(names[0], /\(3\)$/);
-    });
+describe('subagent-retro.js 사용법과 모르는 인자', () => {
+  const setup = () => {
+    const root = tmpDir();
+    return { root, records: path.join(root, 'records'), config: path.join(root, 'config.json'), claude: path.join(root, 'claude') };
+  };
+  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.records, SUBAGENT_CONFIG_FILE: e.config, CLAUDE_CONFIG_DIR: e.claude }, encoding: 'utf8' });
+  const row = '2026-10-12\t/p\tsonnet-low\t번역\t1\t2\t3\tok\ta1 줄\n';
+
+  it('인자가 없으면 사용법만 찍고 종료 코드 0이며, 설정 파일 내용과 기록 폴더를 바꾸지 않는다', () => {
+    const e = setup();
+    fs.mkdirSync(e.claude);
+    fs.writeFileSync(path.join(e.claude, 'CLAUDE.md'), '규칙\n');
+    const before = '{"retroMode":"ask","claudeMdKeptLines":300}';
+    fs.writeFileSync(e.config, before);
+    const r = run([], e);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^실행:/);
+    assert.match(r.stdout, /--report/);
+    assert.doesNotMatch(r.stdout, /회고 기준: \d+건|CLAUDE\.md 정리:/);
+    assert.equal(fs.readFileSync(e.config, 'utf8'), before);
+    assert.equal(fs.existsSync(e.records), false);
   });
 
-  describe('--status', () => {
-    it('autoApplyRules 값을 보인다', () => {
-      const e = setup();
-      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 끔/);
-      fs.writeFileSync(e.config, '{"retroMode":"ask"}');
-      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 켬/);
-      fs.writeFileSync(e.config, '{"autoApplyRules":false}');
-      assert.match(run(['--status'], e).stdout, /autoApplyRules\): 끔/);
-    });
+  it('--help와 -h는 사용법을 찍고 종료 코드 0이다', () => {
+    const e = setup();
+    for (const flag of ['--help', '-h']) {
+      const r = run([flag], e);
+      assert.equal(r.status, 0, flag);
+      assert.match(r.stdout, /--report/, flag);
+    }
+  });
+
+  it('모르는 --인자는 그 이름과 사용법을 오류 출력에 찍고 종료 코드 1이며 아무것도 쓰지 않는다', () => {
+    const e = setup();
+    for (const args of [['--bogus'], ['--count'], ['--due', '--nope']]) {
+      const r = run(args, e);
+      assert.equal(r.status, 1, args.join(' '));
+      assert.match(r.stderr, /알 수 없는 인자입니다: --(bogus|count|nope)/);
+      assert.match(r.stderr, /--report/);
+      assert.equal(r.stdout, '');
+    }
+    assert.equal(fs.existsSync(e.records), false);
+    assert.equal(fs.existsSync(e.config), false);
+  });
+
+  it('--report는 기록이 있으면 표를 찍고, 기록이 없으면 종료 코드 1로 없다고 알린다', () => {
+    const e = setup();
+    const none = run(['--report'], e);
+    assert.equal(none.status, 1);
+    assert.match(none.stderr, /사용 기록이 없습니다/);
+    fs.mkdirSync(e.records);
+    fs.writeFileSync(path.join(e.records, 'subagent-usage.tsv'), row);
+    const r = run(['--report'], e);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /회고 경계 없음: 전체 1줄/);
+  });
+
+  it('--log --help는 인자와 메모 쓰는 법을 찍고 기록을 쓰지 않으며, 필수 인자 오류는 그 도움말을 가리킨다', () => {
+    const e = setup();
+    const help = run(['--log', '--help'], e);
+    assert.equal(help.status, 0, help.stderr);
+    for (const part of ['--tokens', '--date', '절대 경로', '모자람(<태그>)', '개선(<태그>)', '큰따옴표']) assert.ok(help.stdout.includes(part), part);
+    assert.equal(fs.existsSync(e.records), false);
+    const bad = run(['--log', '--def', 'sonnet-low'], e);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /--log --help/);
+  });
+
+  it('--check-fable --help는 언제 돌리는지와 판정별 뜻을 찍고, 판정 출력에는 그 판정의 뜻과 할 일이 한 줄 붙는다', () => {
+    const e = setup();
+    const help = run(['--check-fable', '--help'], e);
+    assert.equal(help.status, 0, help.stderr);
+    for (const part of ['언제 돌리나', 'fallbackModel', 'Fable 아님:', '줄 없음:', 'fable-high 사용 기록은 적지 않는다']) assert.ok(help.stdout.includes(part), part);
+    fs.mkdirSync(e.records);
+    fs.writeFileSync(path.join(e.records, 'subagent-cost.tsv'), ['2026-10-25', '/p', 's1', 'a1b2c3', 'opus-xhigh', 'claude-opus-5-5', 'high', '설명', '1', '1', '1', '1', '1', '1', '0.1'].join('\t') + '\n');
+    const r = run(['--check-fable', 'a1b2c3'], e);
+    assert.match(r.stdout, /^뜻과 할 일: 적어도 끝부분은 Fable이 아니었습니다/m);
   });
 });

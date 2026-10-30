@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+/**
+ * git commit-msg 훅. 커밋 메시지에 `왜:` 줄과 `전제:` 줄이 없으면 커밋을 막는다.
+ *
+ * 무엇을: 메시지(주석 줄 제외)에 값이 있는 `왜:` 줄과 `전제:` 줄이 모두 있는지 본다. merge 커밋과 `fixup!`, `squash!`, `amend!`는 통과한다.
+ * 왜: 커밋에 근거가 빠지면 나중에 이 변경을 되돌리거나 고칠 때 무엇을 믿고 한 일인지 알 수 없다. 사람 기억에 맡기지 않고 기계로 막는다.
+ * 전제:
+ *  - `왜:` 줄은 변경의 까닭, `전제:` 줄은 그때 믿은 사실이나 상태(측정값, 기준 커밋, 결정)를 적는다.
+ *  - 통과하는 꼴은 첫 줄이 `Merge `로 시작하는 메시지와 `fixup! `, `squash! `, `amend! `로 시작하는 메시지다.
+ *  - node만 있으면 돈다(Windows Git Bash에서도 같다). 설치는 git `core.hooksPath`가 이 폴더를 가리키게 한다.
+ *  - 설치본(subagent-system/hooks/git)이면 subagent-system/config.json의 `commitCheck`가 `off`일 때 검사하지 않는다. 설정이 없거나 읽을 수 없으면 검사한다.
+ */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const EXEMPT = /^(Merge |fixup! |squash! |amend! )/;
+const REQUIRED = [
+  { label: '왜', re: /^[ \t]*왜[ \t]*[:：][ \t]*\S/m },
+  { label: '전제', re: /^[ \t]*전제[ \t]*[:：][ \t]*\S/m },
+];
+
+// git이 메시지에서 지우는 주석 줄과, 커밋 편집기의 가위선 아래(diff)를 뺀다.
+function bodyOf(raw) {
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (/^# -{10,} >8 -{10,}$/.test(line)) break;
+    if (line.startsWith('#')) continue;
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+// 통과면 null, 막을 때는 빠진 것을 알리는 말을 돌려준다.
+function check(raw) {
+  const body = bodyOf(raw);
+  if (body === '' || EXEMPT.test(body)) return null;
+  const missing = REQUIRED.filter((r) => !r.re.test(body)).map((r) => `${r.label}:`);
+  if (missing.length === 0) return null;
+  return [
+    `커밋을 막았습니다. 메시지에 ${missing.map((m) => `\`${m}\``).join(', ')} 줄이 없습니다.`,
+    '커밋 메시지에는 무엇을(제목), 왜(`왜:` 줄), 전제(`전제:` 줄)를 적습니다.',
+    '  왜: 이 변경을 하는 까닭',
+    '  전제: 그때 믿은 사실이나 상태(측정값, 기준 커밋, 결정)',
+    'merge, fixup!, squash!, amend! 커밋은 통과합니다.',
+  ].join('\n');
+}
+
+function checkOff() {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'config.json'), 'utf8'));
+    return config.commitCheck === 'off';
+  } catch {
+    return false;
+  }
+}
+
+function main() {
+  if (checkOff()) return;
+  const file = process.argv[2];
+  if (!file) {
+    process.stderr.write('commit-msg: 메시지 파일 경로 인자가 없습니다\n');
+    process.exit(1);
+  }
+  const problem = check(fs.readFileSync(file, 'utf8'));
+  if (problem) {
+    process.stderr.write(problem + '\n');
+    process.exit(1);
+  }
+}
+
+module.exports = { check };
+
+if (require.main === module) main();

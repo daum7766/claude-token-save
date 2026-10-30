@@ -2,6 +2,8 @@
 
 import { createHash } from 'node:crypto';
 import { localDate, projectRoot, baseModel, splitLines, LINE_BREAK, DEFAULT_RETENTION_DAYS } from './claudeProjectPaths.js';
+import { profileOf } from './kitProfile.js';
+import { DEFAULT_LIMIT_LINES, KEPT_MARGIN_LINES, claudeMdSettingsOf, claudeMdTarget } from './claudeMdTidy.js';
 
 const TRIVIAL_REPLIES = new Set([
   '좋아', '좋아요', '응', 'ㅇㅇ', 'ㅇㅋ', '오케이', 'ok', '진행해', '진행해줘', '진행', '계속', '계속해', '고마워', '네', '그래',
@@ -30,6 +32,12 @@ const defRank = (def) => {
   return i < 0 ? null : i;
 };
 export const lowerDef = (def) => (defRank(def) ? LADDER[defRank(def) - 1] : null);
+const modelOf = (def) => def.slice(0, def.lastIndexOf('-'));
+// 같은 모델에서 effort만 한 칸 낮춘 정의. 사다리는 모델 안에서 effort 순이라 바로 아래가 다른 모델이면(low) 없다.
+export const sameModelLower = (def) => {
+  const below = lowerDef(def);
+  return below && modelOf(below) === modelOf(def) ? below : null;
+};
 // fable-high는 올릴 때마다 사용자 확인을 받는 정의라 최저선으로 박아 둘 수 없다. 그래서 opus-xhigh 위는 없다.
 export const upperDef = (def) => {
   const up = defRank(def) !== null ? LADDER[defRank(def) + 1] : undefined;
@@ -44,6 +52,9 @@ export const MIXED_MIN_OKS = 3; // 문서의 「3건」과 함께 바꾼다.
 export const RETRIAL_START = 2; // 출력과 문서의 「2번, 4번, 8번」과 함께 바꾼다.
 // 시험 비용이 원래 칸 평균의 이 비율 안이면 비슷한 것으로 보고 걸린 시간으로 판정한다.
 export const COST_SIMILAR_RATIO = 0.1; // 문서의 「10%」와 함께 바꾼다.
+// 비용과 시간은 시험 1건이 아니라 보낸 순서대로 이 건수까지의 중앙값으로 판정한다. 이보다 적게 보냈으면 판정하지 않고 더 모은다(올림과 정정은 1건이어도 바로 실패).
+export const COST_TRIAL_MIN = 2; // 문서의 「2~3건」과 함께 바꾼다.
+export const COST_TRIAL_MAX = 3; // 문서의 「2~3건」과 함께 바꾼다.
 // 같은 시험이 이 횟수만큼 이어 판정 불가이면 표시를 지운다. 최저선 다시 시험은 실패로 보지 않고 간격만 다음 단계로 넘긴다.
 export const UNDECIDED_LIMIT = 2; // 출력과 문서의 「두 번」과 함께 바꾼다.
 const PREV_CHARS = 200;
@@ -97,8 +108,31 @@ function parseSnoozeMemo(memo) {
   }
 }
 
+// 훅(usage-autolog)이 적는 줄은 메모가 agentId 하나뿐이다. 훅이 description에서 표의 일 이름을 찾았으면 일 종류가 표 칸이라 메모가 `<agentId> 표에서 찾음`이고 보통 줄처럼 센다.
+// 못 찾았으면 일 종류 칸에 description이 들어 있어 표의 일 이름이 아니라 모르는 일 종류로 세면 안 되므로 auto로 표시해 남긴다.
+// 같은 agentId로 메인이 --log로 적은 줄(메모에 agentId 말고 다른 말이 있음)이 있으면 그쪽을 쓰고 훅 줄은 뺀다.
+// 메모가 agentId 하나뿐인 줄이 여럿이면 마지막 줄을 메인이 적은 줄로 본다.
+const HOOK_ROUTED_MEMO = '표에서 찾음';
+function dedupeAutoLines(rows) {
+  const bare = (r) => r.agentId !== null && r.memo.trim() === r.agentId;
+  const routed = (r) => r.agentId !== null && r.memo.trim() === `${r.agentId} ${HOOK_ROUTED_MEMO}`;
+  const byAgent = new Map();
+  for (const r of rows) if (r.agentId) byAgent.set(r.agentId, [...(byAgent.get(r.agentId) ?? []), r]);
+  const drop = new Set();
+  const auto = new Set();
+  for (const list of byAgent.values()) {
+    const hooks = list.filter((r) => bare(r) || routed(r));
+    if (!hooks.length) continue;
+    if (hooks.length < list.length) hooks.forEach((r) => drop.add(r));
+    else if (hooks.length === 1) {
+      if (bare(hooks[0])) auto.add(hooks[0]);
+    } else hooks.slice(0, -1).forEach((r) => drop.add(r));
+  }
+  return rows.filter((r) => !drop.has(r)).map((r) => (auto.has(r) ? { ...r, auto: true } : r));
+}
+
 export function parseUsage(text) {
-  const all = [];
+  const allRows = [];
   let boundaryCols = null;
   let boundaryLine = 0;
   let snooze = null;
@@ -129,7 +163,7 @@ export function parseUsage(text) {
       return;
     }
     const memo = cols.slice(8).join('\t');
-    all.push({
+    allRows.push({
       line,
       date: cols[0],
       project: cols[1],
@@ -141,6 +175,7 @@ export function parseUsage(text) {
       agentId: memo.split(/\s+/)[0] || null,
     });
   });
+  const all = dedupeAutoLines(allRows);
   if (!boundaryCols) return { all, target: all, boundary: null, snooze, periodSnooze, countSnooze, lineCount: lines.length, retroChanged, retros };
 
   const memo = boundaryCols.slice(8).join('\t');
@@ -241,10 +276,11 @@ export function summarize(target, costMap, agentCorrections, { all = target, sin
   for (const r of target) {
     let cell = cells.get(cellKey(r));
     if (!cell) {
-      cell = { def: r.def, kind: r.kind, count: 0, ok: 0, redo: 0, up: 0, corrections: 0, agents: tally.get(cellKey(r)).agents.size, upAgents: tally.get(cellKey(r)).upAgents.size, costSum: 0, paired: 0, costKnown: 0, costUnknown: 0, secSum: 0, secN: 0 };
+      cell = { def: r.def, kind: r.kind, count: 0, ok: 0, redo: 0, up: 0, corrections: 0, agents: tally.get(cellKey(r)).agents.size, upAgents: tally.get(cellKey(r)).upAgents.size, auto: 0, costSum: 0, paired: 0, costKnown: 0, costUnknown: 0, secSum: 0, secN: 0 };
       cells.set(cellKey(r), cell);
     }
     cell.count++;
+    if (r.auto) cell.auto++;
     if (r.result === 'ok') cell.ok++;
     else if (r.result === '재지시') cell.redo++;
     else if (r.result === '올림') cell.up++;
@@ -283,6 +319,7 @@ export function summarize(target, costMap, agentCorrections, { all = target, sin
     corrections: c.corrections,
     agents: c.agents,
     upAgents: c.upAgents,
+    auto: c.auto,
     costSum: c.costSum,
     paired: c.paired,
     costKnown: c.costKnown,
@@ -302,6 +339,7 @@ export function summarize(target, costMap, agentCorrections, { all = target, sin
     corrections: sum('corrections'),
     agents: sum('agents'),
     upAgents: sum('upAgents'),
+    auto: sum('auto'),
     costSum: sum('costSum'),
     paired: sum('paired'),
     costKnown: sum('costKnown'),
@@ -333,25 +371,33 @@ export function unknownModelSummary(costMap) {
 
 // pinnedCells는 표에서 「(고정)」이 붙은 칸의 cellKey 집합이다. 표를 못 읽어 비어 있어도 「무조건 Opus」 영역은 이름으로 뺀다.
 // floors는 일 종류마다 최저선 정의다. 바로 아래 칸이 최저선보다 아래이면 후보에서 뺀다.
-export function downCandidates(all, correctionsByAgent, pinnedCells = new Set(), floors = new Map()) {
+// costFails는 일 종류마다 비용 실패(costFailHistory)한 시험 [{cellDef, def}]이다. 사다리는 모델과 effort를 한 줄로 섞어 low의 바로 아래가 늘 다른 모델의 high라서,
+// 시험한 정의가 비용으로 실패했으면(원래 칸이 이 칸보다 같거나 비쌌던 때) 그 정의를 다시 보내지 않고 같은 모델에서 effort만 한 칸 낮춘 정의로 시험한다.
+// 그 정의도 실패했으면 한 칸 더 낮추고, 더 없으면 후보에서 뺀다. 돌려주는 to는 다음에 시험할 정의다.
+export function downCandidates(all, correctionsByAgent, pinnedCells = new Set(), floors = new Map(), costFails = new Map()) {
   const corrected = (r) => r.agentId && (correctionsByAgent.get(r.agentId) ?? 0) > 0;
   const groups = new Map();
   for (const r of all) {
+    if (r.auto) continue;
     if (!groups.has(cellKey(r))) groups.set(cellKey(r), []);
     groups.get(cellKey(r)).push(r);
   }
   const down = [];
   for (const rows of groups.values()) {
-    if (ESCALATION_ONLY_DEFS.has(rows[0].def) || NO_LOWER_DEFS.has(rows[0].def)) continue;
+    const { def, kind } = rows[0];
+    if (ESCALATION_ONLY_DEFS.has(def) || NO_LOWER_DEFS.has(def)) continue;
     // 사다리 밖 정의(Explore 등 키트 정의가 아닌 에이전트)는 표의 칸이 아니라 바로 아래 칸을 가리킬 수 없다.
-    if (defRank(rows[0].def) === null) continue;
-    if (rows[0].def === ALWAYS_OPUS_DEF && rows[0].kind.includes(ALWAYS_OPUS_KIND)) continue;
+    if (defRank(def) === null) continue;
+    if (def === ALWAYS_OPUS_DEF && kind.includes(ALWAYS_OPUS_KIND)) continue;
     if (pinnedCells.has(cellKey(rows[0]))) continue;
-    const floor = floors.get(rows[0].kind);
-    const below = lowerDef(rows[0].def);
-    if (floor && defRank(floor) !== null && (below === null || defRank(below) < defRank(floor))) continue;
+    const blocked = (to) => (costFails.get(kind) ?? []).some((f) => f.def === to && defRank(f.cellDef) !== null && defRank(def) <= defRank(f.cellDef));
+    let to = lowerDef(def);
+    while (to !== null && blocked(to)) to = sameModelLower(to);
+    if (to === null) continue;
+    const floor = floors.get(kind);
+    if (floor && defRank(floor) !== null && defRank(to) < defRank(floor)) continue;
     const lastFive = rows.slice(-5);
-    if (lastFive.length === 5 && lastFive.every((r) => r.result === 'ok' && !corrected(r))) down.push({ def: rows[0].def, kind: rows[0].kind });
+    if (lastFive.length === 5 && lastFive.every((r) => r.result === 'ok' && !corrected(r))) down.push({ def, kind, to });
   }
   return down;
 }
@@ -957,7 +1003,7 @@ export function checkRouting({ cells, usage, descriptions, removedDefs = [] }) {
   const groups = new Map();
   for (const r of usage ?? []) {
     const own = owners.get(r.kind);
-    if (!own || own.has(r.def) || r.result === '올림' || ESCALATION_ONLY_DEFS.has(r.def) || trials.get(r.kind)?.has(r.def)) continue;
+    if (r.auto || !own || own.has(r.def) || r.result === '올림' || ESCALATION_ONLY_DEFS.has(r.def) || trials.get(r.kind)?.has(r.def)) continue;
     const key = `${r.kind}\u0000${r.def}`;
     const g = groups.get(key) ?? { kind: r.kind, def: r.def, expected: [...own], count: 0, last: '' };
     g.count++;
@@ -1026,36 +1072,51 @@ export function parseSnapshot(text) {
 }
 
 // 표의 시험 표시 하나를 그 구간 기록(rows)으로 판정한다. 대기는 그 정의와 일 종류 기록이 없음, 보냄은 있음이다.
-// 시험한 1건이 ok이고 정정이 없을 때 어림 비용을 원래 칸의 그 구간 평균과 견준다. COST_SIMILAR_RATIO 넘게 낮으면 통과, 넘게 높으면 실패다.
-// 그 안이면 비용이 비슷한 것이라 걸린 시간(사용 기록의 초 열)이 원래 칸 평균보다 짧으면 통과, 아니면 실패다. 결과가 같고 비용이 비슷하면 빠른 쪽이 낫기 때문이다.
-// 올림이나 정정이 있으면 결과가 모자란 것이라 실패이고 내림 실패로 센다(downFail). 비용 쪽과 속도 쪽 실패는 결과가 모자란 것이 아니라 세지 않는다.
-// 재지시는 지시문 탓이라 내림 실패로 보지 않고 지시문을 고쳐 다시 시험하므로 판정 불가다. 비용이나 (비용이 비슷할 때) 시간을 모르면 비교할 수 없어 판정 불가다.
+// 보낸 순서대로 COST_TRIAL_MAX건까지가 판정 대상이다. 그 가운데 하나라도 올림이나 정정이 있으면 건수와 상관없이 바로 실패이고 내림 실패(downFail)로 센다.
+// 비용은 대상 건의 중앙값을 원래 칸의 그 구간 평균과 견준다. COST_SIMILAR_RATIO 넘게 낮으면 통과, 넘게 높으면 실패(costFail)다. 한 건의 우연으로 칸을 옮기거나 막지 않으려는 것이다.
+// 비용이 그 안이면 비슷한 것이라 걸린 시간(사용 기록의 초 열)의 중앙값이 원래 칸 평균보다 짧으면 통과, 아니면 실패다. 결과가 같고 비용이 비슷하면 빠른 쪽이 낫기 때문이다.
+// 비용 쪽(costFail)과 속도 쪽 실패는 결과가 모자란 것이 아니라 내림 실패로 세지 않는다. 다만 costFail은 costFailHistory가 모아 같은 모델을 다시 내려 보내지 않는 데 쓴다.
+// 대상이 COST_TRIAL_MIN건보다 적으면 비용을 판정하지 않고 '모으는 중'이다(표시를 두고 더 보낸다). 재지시는 지시문 탓이라 판정 불가이고, 비용이나 (비슷할 때) 시간을 모르면 비교할 수 없어 판정 불가다.
 export function trialVerdict(trial, rows, costMap = new Map(), correctionsByAgent = new Map()) {
   const sent = rows.filter((r) => r.def === trial.def && r.kind === trial.kind);
   if (!sent.length) return { ...trial, state: '대기', verdict: null, downFail: false, sentAgents: 0 };
-  const agentId = sent[0].agentId;
-  const lines = agentId ? sent.filter((r) => r.agentId === agentId) : [sent[0]];
-  const sentAgents = new Set(sent.map((r) => r.agentId ?? `줄${r.line}`)).size;
-  const base = { ...trial, state: '보냄', agentId, sentAgents, downFail: false };
-  if (lines.some((r) => r.result === '올림') || (agentId && (correctionsByAgent.get(agentId) ?? 0) > 0)) return { ...base, verdict: '실패', downFail: true, reason: '올림 또는 정정' };
-  if (lines.some((r) => r.result === '재지시')) return { ...base, verdict: '판정 불가', reason: '재지시(지시문 탓)' };
-  const cost = agentId ? costMap.get(agentId)?.cost ?? null : null;
+  const units = new Map();
+  for (const r of sent) {
+    const key = r.agentId ?? `줄${r.line}`;
+    units.set(key, [...(units.get(key) ?? []), r]);
+  }
+  const judged = [...units.values()].slice(0, COST_TRIAL_MAX);
+  const agentId = judged[0][0].agentId;
+  const base = { ...trial, state: '보냄', agentId, sentAgents: units.size, judgedAgents: judged.length, downFail: false };
+  const corrected = (lines) => lines[0].agentId && (correctionsByAgent.get(lines[0].agentId) ?? 0) > 0;
+  const failed = judged.find((lines) => lines.some((r) => r.result === '올림') || corrected(lines));
+  if (failed) return { ...base, agentId: failed[0].agentId, verdict: '실패', downFail: true, reason: '올림 또는 정정' };
+  if (judged.some((lines) => lines.some((r) => r.result === '재지시'))) return { ...base, verdict: '판정 불가', reason: '재지시(지시문 탓)' };
+  if (judged.length < COST_TRIAL_MIN) return { ...base, verdict: '모으는 중', reason: `시험 ${judged.length}건, 비용은 ${COST_TRIAL_MIN}~${COST_TRIAL_MAX}건의 중앙값으로 판정` };
+  const costs = judged.map((lines) => (lines[0].agentId ? costMap.get(lines[0].agentId)?.cost ?? null : null)).filter((x) => x !== null);
+  const cost = costs.length >= COST_TRIAL_MIN ? median(costs) : null;
   const baseline = trial.cellDef ? summarize(rows.filter((r) => r.def === trial.cellDef && r.kind === trial.kind), costMap, new Map()).total.costAvg : null;
-  if (cost === null) return { ...base, verdict: '판정 불가', reason: '시험 1건의 비용 모름', cost, baseline };
+  if (cost === null) return { ...base, verdict: '판정 불가', reason: `시험 ${judged.length}건 가운데 비용을 아는 건이 ${costs.length}건`, cost, baseline };
   if (baseline === null) return { ...base, verdict: '판정 불가', reason: '원래 칸의 회고 구간 비용 없음', cost, baseline };
   const priced = { ...base, cost, baseline };
   if (cost < baseline * (1 - COST_SIMILAR_RATIO)) return { ...priced, verdict: '통과' };
-  if (cost > baseline * (1 + COST_SIMILAR_RATIO)) return { ...priced, verdict: '실패', reason: '비용이 줄지 않음' };
+  if (cost > baseline * (1 + COST_SIMILAR_RATIO)) return { ...priced, verdict: '실패', costFail: true, reason: '비용이 줄지 않음' };
   const known = (list) => list.map((r) => r.seconds).filter((x) => x !== null);
-  const trialSecs = known(lines);
+  const trialSecs = judged.map((lines) => known(lines)).filter((x) => x.length).map((x) => x.reduce((a, b) => a + b, 0));
   const baseSecs = known(rows.filter((r) => r.def === trial.cellDef && r.kind === trial.kind));
-  const seconds = trialSecs.length ? trialSecs.reduce((a, b) => a + b, 0) : null;
+  const seconds = trialSecs.length >= COST_TRIAL_MIN ? median(trialSecs) : null;
   const baselineSeconds = baseSecs.length ? baseSecs.reduce((a, b) => a + b, 0) / baseSecs.length : null;
   const timed = { ...priced, seconds, baselineSeconds };
-  if (seconds === null) return { ...timed, verdict: '판정 불가', reason: '비용 비슷, 시험 1건의 걸린 시간 모름' };
+  if (seconds === null) return { ...timed, verdict: '판정 불가', reason: '비용 비슷, 시험의 걸린 시간을 아는 건이 모자람' };
   if (baselineSeconds === null) return { ...timed, verdict: '판정 불가', reason: '비용 비슷, 원래 칸의 회고 구간 시간 없음' };
   return seconds < baselineSeconds ? { ...timed, verdict: '통과', reason: '비용 비슷, 더 빠름' } : { ...timed, verdict: '실패', reason: '비용 비슷, 빠르지 않음' };
 }
+
+const median = (list) => {
+  const s = [...list].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 
 // 표 모양에 이어 남은 시험 표시마다 판정 불가가 몇 번 이어졌는지 센다. 열쇠는 `일 종류\u0000시험 정의`이고 마지막 표 모양에 남은 시험만 담는다.
 // 대기는 보내지 않은 것이라 횟수를 바꾸지 않고, 통과나 실패가 나거나 표시가 지워지면 0이다. 표 모양이 없는 회고 표시를 만나면 앞뒤를 못 이어 0부터 다시 센다(옛 기록은 0번).
@@ -1071,7 +1132,7 @@ export function undecidedRuns(parsed, costMap = new Map(), correctionsByAgent = 
       for (const t of prev.trials) {
         const key = undecidedKey(t);
         const v = trialVerdict(t, rows, costMap, correctionsByAgent);
-        const n = v.verdict === '판정 불가' ? (runs.get(key) ?? 0) + 1 : v.state === '대기' ? runs.get(key) ?? 0 : 0;
+        const n = v.verdict === '판정 불가' ? (runs.get(key) ?? 0) + 1 : v.state === '대기' || v.verdict === '모으는 중' ? runs.get(key) ?? 0 : 0;
         if (n && snap.trials.some((x) => x.kind === t.kind && x.def === t.def)) next.set(key, n);
       }
     }
@@ -1142,6 +1203,36 @@ export function downFailHistory(parsed, costMap = new Map(), correctionsByAgent 
     prevCutoff = r.cutoff;
   }
   return state;
+}
+
+// 일 종류마다 비용 실패한 시험을 회고 표시의 표 모양으로 모은다(downFailHistory와 같은 구간 나누기). 시험 표시는 판정과 함께 지워져 표에 남지 않으므로
+// 다음에 같은 정의로 또 내려 보내지 않으려면 이 기록이 필요하다. 이번 회고에서 막 판정한 시험(currentVerdicts)도 아직 표 모양에 없으니 함께 넣는다.
+// 열쇠는 일 종류이고 값은 [{cellDef, def, date}]다. 최저선 아래 다시 시험은 뺀다.
+export function costFailHistory(parsed, costMap = new Map(), correctionsByAgent = new Map(), currentVerdicts = []) {
+  const fails = new Map();
+  const add = (t, date) => {
+    const list = fails.get(t.kind) ?? [];
+    if (!list.some((f) => f.cellDef === t.cellDef && f.def === t.def)) list.push({ cellDef: t.cellDef, def: t.def, date });
+    fails.set(t.kind, list);
+  };
+  let prev = null;
+  let prevCutoff = 0;
+  for (const r of parsed.retros ?? []) {
+    const snap = r.snapshot;
+    if (prev && snap) {
+      const date = /^\d{4}-\d{2}-\d{2}/.test(r.at) ? r.at.slice(0, 10) : '';
+      const rows = parsed.all.filter((x) => x.line > prevCutoff && x.line <= r.cutoff);
+      for (const t of prev.trials) {
+        if (isRetrial(t.kind, t.def, prev.floors)) continue;
+        if (trialVerdict(t, rows, costMap, correctionsByAgent).costFail) add(t, date);
+      }
+    }
+    prev = snap;
+    prevCutoff = r.cutoff;
+  }
+  const floors = prev?.floors ?? new Map();
+  for (const v of currentVerdicts) if (v.costFail && !isRetrial(v.kind, v.def, floors)) add(v, '');
+  return fails;
 }
 
 // 최저선 아래 정의로 보낸 시험(다시 시험)인지. 최저선을 막 단 칸의 내려 보기 후보는 최저선 아래로 나오지 않으므로, 최저선 아래를 가리키는 시험 표시는 다시 시험뿐이다.
@@ -1319,7 +1410,7 @@ export function retrialPlan({ states = new Map(), retroCount = 0, floors = new M
 export function unknownKindGroups(summaryRows, known) {
   const groups = new Map();
   for (const r of summaryRows) {
-    if (known.has(r.kind)) continue;
+    if (known.has(r.kind) || r.auto === r.count) continue;
     let g = groups.get(r.kind);
     if (!g) {
       g = { kind: r.kind, count: 0, ok: 0, redo: 0, up: 0, corrections: 0, costSum: 0, paired: 0, costKnown: 0, costUnknown: 0, defs: new Map() };
@@ -1335,7 +1426,7 @@ export function unknownKindGroups(summaryRows, known) {
 export function unknownKindNames(all, known) {
   const names = new Map();
   for (const r of all) {
-    if (known.has(r.kind)) continue;
+    if (known.has(r.kind) || r.auto) continue;
     const n = names.get(r.kind) ?? { kind: r.kind, count: 0, last: '' };
     n.count++;
     if (r.date > n.last) n.last = r.date;
@@ -1401,27 +1492,28 @@ export function parseConfig(text) {
   const o = text ? parseConfigObject(text) : null;
   return {
     retroMode: RETRO_MODES.includes(o?.retroMode) ? o.retroMode : 'ask',
+    profile: profileOf(o),
     commandName: typeof o?.commandName === 'string' && COMMAND_NAME.test(o.commandName) ? o.commandName : DEFAULT_COMMAND_NAME,
     retroFailures: Number.isInteger(o?.retroFailures) && o.retroFailures > 0 ? o.retroFailures : 0,
     removedDefs: Array.isArray(o?.removedDefs) ? o.removedDefs.filter((d) => typeof d === 'string') : [],
     removedKinds: Array.isArray(o?.removedKinds) ? o.removedKinds.filter((d) => typeof d === 'string') : [],
-    claudeMdKeptLines: Number.isInteger(o?.claudeMdKeptLines) && o.claudeMdKeptLines >= 0 ? o.claudeMdKeptLines : null,
-    claudeMdLimitLines: Number.isInteger(o?.claudeMdLimitLines) && o.claudeMdLimitLines > 0 ? o.claudeMdLimitLines : CLAUDE_MD_LIMIT_LINES,
+    claudeMdKeptLines: claudeMdSettingsOf(o).keptLines,
+    claudeMdLimitLines: claudeMdSettingsOf(o).limit,
     docReviewHashes: docReviewHashesOf(o),
-    // 키가 없을 때만 켠다. 설정 파일이 깨졌거나 사용자가 끈 값은 끈 대로 둬 규칙을 멋대로 고치지 않으려는 것이다.
-    autoApplyRules: o ? !('autoApplyRules' in o) || o.autoApplyRules === true : false,
+    repeatsRunDate: typeof o?.repeatsRunDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.repeatsRunDate) ? o.repeatsRunDate : null,
   };
 }
 
-// CLAUDE.md 정리 제안의 기본 기준 줄 수(config.json의 claudeMdLimitLines가 바꿈)와, 정리 뒤 남긴 줄 수보다 이만큼 넘게 늘어야 다시 제안하는 여유다. 문서의 「200줄」, 「20줄」과 함께 바꾼다.
-export const CLAUDE_MD_LIMIT_LINES = 200;
-export const CLAUDE_MD_KEPT_MARGIN_LINES = 20;
+// 기준 줄 수(config.json의 claudeMdLimitLines가 바꿈)와 여유 줄 수의 정본은 claudeMdTidy.js다. 설치, 업데이트, 회고가 같은 판정을 쓰게 한 곳에만 둔다.
+export const CLAUDE_MD_LIMIT_LINES = DEFAULT_LIMIT_LINES;
+export const CLAUDE_MD_KEPT_MARGIN_LINES = KEPT_MARGIN_LINES;
 // 키트가 CLAUDE.md에 넣는 구역의 표시 주석 쌍이다. 이 안은 정리 제안 대상이 아니라 따로 센다.
 const CLAUDE_MD_KIT_BLOCKS = [
   ['<!-- subagent-system 시작 -->', '<!-- subagent-system 끝 -->'],
   ['<!-- claude-setup-kit extras 시작 -->', '<!-- claude-setup-kit extras 끝 -->'],
 ];
 
+// 파일 하나(--docs의 프로젝트 CLAUDE.md, 회고 줄의 키트 구역 줄 수)를 센다. 사용자 설정 폴더의 정리 판정은 늘 읽히는 줄의 합이라 claudeMdTidy.js의 claudeMdVerdict가 한다.
 // text가 null이면 CLAUDE.md가 없는 것이다. 키트 구역 줄 수에는 표시 줄도 넣고, 끝 표시가 없는 시작 표시는 구역으로 세지 않는다.
 export function claudeMdSummary(text, keptLines = null, limit = CLAUDE_MD_LIMIT_LINES) {
   if (text === null) return { exists: false };
@@ -1433,10 +1525,7 @@ export function claudeMdSummary(text, keptLines = null, limit = CLAUDE_MD_LIMIT_
     const to = from < 0 ? -1 : lines.findIndex((l, i) => i > from && l.trim() === end);
     if (to > from) kit += to - from + 1;
   }
-  const target = total > limit && (keptLines === null || total > keptLines + CLAUDE_MD_KEPT_MARGIN_LINES);
-  let reason = '';
-  if (!target) reason = total <= limit ? `${limit}줄 이하` : `정리 뒤 남긴 ${keptLines}줄에서 ${CLAUDE_MD_KEPT_MARGIN_LINES}줄 이내`;
-  return { exists: true, total, kit, target, reason, keptLines };
+  return { exists: true, total, kit, ...claudeMdTarget(total, limit, keptLines), keptLines };
 }
 
 // 다른 키(commandName, removedDefs 등 모르는 키 포함)는 그대로 두고 retroMode만 바꾼 설정 파일 내용을 만든다. 깨진 파일은 새로 쓴다.
@@ -1466,6 +1555,22 @@ function docReviewHashesOf(o) {
   const v = o?.docReviewHashes;
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
   return Object.fromEntries(Object.entries(v).filter(([, h]) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)));
+}
+
+// 다른 키는 그대로 두고 repeatsRunDate(--repeats를 마지막으로 돌린 로컬 날짜)만 바꾼 설정 파일 내용을 만든다. 깨진 파일이면 null이라 호출하는 쪽이 쓰지 않고 넘어간다.
+export function configTextWithRepeatsDate(text, date) {
+  const o = text ? parseConfigObject(text) : null;
+  if (!o) return null;
+  return JSON.stringify({ ...o, repeatsRunDate: date }, null, 2) + '\n';
+}
+
+// --repeats는 회고마다 돌지 않고 이 기간(일)이 지났을 때만 돈다. 범위도 이 기간이다. 대화 기록 보존 기간(30일)과 같아 더 길게 봐도 읽을 기록이 없다.
+export const REPEATS_PERIOD_DAYS = 30;
+
+// 두 로컬 날짜(YYYY-MM-DD) 사이의 달력 일수. 시계와 서머타임에 흔들리지 않게 UTC 자정끼리 뺀다.
+export function daysBetweenDates(from, to) {
+  const utc = (d) => Date.UTC(...d.split('-').map((x, i) => (i === 1 ? Number(x) - 1 : Number(x))));
+  return Math.round((utc(to) - utc(from)) / 86400000);
 }
 
 // 다른 키는 그대로 두고 docReviewHashes에 files(경로 → 해시)를 더한 설정 파일 내용을 만든다. 깨진 파일이면 null이라 호출하는 쪽이 쓰지 않고 넘어간다.
@@ -1592,9 +1697,31 @@ export function lockState(mtimeMs, nowMs = Date.now()) {
   return nowMs - mtimeMs > LOCK_STALE_MS ? 'stale' : 'live';
 }
 
-// 물을 것 파일(retro-pending.md)에서 항목 수를 센다. 항목은 `## `로 시작하는 줄 하나씩이다.
-export function countPending(text) {
-  return splitLines(text ?? '').filter((l) => /^## \S/.test(l)).length;
+// 사용자에게 묻는 일 여섯 종. 개인용(auto)은 이 여섯만 물을 것으로 센다. 나머지 제안은 목록에 쌓기만 한다.
+export const ASK_KINDS = ['돈', '되돌리기 어려운 일', '정책', '목표로 못 가르는 트레이드오프', '사용자 작업에 걸리는 장치', '문지기 풀기'];
+
+// 제안 목록(PROPOSALS.md)의 `## 제안` 절에서 항목 수를 센다. 항목은 `### ` 제목 하나씩이고, 본문에 `- 묻기: <여섯 종 중 하나>` 줄이 있으면 사용자에게 물을 것이다.
+// onlyAsk가 false(회사용)면 모든 항목을, true(개인용)면 묻기 줄이 있는 항목만 센다. `- 결과: 채택|기각` 줄이 붙은 항목은 이미 답한 것이라 두 방식 모두 세지 않는다.
+export function countPending(text, { onlyAsk = false } = {}) {
+  let inProposals = false;
+  let count = 0;
+  let item = null;
+  const close = () => {
+    if (item && !item.done && (!onlyAsk || item.ask)) count++;
+    item = null;
+  };
+  for (const line of splitLines(text ?? '')) {
+    if (/^## /.test(line)) {
+      close();
+      inProposals = /^## 제안\s*$/.test(line);
+    } else if (inProposals && /^### \S/.test(line)) {
+      close();
+      item = { ask: false, done: false };
+    } else if (item && new RegExp(`^\\s*[-*]\\s*묻기:\\s*(${ASK_KINDS.join('|')})`).test(line)) item.ask = true;
+    else if (item && /^\s*[-*]\s*결과:\s*(채택|기각)/.test(line)) item.done = true;
+  }
+  close();
+  return count;
 }
 
 // --due의 첫 줄. 잠금이 살아 있으면 다른 세션이 회고 중이라 묻지도 띄우지도 않으므로 wait다.
@@ -1622,6 +1749,16 @@ export function judgeFableModel({ model, defaultFableModel = null, overrides = {
   if (!model.includes('claude-')) return { ...other, label: 'Fable 확인 못함', notice: 'Fable인지 확인하지 못했다(조직 관리 설정의 modelOverrides는 읽지 못함)' };
   return { ...other, label: 'Fable 아님', notice: 'Fable 결과가 아니다' };
 }
+
+// judgeFableModel의 label마다 메인이 할 일. --check-fable이 판정 아래에 찍고, GUIDE에는 이 설명을 두지 않는다.
+export const FABLE_VERDICT_NOTES = {
+  'Fable 5.1': 'Fable 5.1 결과입니다. 사용자에게 따로 알릴 것은 없습니다.',
+  'Fable 5': 'Fable 계열로 돈 것입니다. 사용자에게 알릴 말을 그대로 알립니다. rates.json에는 Fable 5 요율이 없어 비용은 ?로 남습니다.',
+  'Fable(버전 미확인)': 'ANTHROPIC_DEFAULT_FABLE_MODEL로 Fable임은 알았지만 버전은 알 수 없습니다. 사용자에게 알릴 말을 그대로 알립니다.',
+  'Fable 아님': '적어도 끝부분은 Fable이 아니었습니다. 다시 시도하지 않고 사용자에게 알릴 말을 그대로 알립니다.',
+  'Fable 확인 못함': '모델 열이 공급자 ARN이나 배포 이름이고 설정에서 대응을 찾지 못한 것입니다. 조직 관리 설정의 modelOverrides는 읽지 못하므로 사용자에게 알릴 말을 그대로 알립니다.',
+  '줄 없음': '모델을 확인하지 못한 것입니다. 사용자에게 알릴 말을 그대로 알립니다.',
+};
 
 // 사용 기록 메모의 표시 `모자람(<태그>[,<태그>…]): <요지>`, `개선(<태그>): <요지>`를 읽는다. 닫는 괄호 바로 뒤에 `: `가 올 때만 표시다.
 // 옛 꼴 `모자람: <요지>`는 태그가 없어 판정에는 들지 않는다.
