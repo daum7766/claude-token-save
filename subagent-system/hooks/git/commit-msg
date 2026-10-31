@@ -117,7 +117,8 @@ function stagedDecisionInput() {
   try {
     let docs = [];
     try {
-      docs = git(['grep', '--cached', '-l', '-F', DECISION_MARK, '--', '*.md']).split('\n').filter(Boolean);
+      // 표시가 한 줄을 다 차지한 문서만 결정 문서로 본다. 표시를 글 속에서 설명하는 안내 문서(DOC_WRITING 등)를 결정 문서로 잘못 보지 않게.
+      docs = git(['grep', '--cached', '-l', '-E', '^[[:space:]]*<!-- decision-doc -->[[:space:]]*$', '--', '*.md']).split('\n').filter(Boolean);
     } catch {
       return { docs: [], added: [], removed: [] };
     }

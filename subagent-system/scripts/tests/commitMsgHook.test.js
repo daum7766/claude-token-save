@@ -156,6 +156,12 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP }, () => 
     git(repo, ['add', '.']);
     assert.equal(commit().status, 0);
 
+    // 표시를 글 속에서 설명만 하는 안내 문서는 결정 문서가 아니다
+    write('guide.md', '# 안내\n- 결정 문서 머리에 `<!-- decision-doc -->` 표시를 둔다.\n');
+    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 둘(2026-10-31 사용자 지시)\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
     // 결정 문서 안의 결정 표기는 통과한다
     write('overhaul.md', '<!-- decision-doc -->\n# 결정\n| 광고 | 최대 3개(2026-10-31 사용자) |\n');
     git(repo, ['add', '.']);
