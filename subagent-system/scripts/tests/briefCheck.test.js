@@ -23,8 +23,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-check-'));
 const tableFile = path.join(dir, 'ROUTING_TABLE.md');
 fs.writeFileSync(tableFile, `# 라우팅 표\n\n${TABLE}\n`);
 
-function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK } = {}) {
-  const env = { ...process.env };
+function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK, records = path.join(dir, 'no-records') } = {}) {
+  const env = { ...process.env, SUBAGENT_RECORDS_DIR: records };
   if (routing === null) delete env.BRIEF_CHECK_ROUTING_FILES;
   else env.BRIEF_CHECK_ROUTING_FILES = routing;
   const r = spawnSync(process.execPath, [hook], { input: JSON.stringify({ tool_name: toolName, tool_input: toolInput }), encoding: 'utf8', env });
@@ -159,6 +159,42 @@ describe('지시문 검사 훅 brief-check', () => {
     const copy = path.join(installed, 'hooks', 'brief-check.js');
     const input = { subagent_type: 'opus-high', description: '문서 작성', prompt: brief(GOAL + DOC) };
     assert.match(reason(run(input, { routing: null, hook: copy })), /높임:/);
+  });
+
+  describe('시험 표시 칸', () => {
+    const rec = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-check-rec-'));
+    const usage = (lines) => fs.writeFileSync(path.join(rec, 'subagent-usage.tsv'), lines.join('\n') + '\n');
+    const row = (def, kind, memo) => ['2026-10-31', '/p', def, kind, '1', '1', '1', 'ok', memo].join('\t');
+    const low = { subagent_type: 'sonnet-low', description: '분석과 가공', prompt: brief(GOAL + DOC) };
+
+    it('표에서 시험 정의를 읽는다', () => {
+      assert.equal(parseRoutingTable(TABLE).find((x) => x.name === '분석과 가공').trial, 'haiku-high');
+    });
+
+    it('회고 뒤 시험 정의로 보낸 건이 2건 아래인데 칸 정의로 보내면 deny한다', () => {
+      usage(['회고\t-\t회고', row('haiku-high', '분석과 가공', 'a1111111111 첫 시험')]);
+      assert.match(reason(run(low, { records: rec })), /시험 건너뜀:/);
+    });
+
+    it('같은 agentId 두 줄은 1건으로 세고, 회고 앞 줄은 세지 않는다', () => {
+      usage([row('haiku-high', '분석과 가공', 'a2222222222'), '회고\t-\t회고', row('haiku-high', '분석과 가공', 'a1111111111 표에서 찾음'), row('haiku-high', '분석과 가공', 'a1111111111 요지')]);
+      assert.match(reason(run(low, { records: rec })), /1건이다/);
+    });
+
+    it('시험 정의로 2건 보냈으면 칸 정의로 보내도 통과한다', () => {
+      usage(['회고\t-\t회고', row('haiku-high', '분석과 가공', 'a1111111111'), row('haiku-high', '분석과 가공', 'a3333333333')]);
+      assert.equal(run(low, { records: rec }).out, null);
+    });
+
+    it('시험 건너뜀이나 높임 줄이 있으면 통과한다', () => {
+      usage(['회고\t-\t회고']);
+      assert.equal(run({ ...low, prompt: brief(GOAL + DOC + '시험 건너뜀: 판단이 갈리는 묶음\n') }, { records: rec }).out, null);
+      assert.equal(run({ ...low, description: '분석과 가공 높임: 범위가 넓다', subagent_type: 'sonnet-medium' }, { records: rec }).out, null);
+    });
+
+    it('사용 기록을 못 읽으면 시험 검사만 건너뛴다', () => {
+      assert.equal(run(low).out, null);
+    });
   });
 
   // 설치본의 표는 사용자 것이라 키트 원본에서만 본다.

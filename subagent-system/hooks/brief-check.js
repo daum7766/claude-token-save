@@ -6,10 +6,17 @@
 //   `높임:`은 회고가 표 칸과 다른 배정을 분류하는 근거라 처음 보낼 때 남겨야 한다.
 //   `올림:`은 실패해 한 단계 올려 다시 보내는 지시(Fable 단계 포함)의 표시다. 올림은 표 칸이 아니라 앞 실패가 정의를 정하므로
 //   이 줄이 있으면 3)을 건너뛴다. 처음 보냄의 높임과 올림이 기록에서 섞이지 않게 줄 이름을 나눈다.
+//   4) 표 칸에 시험 표시(「(시험: 2건 이상 `<정의>`)」)가 있는데 이 회고 구간에 시험 정의로 보낸 건이 2건 아래이고
+//      시험 정의가 아닌 정의로 보내면서 `시험 건너뜀:`, `높임:`, `올림:` 줄이 없는 경우
+//   4)의 왜: 2026-10-31 회고에서 시험 표시 칸 둘(새 규칙 대조 문서 점검 opus-low, 긴 구현 계획 실행 sonnet-low)이
+//      약 20건을 원래 칸이나 더 높은 정의로 받아 시험이 한 건도 쌓이지 않았다. 규칙 문장(SUBAGENT_SITUATIONS
+//      「내려 보기 시험과 「(고정)」」)만으로는 지켜지지 않아 보내기 직전에 막는다.
 // 전제: 정의가 haiku 계열이거나 prompt가 600자 아래인 짧은 조회는 검사하지 않고, 경계는 재지시 기록으로 고친다.
 //   라우팅 표는 이 훅 옆 설치본 docs/ROUTING_TABLE.md의 `| **Haiku** | ...` 꼴 표를 읽는다. 표를 못 읽거나
 //   일 종류가 표의 어느 줄과도 안 맞으면 3)만 건너뛴다(훅 오류로 모든 Agent 호출이 막히지 않게).
 //   일 종류는 description에서 표의 일 이름을 찾아 가린다(가장 긴 이름).
+//   4)의 건수는 기록 폴더(SUBAGENT_RECORDS_DIR, 없으면 이 훅 옆 records)의 subagent-usage.tsv에서 마지막 `회고` 줄 뒤
+//   (정의, 일 종류)가 맞는 줄을 agentId로 세고, 파일을 못 읽으면 4)만 건너뛴다.
 //   훅 안의 오류는 모두 통과로 처리한다.
 'use strict';
 const fs = require('fs');
@@ -78,7 +85,8 @@ function parseRoutingTable(markdown) {
       if (!efforts[i] || !cell) return;
       for (const item of splitTopLevel(cell)) {
         const name = cleanName(item);
-        if (name) rows.push({ name, model, effort: efforts[i] });
+        const trial = /시험:[^`)]*`([a-z]+-[a-z]+)`/.exec(item);
+        if (name) rows.push({ name, model, effort: efforts[i], ...(trial ? { trial: trial[1] } : {}) });
       }
     });
   }
@@ -138,6 +146,30 @@ function isBatchJudging(prompt, description) {
   return /(묶음\s*(\d|번호)|packet-\d)/.test(t) && /(판정|적용)/.test(t);
 }
 
+const TRIAL_TARGET = 2;
+
+function usageFile() {
+  const dir = process.env.SUBAGENT_RECORDS_DIR || path.join(__dirname, '..', 'records');
+  return path.join(dir, 'subagent-usage.tsv');
+}
+
+// 마지막 `회고` 줄 뒤 (정의, 일 종류) 줄을 agentId(메모 첫 낱말)로 센다. 못 읽으면 null.
+function trialSentCount(def, name) {
+  let text;
+  try { text = fs.readFileSync(usageFile(), 'utf8'); } catch { return null; }
+  const lines = text.split('\n');
+  let start = 0;
+  lines.forEach((l, i) => { if (l.startsWith('회고\t')) start = i + 1; });
+  const ids = new Set();
+  for (let i = start; i < lines.length; i++) {
+    const c = lines[i].split('\t');
+    if (c[2] !== def || c[3] !== name) continue;
+    const id = /^a[0-9a-f]{8,}/.exec(c[8] || '');
+    ids.add(id ? id[0] : `line${i}`);
+  }
+  return ids.size;
+}
+
 function check(toolInput, routing) {
   const prompt = String(toolInput.prompt || '');
   const description = String(toolInput.description || '');
@@ -173,6 +205,19 @@ function check(toolInput, routing) {
       }
     }
   }
+  if (def && routing && routing.length && !/(높임|올림|시험 건너뜀)\s*[:：]/.test(prompt + '\n' + description)) {
+    const cells = findRoutedCell(description, routing);
+    const trialRow = cells && cells.find((r) => r.trial);
+    if (trialRow && type !== trialRow.trial) {
+      const sent = trialSentCount(trialRow.trial, trialRow.name);
+      if (sent !== null && sent < TRIAL_TARGET) {
+        problems.push(
+          `「${trialRow.name}」 칸에 시험 표시(\`${trialRow.trial}\`)가 있고 이 회고 구간에 시험 정의로 보낸 건이 ${sent}건이다. ` +
+            `${TRIAL_TARGET}건이 찰 때까지 ${trialRow.trial}로 보내라(여럿을 한꺼번에 띄우면 남은 건만큼만). 이 일이 시험에 맞지 않으면 prompt나 description에 \`시험 건너뜀: <까닭>\`을 적어라.`
+        );
+      }
+    }
+  }
   return problems;
 }
 
@@ -192,7 +237,7 @@ function main(raw) {
       permissionDecisionReason:
         '서브에이전트 지시문을 보내기 전에 고쳐라.\n- ' + problems.join('\n- ') +
         '\n왜: 목표와 결정 문서가 빠진 지시문은 재지시와 되돌림을 만든다. ' +
-        '전제: 600자 아래 지시와 haiku 정의는 검사하지 않는다. 묶음 판정 검사는 지시문과 그 안의 brief 경로 파일을 읽는다.',
+        '전제: 600자 아래 지시와 haiku 정의는 검사하지 않는다. 묶음 판정 검사는 지시문과 그 안의 brief 경로 파일을 읽는다. 시험 표시 검사는 사용 기록의 마지막 회고 뒤 건수를 센다.',
     },
   };
 }
@@ -209,4 +254,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isBatchJudging, check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc };
+module.exports = { isBatchJudging, check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc, trialSentCount };
