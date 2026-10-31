@@ -297,13 +297,22 @@ describe('안 쓰는 매뉴얼', () => {
 
       it('기간 안에 쓴 스킬과 정의는 목록에 없고 쓴 적이 없거나 기간 밖인 것만 마지막 사용일과 함께 나온다', () => {
         const b = build();
-        const r = unusedRun(b);
+        const r = unusedRun(b, ['--work-days', '0']);
         assert.equal(r.code, 0, r.err);
         const lines = stale(r.out);
         assert.ok(lines.some((l) => /^스킬\s+old-skill\s+2026-09-01\s+1$/.test(l)), r.out);
         assert.ok(lines.some((l) => /^스킬\s+never-skill\s+기록 없음\s+0$/.test(l)), `도구 결과 안의 스킬 이름은 쓴 것이 아니다\n${r.out}`);
         assert.ok(lines.some((l) => /^정의\s+never-def\s+기록 없음\s+0$/.test(l)), r.out);
         for (const used of ['fresh-skill', 'plugin-skill', 'slash-skill', 'sub-skill', 'used-def']) assert.ok(!lines.some((l) => l.includes(used)), `${used}는 쓴 것으로 센다\n${r.out}`);
+      });
+
+      it('기간 안의 작업일이 --work-days보다 적으면(쉬다 돌아온 때) 기간을 거슬러 늘려 오래전 쓴 것을 안 쓴 것으로 잡지 않는다', () => {
+        const b = build();
+        const r = unusedRun(b, ['--work-days', '2']);
+        assert.equal(r.code, 0, r.err);
+        const lines = stale(r.out);
+        assert.ok(!lines.some((l) => l.includes('old-skill')), r.out);
+        assert.ok(lines.some((l) => /^스킬\s+never-skill\s+기록 없음\s+0$/.test(l)), `한 번도 안 쓴 것은 그대로 나온다\n${r.out}`);
       });
     });
   }

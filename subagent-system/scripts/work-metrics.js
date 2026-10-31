@@ -40,7 +40,7 @@ const USAGE = [
   '  budget list [--since YYYY-MM-DD]',
   '  pair add --cell "<칸>" --task "<입력 요약>" --a <정의> --cost-a <$> --quality-a 통과|모자람|실패 --b <정의> --cost-b <$> --quality-b 통과|모자람|실패 [--memo "<메모>"]',
   '  pair list [--cell "<칸>"]',
-  '  unused [--kind skills|agents|scripts|docs] [--days 30] [--skills <폴더>] [--agents <폴더>] [--scripts <폴더>] [--docs <파일이나 폴더>]',
+  '  unused [--kind skills|agents|scripts|docs] [--days 30] [--work-days 10] [--skills <폴더>] [--agents <폴더>] [--scripts <폴더>] [--docs <파일이나 폴더>]',
   '  asks [--since YYYY-MM-DD] [--project <폴더>] [--asks-file <파일>]',
   '예산은 GUIDE 「기록과 회고」의 예산 문턱(서브에이전트를 띄우거나 도구 호출이 열 번 넘을 것으로 어림되는 작업)을 넘는 일에만 잰다. budget start는 일을 정한 뒤 서브에이전트를 띄우기 전에, budget end는 최종 보고 직전에 부른다. 어림은 budget list의 비슷한 지난 작업 실제값으로 잡는다. 사용 기록의 토큰 열은 마지막 요청 하나의 문맥 크기라 요청마다 더한 이 토큰과 단위가 다르니, 쓰려면 에이전트마다 토큰 열 × 도구 호출 수 ÷ 2로 바꿔 더하고 메인 몫을 얹는다(문맥이 고르게 자란다는 어림. 토큰 열을 그대로 더한 어림은 45~190배 모자랐다).',
   'budget end는 실제가 어림의 --over배 이상이면 넘음, --under배 이하면 덜 듦으로 적고, 이 둘이면 원인을 --cause나 budget cause로 남긴다. 세션을 못 찾으면 --session <id>를 준다.',
@@ -552,10 +552,14 @@ async function unused(flags) {
   const stat = await lastUses(items, PROJECTS_ROOT);
   const files = walkFiles(PROJECTS_ROOT, (n) => n.endsWith('.jsonl'));
   const oldest = files.length ? Math.min(...files.map((f) => fs.statSync(f).mtimeMs)) : null;
-  const cutoff = now - days * 86400000;
-  const stale = items.filter((i) => stat.get(i).last < cutoff).sort((a, b) => stat.get(a).last - stat.get(b).last || a.name.localeCompare(b.name));
+  // 쉬다 돌아오면 달력 날짜만으로는 모두 안 쓴 것이 된다. 대화 기록이 남은 날(작업일)이 기간 안에 --work-days만큼 모일 때까지 기간을 뒤로 늘린다.
+  const workDays = number(flags, 'work-days', 10);
+  const active = [...new Set(files.flatMap((f) => { const st = fs.statSync(f); return [st.mtimeMs, st.birthtimeMs].filter((t) => t > 0 && t <= now).map(localDate); }))].sort().reverse();
+  const workCutoff = workDays <= 0 ? Infinity : active.length >= workDays ? Date.parse(active[workDays - 1]) : 0;
+  const cutoff = Math.min(now - days * 86400000, workCutoff);
+  const stale = items.filter((i) => stat.get(i).last === 0 || stat.get(i).last < cutoff).sort((a, b) => stat.get(a).last - stat.get(b).last || a.name.localeCompare(b.name));
   console.log(`대화 기록 ${files.length}개를 봤습니다(가장 오래된 수정 ${oldest ? localDate(oldest) : '-'}, 보관 기간 ${retentionDays()}일). 이 기간 밖의 사용은 보이지 않으니 기록이 짧으면 안 쓴다고 단정하지 마세요.`);
-  console.log(`매뉴얼 ${items.length}개 가운데 ${days}일 안에 쓴 것 ${items.length - stale.length}개, 안 쓴 것 ${stale.length}개${kind === 'docs' || kind === 'all' ? ' (문서 절은 「절 이름」을 말한 것만 쓴 것으로 센다)' : ''}`);
+  console.log(`매뉴얼 ${items.length}개 가운데 ${days}일(작업일 ${workDays}일이 모자라면 더 거슬러) 안에 쓴 것 ${items.length - stale.length}개, 안 쓴 것 ${stale.length}개${kind === 'docs' || kind === 'all' ? ' (문서 절은 「절 이름」을 말한 것만 쓴 것으로 센다)' : ''}`);
   if (stale.length === 0) return;
   printTable(
     [['종류', '이름', '마지막 사용일', '횟수'], ...stale.map((i) => [i.kind, i.name, stat.get(i).last ? localDate(stat.get(i).last) : '기록 없음', stat.get(i).count])],
