@@ -170,8 +170,27 @@ function trialSentCount(def, name) {
   return ids.size;
 }
 
-function check(toolInput, routing) {
-  const prompt = String(toolInput.prompt || '');
+// 사용 기록은 에이전트가 끝나야 적히므로, 이 세션에서 띄웠지만 아직 안 끝난 시험 정의도 센다.
+// 그러지 않으면 한꺼번에 띄우거나 앞 시험이 도는 동안 다음 것을 보낼 때 시험 건수가 0으로 보여 계속 막는다.
+function launchedInSession(transcriptPath, def, name) {
+  if (!transcriptPath) return 0;
+  let text;
+  try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch { return 0; }
+  let n = 0;
+  for (const line of text.split('\n')) {
+    if (!line.includes('"tool_use"') || !line.includes(def)) continue;
+    let d;
+    try { d = JSON.parse(line); } catch { continue; }
+    for (const c of d.message?.content ?? []) {
+      if (c?.type === 'tool_use' && (c.name === 'Agent' || c.name === 'Task') && c.input?.subagent_type === def && String(c.input?.description || '').includes(name)) n++;
+    }
+  }
+  return n;
+}
+
+function check(toolInput, routing, ctx = {}) {
+  // 본문을 공통 지시 파일(brief)에 두고 가리키기만 한 짧은 지시문도 그 파일까지 합쳐 본다.
+  const prompt = batchBriefText(String(toolInput.prompt || ''));
   const description = String(toolInput.description || '');
   const type = String(toolInput.subagent_type || '');
   if (/^haiku/.test(type) || toolInput.model === 'haiku') return [];
@@ -186,7 +205,7 @@ function check(toolInput, routing) {
   }
 
   if (isBatchJudging(prompt, description)) {
-    const text = batchBriefText(prompt);
+    const text = prompt;
     if (!/(지킬 결정|대표가 정한)/.test(text) || !/부딪/.test(text)) {
       problems.push('묶음으로 나눈 판정이나 적용 일인데 공통 지시에 지킬 결정(사용자가 정해 빼면 안 되는 기능과 선택지, 걷는 시점이 따로 정해진 것)과 기준끼리 부딪힐 때의 순서가 없다. `지킬 결정:` 줄과 `부딪힐 때:` 줄을 적거나, 없으면 `지킬 결정: 없음(까닭)`, `부딪힐 때: 없음(까닭)`으로 적어라.');
     }
@@ -209,7 +228,8 @@ function check(toolInput, routing) {
     const cells = findRoutedCell(description, routing);
     const trialRow = cells && cells.find((r) => r.trial);
     if (trialRow && type !== trialRow.trial) {
-      const sent = trialSentCount(trialRow.trial, trialRow.name);
+      const logged = trialSentCount(trialRow.trial, trialRow.name);
+      const sent = logged === null ? null : Math.max(logged, launchedInSession(ctx.transcriptPath, trialRow.trial, trialRow.name));
       if (sent !== null && sent < TRIAL_TARGET) {
         problems.push(
           `「${trialRow.name}」 칸에 시험 표시(\`${trialRow.trial}\`)가 있고 이 회고 구간에 시험 정의로 보낸 건이 ${sent}건이다. ` +
@@ -228,7 +248,7 @@ function main(raw) {
   const toolInput = input.tool_input || {};
   let routing = [];
   try { routing = loadRouting(); } catch { routing = []; }
-  const problems = check(toolInput, routing);
+  const problems = check(toolInput, routing, { transcriptPath: input.transcript_path });
   if (!problems.length) return null;
   return {
     hookSpecificOutput: {
@@ -254,4 +274,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isBatchJudging, check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc, trialSentCount };
+module.exports = { launchedInSession, isBatchJudging, check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc, trialSentCount };

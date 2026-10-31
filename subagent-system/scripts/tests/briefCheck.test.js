@@ -23,11 +23,11 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-check-'));
 const tableFile = path.join(dir, 'ROUTING_TABLE.md');
 fs.writeFileSync(tableFile, `# 라우팅 표\n\n${TABLE}\n`);
 
-function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK, records = path.join(dir, 'no-records') } = {}) {
+function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK, records = path.join(dir, 'no-records'), transcript } = {}) {
   const env = { ...process.env, SUBAGENT_RECORDS_DIR: records };
   if (routing === null) delete env.BRIEF_CHECK_ROUTING_FILES;
   else env.BRIEF_CHECK_ROUTING_FILES = routing;
-  const r = spawnSync(process.execPath, [hook], { input: JSON.stringify({ tool_name: toolName, tool_input: toolInput }), encoding: 'utf8', env });
+  const r = spawnSync(process.execPath, [hook], { input: JSON.stringify({ tool_name: toolName, tool_input: toolInput, ...(transcript ? { transcript_path: transcript } : {}) }), encoding: 'utf8', env });
   return { status: r.status, out: r.stdout ? JSON.parse(r.stdout) : null };
 }
 
@@ -161,6 +161,16 @@ describe('지시문 검사 훅 brief-check', () => {
     assert.match(reason(run(input, { routing: null, hook: copy })), /높임:/);
   });
 
+  it('본문을 brief 파일에 두고 가리키기만 한 짧은 지시문도 그 파일까지 합쳐 묶음 검사를 한다', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-file-'));
+    const file = path.join(d, 'brief.md');
+    const short = { subagent_type: 'sonnet-medium', description: '여러 문서 갱신', prompt: `공통 지시 ${file} 를 읽고 묶음 03을 적용한다.` };
+    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n대표가 정한 기능은 빼지 않는다.\n');
+    assert.match(reason(run(short)), /부딪힐 때/);
+    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n지킬 결정: 대표가 정한 기능은 빼지 않는다.\n부딪힐 때: 결정 문서가 먼저다.\n');
+    assert.equal(run(short).out, null);
+  });
+
   describe('시험 표시 칸', () => {
     const rec = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-check-rec-'));
     const usage = (lines) => fs.writeFileSync(path.join(rec, 'subagent-usage.tsv'), lines.join('\n') + '\n');
@@ -179,6 +189,16 @@ describe('지시문 검사 훅 brief-check', () => {
     it('같은 agentId 두 줄은 1건으로 세고, 회고 앞 줄은 세지 않는다', () => {
       usage([row('haiku-high', '분석과 가공', 'a2222222222'), '회고\t-\t회고', row('haiku-high', '분석과 가공', 'a1111111111 표에서 찾음'), row('haiku-high', '분석과 가공', 'a1111111111 요지')]);
       assert.match(reason(run(low, { records: rec })), /1건이다/);
+    });
+
+    it('사용 기록에 아직 없어도 이 세션에서 띄운 시험 정의는 센다(한꺼번에 띄우거나 앞 시험이 도는 중)', () => {
+      usage(['회고\t-\t회고']);
+      const t = path.join(rec, 'session.jsonl');
+      const launch = (id) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { subagent_type: 'haiku-high', description: '분석과 가공', prompt: 'x' } }] } });
+      fs.writeFileSync(t, [launch('t1'), launch('t2')].join('\n') + '\n');
+      assert.equal(run(low, { records: rec, transcript: t }).out, null);
+      fs.writeFileSync(t, launch('t1') + '\n');
+      assert.match(reason(run(low, { records: rec, transcript: t })), /1건이다/);
     });
 
     it('시험 정의로 2건 보냈으면 칸 정의로 보내도 통과한다', () => {

@@ -184,4 +184,15 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP }, () => 
     assert.equal(checkDecision('제목\n', ['d.md'], added, ['사용자']), null);
     assert.match(checkDecision('제목\n', ['d.md'], added, ['사용자', '팀장']), /a\.md/);
   });
+
+  it('막는 장치와 체계 스크립트를 고친 커밋은 점검 줄을 요구하고, 시험 파일과 다른 저장소의 scripts는 보지 않는다', () => {
+    const { checkReview } = require(HOOK);
+    const m = '제목\n\n왜: 까닭\n전제: 사실\n';
+    assert.match(checkReview(m, ['subagent-system/hooks/brief-check.js']), /점검:/);
+    assert.match(checkReview(m, ['hooks/rm-guard.py']), /점검:/);
+    assert.equal(checkReview(m + '점검: 되돌려 보기 200건 중 새로 막음 0\n', ['subagent-system/hooks/brief-check.js']), null);
+    assert.equal(checkReview(m, ['subagent-system/scripts/tests/briefCheck.test.js']), null);
+    assert.equal(checkReview(m, ['scripts/analytics-weekly.js', 'docs/a.md']), null);
+    assert.equal(checkReview('Merge branch x\n', ['subagent-system/hooks/a.js']), null);
+  });
 });
