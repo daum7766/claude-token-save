@@ -135,7 +135,7 @@ function batchBriefText(prompt) {
 
 function isBatchJudging(prompt, description) {
   const t = prompt + '\n' + description;
-  return /묶음/.test(t) && /(판정|적용)/.test(t);
+  return /(묶음\s*(\d|번호)|packet-\d)/.test(t) && /(판정|적용)/.test(t);
 }
 
 function check(toolInput, routing) {
