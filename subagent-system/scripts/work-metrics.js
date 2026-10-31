@@ -40,7 +40,7 @@ const USAGE = [
   '  budget list [--since YYYY-MM-DD]',
   '  pair add --cell "<칸>" --task "<입력 요약>" --a <정의> --cost-a <$> --quality-a 통과|모자람|실패 --b <정의> --cost-b <$> --quality-b 통과|모자람|실패 [--memo "<메모>"]',
   '  pair list [--cell "<칸>"]',
-  '  unused [--kind skills|agents|scripts|docs] [--days 30] [--work-days 10] [--skills <폴더>] [--agents <폴더>] [--scripts <폴더>] [--docs <파일이나 폴더>]',
+  '  unused [--kind skills|agents|scripts|docs] [--days 30] [--work-days 10] [--skills <폴더>] [--agents <폴더>] [--scripts <폴더>] [--docs <파일이나 폴더>] [--files <프로젝트 문서 폴더>]',
   '  asks [--since YYYY-MM-DD] [--project <폴더>] [--asks-file <파일>]',
   '예산은 GUIDE 「기록과 회고」의 예산 문턱(서브에이전트를 띄우거나 도구 호출이 열 번 넘을 것으로 어림되는 작업)을 넘는 일에만 잰다. budget start는 일을 정한 뒤 서브에이전트를 띄우기 전에, budget end는 최종 보고 직전에 부른다. 어림은 budget list의 비슷한 지난 작업 실제값으로 잡는다. 사용 기록의 토큰 열은 마지막 요청 하나의 문맥 크기라 요청마다 더한 이 토큰과 단위가 다르니, 쓰려면 에이전트마다 토큰 열 × 도구 호출 수 ÷ 2로 바꿔 더하고 메인 몫을 얹는다(문맥이 고르게 자란다는 어림. 토큰 열을 그대로 더한 어림은 45~190배 모자랐다).',
   'budget end는 실제가 어림의 --over배 이상이면 넘음, --under배 이하면 덜 듦으로 적고, 이 둘이면 원인을 --cause나 budget cause로 남긴다. 세션을 못 찾으면 --session <id>를 준다.',
@@ -514,6 +514,22 @@ export function docItems(paths) {
   return out;
 }
 
+// 프로젝트 문서는 절 이름을 말하는 일이 드물어 파일째 본다. 폴더 안 상대 경로(예: quiz/quiz_builder.md)가
+// 도구 입력(파일 읽기, 셸 명령)이나 대화에 나오면 쓴 것으로 센다. 이름이 같은 파일이 여러 폴더에 있어도 가르려고 상대 경로를 쓴다.
+export function fileItems(paths) {
+  const out = [];
+  for (const root of paths) {
+    if (!fs.existsSync(root)) continue;
+    const files = fs.statSync(root).isDirectory() ? walkFiles(root, (n) => n.endsWith('.md')) : [root];
+    for (const f of files) {
+      const rel = fs.statSync(root).isDirectory() ? path.relative(root, f).split(path.sep).join('/') : path.basename(f);
+      if (/(^|\/)_temp\//.test(rel)) continue;
+      out.push({ kind: '문서 파일', name: rel, hit: (ev) => ev.talk.some((t) => t.includes(rel)) || ev.bash.some((t) => t.includes(rel)), needles: [escapeRe(rel)] });
+    }
+  }
+  return out;
+}
+
 export async function lastUses(items, root) {
   const stat = new Map(items.map((i) => [i, { last: 0, count: 0 }]));
   const needles = [...new Set(items.flatMap((i) => i.needles))];
@@ -547,6 +563,7 @@ async function unused(flags) {
     ...(want('agents') ? (flags.agents ?? [AGENTS_DIR]).flatMap(agentItems) : []),
     ...(want('scripts') ? (flags.scripts ?? [SELF_DIR]).flatMap(scriptItems) : []),
     ...(want('docs') ? docItems(flags.docs ?? [path.join(CLAUDE_DIR, 'docs'), path.join(CLAUDE_DIR, 'subagent-system', 'docs')]) : []),
+    ...(flags.files && (kind === 'all' || kind === 'files') ? fileItems(flags.files) : []),
   ];
   if (items.length === 0) return console.log('찾을 매뉴얼이 없습니다(폴더 인자를 확인하세요).');
   const stat = await lastUses(items, PROJECTS_ROOT);

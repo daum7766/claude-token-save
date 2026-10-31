@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadRates, toCounts, cost } from '../subagent-usage.js';
-import { countDecisionLines, summarizePairs, judge } from '../work-metrics.js';
+import { countDecisionLines, summarizePairs, judge, fileItems } from '../work-metrics.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(SCRIPTS, 'work-metrics.js');
@@ -384,5 +384,26 @@ describe('사용법', () => {
       assert.equal(r.code, 1);
       assert.match(r.err, /사용: /);
     }
+  });
+});
+
+describe('프로젝트 문서 파일째 보기 fileItems', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wm-files-'));
+  for (const rel of ['quiz/guide.md', 'vs/guide.md', '_temp/draft.md', 'HOME.md']) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), '# x\n');
+  }
+  const items = fileItems([root]);
+  const by = (n) => items.find((i) => i.name === n);
+  const ev = (talk = [], bash = []) => ({ talk, bash });
+
+  it('폴더 안 상대 경로로 이름 짓고 _temp는 빼서, 이름이 같은 파일을 가른다', () => {
+    assert.deepEqual(items.map((i) => i.name).sort(), ['HOME.md', 'quiz/guide.md', 'vs/guide.md']);
+  });
+
+  it('파일 읽기 입력이나 셸 명령에 상대 경로가 나오면 쓴 것으로 보고, 같은 이름의 다른 폴더 파일은 세지 않는다', () => {
+    assert.equal(by('quiz/guide.md').hit(ev(['{"file_path":"/p/docs/quiz/guide.md"}'])), true);
+    assert.equal(by('quiz/guide.md').hit(ev([], ['sed -n 1,20p docs/quiz/guide.md'])), true);
+    assert.equal(by('vs/guide.md').hit(ev(['{"file_path":"/p/docs/quiz/guide.md"}'])), false);
   });
 });
