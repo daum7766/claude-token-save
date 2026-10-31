@@ -63,17 +63,19 @@ function readConfig() {
 }
 
 // 괄호 하나 안에 날짜와 결정어가 함께 있으면 사용자 결정 표기로 본다.
-function hasDecisionNote(line, words) {
+// existing은 같은 파일에서 지운 줄들이다. 원래 있던 표기를 그대로 둔 채 줄만 고친 것은 새 표기가 아니다.
+function hasDecisionNote(line, words, existing = []) {
   for (const m of line.matchAll(/[(（]([^()（）]*)[)）]/g)) {
-    if (DATE.test(m[1]) && words.some((w) => m[1].includes(w))) return true;
+    if (DATE.test(m[1]) && words.some((w) => m[1].includes(w)) && !existing.some((r) => r.includes(m[0]))) return true;
   }
   return false;
 }
 
 // 통과면 null. message는 커밋 메시지, docs는 열린 결정 문서 경로, added는 [경로, 더한 줄] 목록이다.
-function checkDecision(message, docs, added, words) {
+function checkDecision(message, docs, added, words, removed = []) {
   if (docs.length === 0 || /^[ \t]*대조[ \t]*[:：][ \t]*\S/m.test(bodyOf(message))) return null;
-  const hits = added.filter(([file, line]) => !docs.includes(file) && hasDecisionNote(line, words));
+  const removedIn = (file) => removed.filter(([f]) => f === file).map(([, l]) => l);
+  const hits = added.filter(([file, line]) => !docs.includes(file) && hasDecisionNote(line, words, removedIn(file)));
   if (hits.length === 0) return null;
   return [
     `커밋을 막았습니다. 결정 문서(${docs.join(', ')})가 열려 있는데 다른 문서에 결정 표기를 새로 넣었습니다.`,
@@ -93,17 +95,22 @@ function stagedDecisionInput() {
     try {
       docs = git(['grep', '--cached', '-l', '-F', DECISION_MARK, '--', '*.md']).split('\n').filter(Boolean);
     } catch {
-      return { docs: [], added: [] };
+      return { docs: [], added: [], removed: [] };
     }
     const added = [];
+    const removed = [];
     let file = null;
+    let inHeader = false;
     for (const line of git(['diff', '--cached', '-U0', '--no-color', '--', '*.md']).split('\n')) {
-      if (line.startsWith('+++ ')) file = line.startsWith('+++ b/') ? line.slice(6) : null;
+      if (line.startsWith('diff --git ')) inHeader = true;
+      else if (line.startsWith('@@')) inHeader = false;
+      else if (inHeader) { if (line.startsWith('+++ ')) file = line.startsWith('+++ b/') ? line.slice(6) : null; }
       else if (file && line.startsWith('+')) added.push([file, line.slice(1)]);
+      else if (file && line.startsWith('-')) removed.push([file, line.slice(1)]);
     }
-    return { docs, added };
+    return { docs, added, removed };
   } catch {
-    return { docs: [], added: [] };
+    return { docs: [], added: [], removed: [] };
   }
 }
 
@@ -117,8 +124,8 @@ function main() {
   }
   const message = fs.readFileSync(file, 'utf8');
   const words = Array.isArray(config.decisionWords) && config.decisionWords.length ? config.decisionWords : ['사용자'];
-  const { docs, added } = stagedDecisionInput();
-  const problem = check(message) || checkDecision(message, docs, added, words);
+  const { docs, added, removed } = stagedDecisionInput();
+  const problem = check(message) || checkDecision(message, docs, added, words, removed);
   if (problem) {
     process.stderr.write(problem + '\n');
     process.exit(1);
