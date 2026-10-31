@@ -123,6 +123,21 @@ function findRoutedCell(description, routing) {
   return routing.filter((r) => r.name === best.name);
 }
 
+// 묶음으로 나눈 판정이나 적용 일은 공통 지시에 지킬 결정과 기준끼리 부딪힐 때의 순서가 있어야 한다.
+// 지시문이 가리키는 brief 파일(절대 경로 .md)까지 읽어 본다.
+function batchBriefText(prompt) {
+  let text = prompt;
+  for (const m of prompt.matchAll(/(\/[^\s`'"()]+brief[^\s`'"()]*\.md)/g)) {
+    try { text += '\n' + fs.readFileSync(m[1], 'utf8'); } catch { /* 없는 파일은 넘김 */ }
+  }
+  return text;
+}
+
+function isBatchJudging(prompt, description) {
+  const t = prompt + '\n' + description;
+  return /묶음/.test(t) && /(판정|적용)/.test(t);
+}
+
 function check(toolInput, routing) {
   const prompt = String(toolInput.prompt || '');
   const description = String(toolInput.description || '');
@@ -136,6 +151,13 @@ function check(toolInput, routing) {
   }
   if (!hasDecisionDoc(prompt)) {
     problems.push('결정 문서 경로가 없다. 대화에서 정한 내용을 정리한 결정 문서의 절대 경로를 `결정 문서: <경로>`로 적고, 정할 것이 없으면 `결정 문서: 없음(까닭)`으로 적어라.');
+  }
+
+  if (isBatchJudging(prompt, description)) {
+    const text = batchBriefText(prompt);
+    if (!/(지킬 결정|대표가 정한)/.test(text) || !/부딪/.test(text)) {
+      problems.push('묶음으로 나눈 판정이나 적용 일인데 공통 지시에 지킬 결정(사용자가 정해 빼면 안 되는 기능과 선택지, 걷는 시점이 따로 정해진 것)과 기준끼리 부딪힐 때의 순서가 없다. `지킬 결정:` 줄과 `부딪힐 때:` 줄을 적거나, 없으면 `지킬 결정: 없음(까닭)`, `부딪힐 때: 없음(까닭)`으로 적어라.');
+    }
   }
 
   const def = parseDefinition(type);
@@ -170,7 +192,7 @@ function main(raw) {
       permissionDecisionReason:
         '서브에이전트 지시문을 보내기 전에 고쳐라.\n- ' + problems.join('\n- ') +
         '\n왜: 목표와 결정 문서가 빠진 지시문은 재지시와 되돌림을 만든다. ' +
-        '전제: 600자 아래 지시와 haiku 정의는 검사하지 않는다.',
+        '전제: 600자 아래 지시와 haiku 정의는 검사하지 않는다. 묶음 판정 검사는 지시문과 그 안의 brief 경로 파일을 읽는다.',
     },
   };
 }
@@ -187,4 +209,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc };
+module.exports = { isBatchJudging, check, main, parseRoutingTable, hasGoalLine, hasDecisionDoc };
