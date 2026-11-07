@@ -23,8 +23,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-check-'));
 const tableFile = path.join(dir, 'ROUTING_TABLE.md');
 fs.writeFileSync(tableFile, `# 라우팅 표\n\n${TABLE}\n`);
 
-function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK, records = path.join(dir, 'no-records'), transcript } = {}) {
-  const env = { ...process.env, SUBAGENT_RECORDS_DIR: records };
+// 설정 폴더는 기본으로 비어 있는 임시 폴더라 시험이 이 컴퓨터의 설정에 기대지 않는다(결정어는 기본 「사용자」).
+function run(toolInput, { routing = tableFile, toolName = 'Agent', hook = HOOK, records = path.join(dir, 'no-records'), transcript, configDir = path.join(dir, 'no-config') } = {}) {
+  const env = { ...process.env, SUBAGENT_RECORDS_DIR: records, CLAUDE_CONFIG_DIR: configDir };
   if (routing === null) delete env.BRIEF_CHECK_ROUTING_FILES;
   else env.BRIEF_CHECK_ROUTING_FILES = routing;
   const r = spawnSync(process.execPath, [hook], { input: JSON.stringify({ tool_name: toolName, tool_input: toolInput, ...(transcript ? { transcript_path: transcript } : {}) }), encoding: 'utf8', env });
@@ -132,8 +133,19 @@ describe('지시문 검사 훅 brief-check', () => {
   });
 
   it('표에서 일 종류를 못 찾거나 정의 이름이 표 형식이 아니면 정의 비교를 건너뛴다', () => {
-    assert.equal(run({ subagent_type: 'opus-xhigh', description: '표에 없는 일', prompt: brief(GOAL + DOC) }).out, null);
-    assert.equal(run({ subagent_type: 'general-purpose', description: '문서 작성', prompt: brief(GOAL + DOC) }).out, null);
+    assert.equal(run({ subagent_type: 'opus-xhigh', description: '표에 없는 일: 새 조사', prompt: brief(GOAL + DOC) }).out, null);
+    assert.equal(run({ subagent_type: 'general-purpose', description: '아무 설명', prompt: brief(GOAL + DOC) }).out, null);
+  });
+
+  it('description에 표의 일 이름도 「표에 없는 일:」도 없으면 deny하고 꼴을 알린다', () => {
+    assert.match(reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC) })), /표에 없는 일: <이름>/);
+    assert.equal(run({ subagent_type: 'sonnet-high', description: '리뷰 지적 수정: 9회차 막음 고침', prompt: brief(GOAL + DOC) }).out, null);
+    assert.equal(run({ subagent_type: 'sonnet-high', description: '표에 없는 일: 막음 고침, 9회차', prompt: brief(GOAL + DOC) }).out, null);
+    assert.match(reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC + '표에 없는 일: 막음 고침\n') })), /description에 라우팅 표/);
+  });
+
+  it('표를 읽지 못하면 description 일 이름 검사도 건너뛴다', () => {
+    assert.equal(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC) }, { routing: path.join(dir, 'none.md') }).out, null);
   });
 
   it('표 파일을 읽지 못하면 정의 비교만 건너뛰고 목표 검사는 그대로 한다', () => {
@@ -164,11 +176,86 @@ describe('지시문 검사 훅 brief-check', () => {
   it('본문을 brief 파일에 두고 가리키기만 한 짧은 지시문도 그 파일까지 합쳐 묶음 검사를 한다', () => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-file-'));
     const file = path.join(d, 'brief.md');
-    const short = { subagent_type: 'sonnet-medium', description: '여러 문서 갱신', prompt: `공통 지시 ${file} 를 읽고 묶음 03을 적용한다.` };
-    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n대표가 정한 기능은 빼지 않는다.\n');
+    const short = { subagent_type: 'sonnet-medium', description: '문서 작성', prompt: `공통 지시 ${file} 를 읽고 묶음 03을 적용한다.` };
+    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n사용자가 정한 기능은 빼지 않는다.\n');
     assert.match(reason(run(short)), /부딪힐 때/);
-    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n지킬 결정: 대표가 정한 기능은 빼지 않는다.\n부딪힐 때: 결정 문서가 먼저다.\n');
+    fs.writeFileSync(file, GOAL + DOC + FILLER + '\n지킬 결정: 사용자가 정한 기능은 빼지 않는다.\n부딪힐 때: 결정 문서가 먼저다.\n');
     assert.equal(run(short).out, null);
+  });
+
+  describe('결정어(U4-11)', () => {
+    const configWith = (words) => {
+      const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-cfg-'));
+      fs.mkdirSync(path.join(cfg, 'subagent-system'));
+      fs.writeFileSync(path.join(cfg, 'subagent-system', 'config.json'), JSON.stringify({ decisionWords: words }));
+      return cfg;
+    };
+    const batchBrief = (decided) => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-word-'));
+      const file = path.join(d, 'brief.md');
+      fs.writeFileSync(file, GOAL + DOC + FILLER + `\n${decided} 기능은 빼지 않는다.\n부딪힐 때: 결정 문서가 먼저다.\n`);
+      return { subagent_type: 'sonnet-medium', description: '문서 작성', prompt: `공통 지시 ${file} 를 읽고 묶음 03을 적용한다.` };
+    };
+
+    it('config 결정어가 팀장이면 「팀장이 정한」을 지킬 결정 줄로 받는다', () => {
+      const cfg = configWith(['팀장']);
+      assert.equal(run(batchBrief('팀장이 정한'), { configDir: cfg }).out, null);
+      assert.match(reason(run(batchBrief('대표가 정한'), { configDir: cfg })), /지킬 결정/);
+    });
+
+    it('config 결정어가 대표와 사용자이면 「대표가 정한」과 「사용자가 정한」을 받는다', () => {
+      const cfg = configWith(['대표', '사용자']);
+      assert.equal(run(batchBrief('대표가 정한'), { configDir: cfg }).out, null);
+      assert.equal(run(batchBrief('사용자가 정한'), { configDir: cfg }).out, null);
+    });
+
+    it('설정이 없으면 기본 결정어 「사용자」만 받는다', () => {
+      assert.equal(run(batchBrief('사용자가 정한')).out, null);
+      assert.match(reason(run(batchBrief('팀장이 정한'))), /지킬 결정/);
+    });
+  });
+
+  describe('회사 규칙 묶음 없음', () => {
+    // 깐 상태 기록을 만든다. 묶음 이름만 적고 조각은 비운다(훅은 이름만 본다).
+    const lockedConfig = (names) => {
+      const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-lock-'));
+      fs.mkdirSync(path.join(cfg, 'subagent-system'));
+      fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed: Object.fromEntries(names.map((n) => [n, { options: [], parts: {} }])) }));
+      return cfg;
+    };
+    const routingOnly = lockedConfig(['routing']);
+    const batchFile = (decided) => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-nocompany-'));
+      const file = path.join(d, 'brief.md');
+      fs.writeFileSync(file, FILLER + `\n${decided}\n`);
+      return { subagent_type: 'sonnet-medium', description: '문서 작성', prompt: `공통 지시 ${file} 를 읽고 묶음 03을 적용한다.` };
+    };
+
+    it('회사 규칙이 안 깔리면 목표 줄과 결정 문서 줄 검사를 쉰다', () => {
+      assert.equal(run({ ...medium, prompt: brief('') }, { configDir: routingOnly }).out, null);
+    });
+
+    it('회사 규칙이 안 깔리면 지킬 결정 줄 검사도 쉰다', () => {
+      assert.equal(run(batchFile('사용자가 정한 기능은 빼지 않는다.'), { configDir: routingOnly }).out, null);
+    });
+
+    it('회사 규칙이 안 깔려도 라우팅 꼴(높임, 표에 없는 일)은 그대로 막는다', () => {
+      assert.match(reason(run({ subagent_type: 'opus-high', description: '문서 작성', prompt: brief('') }, { configDir: routingOnly })), /높임:/);
+      assert.match(reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief('') }, { configDir: routingOnly })), /표에 없는 일: <이름>/);
+    });
+
+    it('회사 규칙이 깔린 기록이면 목표 줄 검사를 지금과 같이 한다', () => {
+      const withCompany = lockedConfig(['routing', 'company']);
+      assert.match(reason(run({ ...medium, prompt: brief('') }, { configDir: withCompany })), /`목표:` 줄/);
+      assert.match(reason(run(batchFile('사용자가 정한 기능은 빼지 않는다.'), { configDir: withCompany })), /부딪힐 때/);
+    });
+
+    it('기록이 없거나 깨졌으면 깔린 것으로 보고 목표 줄 검사를 한다', () => {
+      assert.match(reason(run({ ...medium, prompt: brief('') })), /`목표:` 줄/);
+      const broken = lockedConfig(['routing']);
+      fs.writeFileSync(path.join(broken, 'subagent-system', 'bundles.lock.json'), '{ 깨진 기록');
+      assert.match(reason(run({ ...medium, prompt: brief('') }, { configDir: broken })), /`목표:` 줄/);
+    });
   });
 
   describe('시험 표시 칸', () => {

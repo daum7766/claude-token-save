@@ -10,9 +10,9 @@
  *  - 회고 잠금(records/retro.lock)이 3시간 안에 잡혀 있다. 훅 입력에는 회고 서브에이전트라는 표시가 없어 잠금이 잡힌 동안으로 좁힌다.
  *  - 대상 경로가 설정 폴더나 kitSourcePath 아래의 허용 자리(회고가 고치는 자리)이고, 아래 보호 목록은 아니다.
  *    허용 자리: 설정 폴더는 subagent-system/docs/, subagent-system/rates.json, rules/, docs/, agents/, skills/. 키트 뿌리는 subagent-system/의 docs, agents, skills, rules, rates.json, CHANGES.md, VERSION과 README.md.
- *    스크립트, 훅, 훅 등록 원본(settings-hook.json)은 훅이 확인 창 없이 돌리거나 업데이트가 settings.json에 옮기므로 어느 쪽에서도 열지 않는다.
+ *    스크립트, 훅, 훅 등록 원본(bundles/ 아래 조각 정의)은 훅이 확인 창 없이 돌리거나 업데이트가 settings.json에 옮기므로 어느 쪽에서도 열지 않는다.
  *    막을 자리를 나열하면 새 자리(commands/, mods/ 등)가 생길 때마다 구멍이 나서, 열 자리를 나열한다. 보호 목록은 두 뿌리 모두 그 뿌리 기준 경로로 견준다. 정책 문서, 권한 설정, 문지기 훅, 이 훅과 키트 설정을 서브에이전트가 승인 없이 바꾸면 이 허용이 보호할 것을 스스로 풀 수 있기 때문이다.
- *    CLAUDE.md, settings*.json, docs/plan/, .git/, hooks/(개인 문지기 훅), subagent-system/hooks/(이 훅 자신 포함), subagent-system/config.json
+ *    CLAUDE.md, USER_SETTINGS.md(사용자 설정 문서), settings*.json, docs/plan/, .git/, hooks/(개인 문지기 훅), subagent-system/hooks/(이 훅 자신 포함), subagent-system/config.json, subagent-system/bundles.lock.json(깐 상태 기록), subagent-system/kept-values.json(빼며 보관한 설치 값)
  *    agents/와 skills/ 아래 파일은 쓰기 전과 뒤의 머리 키가 모두 열 키(name, description, model, effort, argument-hint, disable-model-invocation)일 때만 허용한다. 머리 구분선(---)으로 시작하는데(BOM과 앞 공백은 건너뜀) 머리를 읽지 못하는 파일(닫는 구분선 없음)은 넘긴다. 구분선으로 시작하지 않는 문서는 머리가 없는 것이라 연다. 노트북 쓰기는 넘긴다.
  *    이 키는 확인 창을 건너뛰거나 훅을 돌리게 해 문지기를 승인 없이 풀 수 있기 때문이다.
  *    키트 뿌리 쪽은 .claude/(그 저장소의 권한 설정과 그 아래 작업 트리)도 보호한다. 프로젝트 권한 파일이 거기 있어서다.
@@ -28,11 +28,11 @@ const path = require('node:path');
 
 const WRITE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 const LOCK_LIVE_MS = 3 * 60 * 60 * 1000;
-const PROTECTED_FILES = ['claude.md', 'subagent-system/config.json', 'subagent-system/docs/migrated_user_rules.md'];
+const PROTECTED_FILES = ['claude.md', 'user_settings.md', 'subagent-system/config.json', 'subagent-system/bundles.lock.json', 'subagent-system/kept-values.json', 'subagent-system/docs/migrated_user_rules.md'];
 // MIGRATED_USER_RULES.md는 옛 사용자 CLAUDE.md에서 옮긴 정책 줄이 섞여 있어 정책 문서처럼 지킨다.
 const PROTECTED_TOP_PATTERN = /^settings[^/]*\.json$/;
 const PROTECTED_DIRS = ['docs/plan', '.git', 'hooks', 'subagent-system/hooks'];
-// 회고가 고치는 자리만 연다. 스크립트, 훅, 훅 등록 원본(settings-hook.json)은 어느 쪽에서도 열지 않는다.
+// 회고가 고치는 자리만 연다. 스크립트, 훅, 훅 등록 원본(bundles/ 아래 조각 정의)은 어느 쪽에서도 열지 않는다.
 const ALLOWED_DIRS = ['subagent-system/docs', 'subagent-system/rates.json', 'rules', 'docs', 'agents', 'skills'];
 const CFG_PROTECTED_DIRS = [];
 const KIT_ALLOWED = ['subagent-system/docs', 'subagent-system/rates.json', 'subagent-system/agents', 'subagent-system/skills', 'subagent-system/rules', 'subagent-system/changes.md', 'subagent-system/version', 'readme.md'];
@@ -202,6 +202,6 @@ function main() {
   }
 }
 
-module.exports = { shouldAllow, frontKeys };
+module.exports = { shouldAllow, frontKeys, PROTECTED_FILES };
 
 if (require.main === module) main();

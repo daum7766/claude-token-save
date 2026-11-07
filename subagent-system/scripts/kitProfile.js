@@ -11,6 +11,10 @@ export const PROFILES = {
   company: { retroMode: 'ask', retroWriteAllow: false, commitCheck: 'off' },
 };
 
+// 이 키를 채우고 지키는 묶음이다(묶음 정의의 configKeys와 같다). 설치 도구는 깐 묶음이 주인인 키만 채운다.
+// 까닭: 라우팅을 안 깐 설치의 config.json에 회고 키가 남으면 쓰이지 않는 값이 보호 스위치처럼 읽힌다. commitCheck는 바닥이 주인이라 늘 채운다.
+export const PROFILE_KEY_OWNER = { retroMode: 'routing', retroWriteAllow: 'routing', commitCheck: 'base' };
+
 // 예전에 설정 키였다가 profile 판정으로 합쳐진 키다. 읽지 않고, 업데이트와 set-profile이 config.json에서 지운다.
 export const RETIRED_POLICY_KEYS = ['autoApplyRules', 'autoCreate', 'actThreshold', 'methodCommit'];
 

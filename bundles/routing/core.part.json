@@ -1,0 +1,90 @@
+{
+  "bundle": "routing",
+  "part": "core",
+  "origin": "kit",
+  "files": [
+    "agents/*.md",
+    "skills/retro/**",
+    "rules/kit-routing.md",
+    "subagent-system/docs/SUBAGENT_GUIDE.md",
+    "subagent-system/docs/SUBAGENT_SITUATIONS.md",
+    "subagent-system/docs/RETRO.md",
+    "subagent-system/docs/AUTO_RETRO.md",
+    "subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md",
+    "subagent-system/docs/ROUTING_TABLE.md",
+    "subagent-system/rates.json",
+    "subagent-system/scripts/subagent-retro.js",
+    "subagent-system/scripts/subagentRetroHelpers.js",
+    "subagent-system/scripts/subagent-usage.js",
+    "subagent-system/scripts/speed-review.js",
+    "subagent-system/scripts/speedReviewHelpers.js",
+    "subagent-system/scripts/main-session-cost.js",
+    "subagent-system/scripts/transcriptTiming.js",
+    "subagent-system/scripts/work-metrics.js",
+    "subagent-system/hooks/brief-check.js",
+    "subagent-system/hooks/usage-autolog.js",
+    "subagent-system/hooks/retro-write-allow.js",
+    "subagent-system/hooks/stall-check.js",
+    "subagent-system/scripts/tests/agentCostTime.test.js",
+    "subagent-system/scripts/tests/briefCheck.test.js",
+    "subagent-system/scripts/tests/kitMerge.test.js",
+    "subagent-system/scripts/tests/routingTable.test.js",
+    "subagent-system/scripts/tests/speedReview.test.js",
+    "subagent-system/scripts/tests/subagentCli.test.js",
+    "subagent-system/scripts/tests/subagentRetroHelpers.test.js",
+    "subagent-system/scripts/tests/transcriptTiming.test.js",
+    "subagent-system/scripts/tests/usageAutolog.test.js",
+    "subagent-system/scripts/tests/workMetrics.test.js",
+    "subagent-system/scripts/tests/retroWriteAllow.test.js",
+    "subagent-system/scripts/tests/stallCheck.test.js"
+  ],
+  "kinds": {
+    "subagent-system/docs/ROUTING_TABLE.md": "once",
+    "subagent-system/rates.json": "rates"
+  },
+  "rename": {
+    "skills/retro/": "commandName"
+  },
+  "kitOnly": [
+    "subagent-system/docs/ROUTING_PRESETS.md"
+  ],
+  "hooks": [
+    {
+      "name": "subagent-usage",
+      "event": "SubagentStop",
+      "command": "node \"$HOME/.claude/subagent-system/scripts/subagent-usage.js\" --hook",
+      "timeout": 30
+    },
+    {
+      "name": "usage-autolog",
+      "event": "SubagentStop",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/usage-autolog.js\"",
+      "timeout": 30
+    },
+    {
+      "name": "brief-check",
+      "event": "PreToolUse",
+      "matcher": "Agent",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/brief-check.js\"",
+      "timeout": 10
+    },
+    {
+      "name": "retro-write-allow",
+      "event": "PermissionRequest",
+      "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/retro-write-allow.js\"",
+      "timeout": 10,
+      "when": {
+        "config": "retroWriteAllow",
+        "equals": true
+      }
+    },
+    {
+      "name": "stall-check",
+      "event": "Stop",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/stall-check.js\"",
+      "timeout": 10
+    }
+  ],
+  "gitHooks": []
+}

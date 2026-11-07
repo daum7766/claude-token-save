@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+/**
+ * git commit-msg 훅. 커밋 메시지에 `왜:` 줄과 `전제:` 줄이 없으면 커밋을 막는다.
+ *
+ * 무엇을: 메시지(주석 줄 제외)에 값이 있는 `왜:` 줄과 `전제:` 줄이 모두 있는지 본다. merge 커밋과 `fixup!`, `squash!`, `amend!`는 통과한다.
+ *  또 저장소에 열린 결정 문서(`<!-- decision-doc -->` 표시가 든 마크다운)가 있으면, 다른 마크다운에 사용자 결정 표기(날짜와 결정어가 함께 든 괄호)를 새로 넣는 커밋을 막는다. 대조표대로 옮기는 커밋은 메시지에 `대조:` 줄을 넣으면 통과한다.
+ *  또 막는 장치와 체계 스크립트(`subagent-system/hooks/`, `subagent-system/scripts/`, 설정 폴더의 `hooks/`, 시험 파일 제외)를 고친 커밋은 `점검:` 줄을 요구한다.
+ * 왜(점검): 막는 장치를 고칠 때 놓친 경우와 부작용(오탐)을 켠 뒤에야 찾는 일이 되풀이됐다. 바꾸기 전 점검(FEEDBACK 「바꾸기 전 점검」)을 했는지 커밋에서 기계로 확인한다.
+ * 왜(결정 문서): 개편 중 대화 결정을 정리 대상 문서에 바로 기워 넣으면 정본을 가를 수 없고 압축 뒤와 실무자가 판단할 근거가 없다(COMPANY_RULES 「결정 문서」 개편). 규칙만으로는 놓쳐서 기계로 막는다.
+ * 왜: 커밋에 근거가 빠지면 나중에 이 변경을 되돌리거나 고칠 때 무엇을 믿고 한 일인지 알 수 없다. 사람 기억에 맡기지 않고 기계로 막는다.
+ * 전제:
+ *  - `왜:` 줄은 변경의 까닭, `전제:` 줄은 그때 믿은 사실이나 상태(측정값, 기준 커밋, 결정)를 적는다.
+ *  - 통과하는 꼴은 첫 줄이 `Merge `로 시작하는 메시지와 `fixup! `, `squash! `, `amend! `로 시작하는 메시지다.
+ *  - node만 있으면 돈다(Windows Git Bash에서도 같다). 설치는 git `core.hooksPath`가 이 폴더를 가리키게 한다.
+ *  - 결정어는 config.json `decisionWords`(문자열 배열)이고 없으면 `사용자`다. 결정 문서 표시를 지우면(개편이 끝나면) 이 검사는 쉰다.
+ *  - 설치본(subagent-system/hooks/git)이면 subagent-system/config.json의 `commitCheck`가 `off`일 때 검사하지 않는다. 설정이 없거나 읽을 수 없으면 검사한다.
+ */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+// kit-lint-ignore no-unused-vars: U3 전 commit-msg를 글자 그대로 둔 견본이라 안 쓰는 이름도 고치지 않는다
+const DECISION_MARK = '<!-- decision-doc -->';
+const DATE = /\d{4}-\d{2}-\d{2}/;
+
+const EXEMPT = /^(Merge |fixup! |squash! |amend! )/;
+const REQUIRED = [
+  { label: '왜', re: /^[ \t]*왜[ \t]*[:：][ \t]*\S/m },
+  { label: '전제', re: /^[ \t]*전제[ \t]*[:：][ \t]*\S/m },
+];
+
+// git이 메시지에서 지우는 주석 줄과, 커밋 편집기의 가위선 아래(diff)를 뺀다.
+function bodyOf(raw) {
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (/^# -{10,} >8 -{10,}$/.test(line)) break;
+    if (line.startsWith('#')) continue;
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+// 통과면 null, 막을 때는 빠진 것을 알리는 말을 돌려준다.
+function check(raw) {
+  const body = bodyOf(raw);
+  if (body === '' || EXEMPT.test(body)) return null;
+  const missing = REQUIRED.filter((r) => !r.re.test(body)).map((r) => `${r.label}:`);
+  if (missing.length === 0) return null;
+  return [
+    `커밋을 막았습니다. 메시지에 ${missing.map((m) => `\`${m}\``).join(', ')} 줄이 없습니다.`,
+    '커밋 메시지에는 무엇을(제목), 왜(`왜:` 줄), 전제(`전제:` 줄)를 적습니다.',
+    '  왜: 이 변경을 하는 까닭',
+    '  전제: 그때 믿은 사실이나 상태(측정값, 기준 커밋, 결정)',
+    'merge, fixup!, squash!, amend! 커밋은 통과합니다.',
+  ].join('\n');
+}
+
+// 막는 장치와 체계 스크립트를 고쳤으면(시험 파일 제외) 통과면 null, 아니면 막는 말.
+const GUARDED = /(^|\/)subagent-system\/(hooks|scripts)\/|^hooks\//;
+function checkReview(raw, files) {
+  const body = bodyOf(raw);
+  if (body === '' || EXEMPT.test(body)) return null;
+  const hit = files.filter((f) => GUARDED.test(f) && !/(^|\/)tests?\/|\.test\.js$/.test(f));
+  if (hit.length === 0 || /^[ \t]*점검[ \t]*[:：][ \t]*\S/m.test(body)) return null;
+  return [
+    '커밋을 막았습니다. 막는 장치나 체계 스크립트를 고쳤는데 메시지에 `점검:` 줄이 없습니다.',
+    ...hit.slice(0, 5).map((f) => `  ${f}`),
+    '`점검:` 줄에 바꾸기 전 점검(FEEDBACK 「바꾸기 전 점검」) 결과를 한두 줄로 적습니다: 따져 본 경우, 되돌려 보기(hook-replay.js) 결과, 부작용.',
+  ].join('\n');
+}
+
+function stagedFiles() {
+  try {
+    return execFileSync('git', ['diff', '--cached', '--name-only'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'config.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+// 괄호 하나 안에 날짜와 결정어가 함께 있으면 사용자 결정 표기로 본다.
+// existing은 같은 파일에서 지운 줄들이다. 원래 있던 표기를 그대로 둔 채 줄만 고친 것은 새 표기가 아니다.
+function hasDecisionNote(line, words, existing = []) {
+  for (const m of line.matchAll(/[(（]([^()（）]*)[)）]/g)) {
+    if (DATE.test(m[1]) && words.some((w) => m[1].includes(w)) && !existing.some((r) => r.includes(m[0]))) return true;
+  }
+  return false;
+}
+
+// 통과면 null. message는 커밋 메시지, docs는 열린 결정 문서 경로, added는 [경로, 더한 줄] 목록이다.
+function checkDecision(message, docs, added, words, removed = []) {
+  if (docs.length === 0 || /^[ \t]*대조[ \t]*[:：][ \t]*\S/m.test(bodyOf(message))) return null;
+  const removedIn = (file) => removed.filter(([f]) => f === file).map(([, l]) => l);
+  const hits = added.filter(([file, line]) => !docs.includes(file) && hasDecisionNote(line, words, removedIn(file)));
+  if (hits.length === 0) return null;
+  return [
+    `커밋을 막았습니다. 결정 문서(${docs.join(', ')})가 열려 있는데 다른 문서에 결정 표기를 새로 넣었습니다.`,
+    ...hits.slice(0, 5).map(([file, line]) => `  ${file}: ${line.trim().slice(0, 80)}`),
+    '대화에서 정한 것은 결정 문서에 먼저 적습니다. 대조표대로 옮기는 커밋이면 메시지에 `대조: <대조표 행>` 줄을 넣습니다.',
+  ].join('\n');
+}
+
+function git(args) {
+  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+// 색인(index)에서 결정 문서와, 마크다운에 새로 들어간 줄을 읽는다. git을 못 부르면 검사하지 않는다.
+function stagedDecisionInput() {
+  try {
+    let docs = [];
+    try {
+      // 표시가 한 줄을 다 차지한 문서만 결정 문서로 본다. 표시를 글 속에서 설명하는 안내 문서(DOC_WRITING 등)를 결정 문서로 잘못 보지 않게.
+      docs = git(['grep', '--cached', '-l', '-E', '^[[:space:]]*<!-- decision-doc -->[[:space:]]*$', '--', '*.md']).split('\n').filter(Boolean);
+    } catch {
+      return { docs: [], added: [], removed: [] };
+    }
+    const added = [];
+    const removed = [];
+    let file = null;
+    let inHeader = false;
+    for (const line of git(['diff', '--cached', '-U0', '--no-color', '--', '*.md']).split('\n')) {
+      if (line.startsWith('diff --git ')) inHeader = true;
+      else if (line.startsWith('@@')) inHeader = false;
+      else if (inHeader) { if (line.startsWith('+++ ')) file = line.startsWith('+++ b/') ? line.slice(6) : null; }
+      else if (file && line.startsWith('+')) added.push([file, line.slice(1)]);
+      else if (file && line.startsWith('-')) removed.push([file, line.slice(1)]);
+    }
+    return { docs, added, removed };
+  } catch {
+    return { docs: [], added: [], removed: [] };
+  }
+}
+
+function main() {
+  const config = readConfig();
+  if (config.commitCheck === 'off') return;
+  const file = process.argv[2];
+  if (!file) {
+    process.stderr.write('commit-msg: 메시지 파일 경로 인자가 없습니다\n');
+    process.exit(1);
+  }
+  const message = fs.readFileSync(file, 'utf8');
+  const words = Array.isArray(config.decisionWords) && config.decisionWords.length ? config.decisionWords : ['사용자'];
+  const { docs, added, removed } = stagedDecisionInput();
+  const problem = check(message) || checkReview(message, stagedFiles()) || checkDecision(message, docs, added, words, removed);
+  if (problem) {
+    process.stderr.write(problem + '\n');
+    process.exit(1);
+  }
+}
+
+module.exports = { check, checkReview, checkDecision };
+
+if (require.main === module) main();

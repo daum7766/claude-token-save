@@ -1,6 +1,6 @@
 ---
 name: sonnet-medium
-description: 구현, 문서 작성, 분석과 가공까지 맡는 대부분의 일. 구현 계획이 정해진 기능 구현(파일 수와 상관없음), 범위가 정해진 테스트 작성, 형식이 정해진 문서와 보고서 작성, 로그와 쿼리 결과 가공, 코드 정리 검토(찾기만). (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
+description: 할 일이 정해진 실행에 더해 구현, 문서 작성, 분석과 가공까지 맡는 대부분의 일. 구현 계획이 정해진 기능 구현(파일 수와 상관없음), 범위가 정해진 테스트 작성, 형식이 정해진 문서와 보고서 작성, 로그와 쿼리 결과 가공, 코드 정리 검토(찾기만). (`~/.claude/subagent-system/docs/SUBAGENT_GUIDE.md`)
 model: sonnet
 effort: medium
 ---

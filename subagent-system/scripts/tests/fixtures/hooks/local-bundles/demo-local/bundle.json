@@ -1,0 +1,7 @@
+{
+  "name": "demo-local",
+  "title": "데모 로컬 묶음",
+  "summary": "시험용으로 지어낸 로컬 묶음",
+  "order": 90,
+  "selectable": true
+}

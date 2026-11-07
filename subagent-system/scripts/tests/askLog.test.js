@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { missingFiles } from './fixtures/installedLayout.js';
 
 const HOOK = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..'), 'hooks', 'ask-log.js');
 
@@ -58,7 +59,7 @@ describe('ask-log 훅', () => {
 
   it('사용자의 검사 훅이 hook 이름을 달아 먼저 적은 같은 입력도 두 번 적지 않는다', () => {
     const file = path.join(tmp(), 'asks.jsonl');
-    fs.writeFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), hook: 'rm-guard', input: 'rm a' })}\n깨진 줄\n`);
+    fs.writeFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), hook: 'demo-guard', input: 'rm a' })}\n깨진 줄\n`);
     fire(ask('rm a'), { ASK_LOG_FILE: file });
     assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 2);
   });
@@ -85,7 +86,7 @@ describe('ask-log 훅', () => {
   };
   const write = (target, extra = {}) => ({ session_id: 's1', agent_id: 'a1', tool_name: 'Write', tool_input: { file_path: target }, ...extra });
 
-  it('회고 쓰기 허용 훅이 걸려 있어 허용하는 요청은 승인 창으로 적지 않고 허용하지 않는 요청은 적는다', () => {
+  it('회고 쓰기 허용 훅이 걸려 있어 허용하는 요청은 승인 창으로 적지 않고 허용하지 않는 요청은 적는다', { skip: missingFiles('subagent-system/hooks/retro-write-allow.js') }, () => {
     const { cfg, records, file, env } = retroSetup({ hooked: true });
     fire(write(path.join(cfg, 'docs', 'x.md')), env);
     assert.equal(rows(file).length, 0, '허용된 회고 쓰기는 적지 않는다');

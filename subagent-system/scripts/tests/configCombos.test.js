@@ -6,17 +6,20 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { missingFiles, missingBundles } from './fixtures/installedLayout.js';
 
 const SUB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RETRO = path.join(SUB, 'scripts', 'subagent-retro.js');
 const HOOK = path.join(SUB, 'hooks', 'git', 'commit-msg');
 const HAS_GIT = spawnSync('git', ['--version']).status === 0;
-// commit-msg 훅은 설치 때 고르는 선택 훅이라 고르지 않은 설치본에는 파일이 없다. 없으면 커밋 검사 훅 단언은 건너뛴다.
-const HAS_HOOK = fs.existsSync(HOOK);
+// 커밋 검사는 commit-msg 훅과 work-git 묶음의 근거 검사 조각이 함께 있어야 막는다. 없으면 커밋 검사 훅 단언은 건너뛴다.
+const HAS_HOOK = fs.existsSync(HOOK) && !missingFiles('subagent-system/hooks/git/commit-msg.d/20-why-premise.cjs');
+// 회고 스크립트(라우팅 묶음)가 없으면 이 표 시험은 건너뛴다.
+const NO_RETRO = missingFiles('subagent-system/scripts/subagent-retro.js');
 for (const k of Object.keys(process.env)) if (k.startsWith('SUBAGENT_')) delete process.env[k];
 
 // 설정 조합을 한 표로 훑는 시험이다. 기대값은 APPLY_GUIDE 「개인용과 회사용」 표와 RETRO 「누가 회고하고 언제 하나」에서 가져온다.
-// 무엇을 묻는지(물을 것 세기, 바로 고치기, 애매할 때 문턱)는 profile 하나가, 회고를 언제 누가 돌리는지(--due 첫 줄, --snooze)는 retroMode가 정한다.
+// 무엇을 묻는지(물을 것 세기, 바로 고치기)는 profile 하나가, 회고를 언제 누가 돌리는지(--due 첫 줄, --snooze)는 retroMode가 정한다.
 const DEFAULTS = {
   personal: { retroWriteAllow: true, commitCheck: 'block' },
   company: { retroWriteAllow: false, commitCheck: 'off' },
@@ -29,8 +32,8 @@ const RETIRED = {
 const PROPOSALS = ['## 제안', '', '### 요율 더하기', '- 얻는 것: x', '### 정책 바꾸기', '- 묻기: 정책', '### 문지기 풀기', '- 묻기: 문지기 풀기', ''].join('\n');
 const USAGE = Array.from({ length: 30 }, (_, i) => `2026-10-12\t/p\tsonnet-low\t번역\t1\t2\t3\tok\ta${i} 줄`).join('\n') + '\n';
 
-const PERSONAL = { pending: 2, scope: '사용자에게 묻는 여섯 종만', applyRules: '켬 (profile이 정함)', threshold: '작으면 하고 알림 (profile이 정함)', slashAsk: '받지 않음' };
-const COMPANY = { pending: 3, scope: '제안 목록 전부', applyRules: '끔 (profile이 정함)', threshold: '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기 (profile이 정함)', slashAsk: '받음' };
+const PERSONAL = { pending: 2, scope: '사용자에게 묻는 여섯 종만', applyRules: '켬 (profile이 정함)', slashAsk: '받지 않음' };
+const COMPANY = { pending: 3, scope: '제안 목록 전부', applyRules: '끔 (profile이 정함)', slashAsk: '받음' };
 // 행: 설정 조합과 그 조합에서 문서가 말하는 값. 빠진 키와 옛 판정 키가 남은 행도 기대값은 같다.
 // commitCheck만 예외라 hookBlocks는 키가 없으면 true(APPLY_GUIDE: commit-msg 훅은 키가 없으면 검사함)다.
 const ROWS = [];
@@ -101,11 +104,13 @@ function observe(row, { repo = false } = {}) {
   if (text !== null) fs.writeFileSync(path.join(sub, 'config.json'), text);
   let hook = null;
   if (HAS_HOOK) {
-    fs.mkdirSync(path.join(sub, 'hooks', 'git'), { recursive: true });
-    fs.copyFileSync(HOOK, path.join(sub, 'hooks', 'git', 'commit-msg'));
+    // 훅 폴더 전체(이어 부르는 sh와 조각)와 조각이 부르는 모듈을 설치본 모양으로 놓고, 훅 파일을 직접 돌린다.
+    fs.cpSync(path.join(SUB, 'hooks', 'git'), path.join(sub, 'hooks', 'git'), { recursive: true });
+    fs.mkdirSync(path.join(sub, 'scripts'), { recursive: true });
+    for (const f of ['userSettings.cjs', 'kitInstalled.cjs']) fs.copyFileSync(path.join(SUB, 'scripts', f), path.join(sub, 'scripts', f));
     const msg = path.join(root, 'MSG');
     fs.writeFileSync(msg, '왜와 전제가 없는 제목\n');
-    hook = spawnSync(process.execPath, [path.join(sub, 'hooks', 'git', 'commit-msg'), msg], { encoding: 'utf8' });
+    hook = spawnSync(path.join(sub, 'hooks', 'git', 'commit-msg'), [msg], { encoding: 'utf8', cwd: claude });
   }
 
   return {
@@ -115,7 +120,6 @@ function observe(row, { repo = false } = {}) {
     pendingScope: pick(/^물을 것\((.*)\): \d+건$/m),
     pending: pick(/^물을 것\(.*\): (\d+)건$/m),
     applyRules: pick(/^바로 고치기: (.+)$/m),
-    threshold: pick(/^애매할 때: (.+)$/m),
     snooze,
     slashAsk: decide(run(['--slash', 'ask']), /(이미 ask입니다|auto에서 ask로 바꿨습니다)/, /받지 않습니다/),
     slashAuto: decide(run(['--slash', 'auto']), /(이미 auto입니다|ask에서 auto로 바꿨습니다)/, /받지 않습니다/),
@@ -130,7 +134,6 @@ const expectedOf = (row) => ({
   pendingScope: row.scope,
   pending: String(row.pending),
   applyRules: row.applyRules,
-  threshold: row.threshold,
   snooze: row.snooze,
   slashAsk: row.slashAsk,
   slashAuto: '받음',
@@ -138,8 +141,8 @@ const expectedOf = (row) => ({
 });
 const label = (row) => `${row.profile} / retroMode ${row.retroMode} / 없는 키 ${row.missing ?? '없음'}${row.withRetired ? ' / 옛 판정 키 남음' : ''}`;
 
-describe('설정 조합별 스크립트 판정', () => {
-  it('profile, retroMode, 빠진 키, 남은 옛 판정 키의 모든 조합에서 물을 것 세기, --snooze와 --slash 받기, --status의 바로 고치기와 애매할 때 줄, 커밋 검사 훅이 문서가 말하는 값과 같다', () => {
+describe('설정 조합별 스크립트 판정', { skip: NO_RETRO }, () => {
+  it('profile, retroMode, 빠진 키, 남은 옛 판정 키의 모든 조합에서 물을 것 세기, --snooze와 --slash 받기, --status의 바로 고치기 줄, 커밋 검사 훅이 문서가 말하는 값과 같다', () => {
     const diffs = [];
     for (const row of ROWS) {
       const got = observe(row);
@@ -164,10 +167,12 @@ describe('설정 조합별 스크립트 판정', () => {
 // 순서가 있는 경로: 위 표는 설정 값 하나하나의 조합만 보므로, 명령을 차례로 돌려야 나타나는 조합을 따로 본다.
 // 키트 원본에서만 돈다(설치본에는 키트 폴더가 없다).
 const KIT = path.resolve(SUB, '..');
-const SKIP_NOT_KIT = fs.existsSync(path.join(SUB, 'rules')) ? false : '설치본 배치(키트 원본에서만 시험)';
+const SKIP_NOT_KIT = (fs.existsSync(path.join(SUB, 'rules')) ? false : '설치본 배치(키트 원본에서만 시험)') || missingBundles('work-git');
 const KIT_SETUP = path.join(SUB, 'scripts', 'kit-setup.js');
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'CLAUDE_CONFIG_DIR' && k !== 'NODE_TEST_CONTEXT' && !k.startsWith('SUBAGENT_') && k !== 'ASK_LOG_FILE'));
-const setup = (cfg, args) => spawnSync(process.execPath, [KIT_SETUP, ...args], { env: { ...cleanEnv(), CLAUDE_CONFIG_DIR: cfg }, encoding: 'utf8' });
+// 이 시험은 쓰기 허용과 회고 방식을 보므로 라우팅과 work-git(커밋 검사 조각) 묶음을 함께 깐다.
+const withChoices = (args) => (args[0] === 'install' ? [...args, ...(args.includes('--bundles') ? [] : ['--bundles', 'routing,work-git']), ...(args.includes('--options') ? [] : ['--options', 'none'])] : args);
+const setup = (cfg, args) => spawnSync(process.execPath, [KIT_SETUP, ...withChoices(args)], { env: { ...cleanEnv(), CLAUDE_CONFIG_DIR: cfg }, encoding: 'utf8' });
 const setupJson = (cfg, args) => {
   const r = setup(cfg, args);
   assert.equal(r.status, 0, r.stderr);
@@ -234,15 +239,15 @@ describe('순서가 있는 설정 경로', { skip: SKIP_NOT_KIT }, () => {
     assert.equal(ask('b.md'), 1, '훅 등록 뒤에는 창이 뜨지 않아 적지 않는다');
   });
 
-  it('commit-msg 훅을 고르지 않고 설치한 설치본에서 커밋 검사 시험을 건너뛰어도 그 시험 파일이 통과한다', () => {
+  it('라우팅, work-git, feedback을 설치한 설치본에서 커밋 검사 시험 파일이 건너뛰지 않고 통과한다', () => {
     const cfg = tmpCfg();
-    setupJson(cfg, ['install', '--kit', KIT, '--profile', 'company', '--no-git-ask']);
+    setupJson(cfg, ['install', '--kit', KIT, '--profile', 'company', '--no-git-ask', '--bundles', 'routing,work-git,feedback', '--options', 'none']);
     const scripts = path.join(cfg, 'subagent-system', 'scripts');
-    assert.equal(fs.existsSync(path.join(cfg, 'subagent-system', 'hooks', 'git', 'commit-msg')), false);
+    assert.equal(fs.existsSync(path.join(cfg, 'subagent-system', 'hooks', 'git', 'commit-msg')), true);
     const r = spawnSync(process.execPath, ['--test', '--test-name-pattern=모든 조합|commit-msg', 'tests/commitMsgHook.test.js', 'tests/configCombos.test.js'], { cwd: scripts, env: { ...cleanEnv(), SUBAGENT_RECORDS_DIR: tmpCfg() }, encoding: 'utf8' });
     assert.equal(r.status, 0, r.stdout.slice(-1500) + r.stderr);
     assert.match(r.stdout, /ℹ fail 0/);
-    assert.match(r.stdout, /﹣ 커밋 메시지 근거 검사 훅 commit-msg .*설치본에 commit-msg 훅이 없음/, 'commit-msg 시험을 건너뛰지 않았다');
+    assert.doesNotMatch(r.stdout, /설치본에 commit-msg 훅이 없음/, 'commit-msg 시험을 건너뛰었다');
     assert.match(r.stdout, /✔ 설정 조합별 스크립트 판정/);
   });
 
@@ -281,7 +286,7 @@ const KEYS = ['retroMode', 'retroWriteAllow', 'commitCheck'];
 const OTHER = { personal: 'company', company: 'personal' };
 const SEQ_ROWS = [];
 for (const from of ['personal', 'company']) {
-  for (const commitHook of [false, true]) {
+  for (const commitHook of [true]) {
     for (const to of [null, OTHER[from]]) {
       for (const unset of [null, ...KEYS]) SEQ_ROWS.push({ from, commitHook, to, unset });
     }
@@ -302,7 +307,7 @@ function expectedConfig(row, { afterUpdate }) {
   if (afterUpdate) {
     cfg.retroMode ??= DEF[profile].retroMode;
     cfg.retroWriteAllow ??= false;
-    cfg.commitCheck ??= row.commitHook ? 'block' : DEF[profile].commitCheck;
+    cfg.commitCheck ??= 'block';
   }
   return { profile, ...cfg };
 }
@@ -314,9 +319,9 @@ describe('명령 순서 조합 표', { skip: SKIP_NOT_KIT }, () => {
     const { shouldAllow } = requireCjs(path.join(SUB, 'hooks', 'retro-write-allow.js'));
     const bases = {};
     for (const from of ['personal', 'company']) {
-      for (const commitHook of [false, true]) {
+      for (const commitHook of [true]) {
         const cfg = tmpCfg();
-        setupJson(cfg, ['install', '--kit', KIT, '--profile', from, '--no-git-ask', ...(commitHook ? ['--hooks', 'commit-msg'] : [])]);
+        setupJson(cfg, ['install', '--kit', KIT, '--profile', from, '--no-git-ask']);
         bases[`${from}/${commitHook}`] = cfg;
       }
     }

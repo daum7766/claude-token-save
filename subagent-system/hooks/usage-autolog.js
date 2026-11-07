@@ -8,7 +8,7 @@
  *  - 열 순서: 날짜, 프로젝트, 정의, 일 종류, 토큰, 도구 호출, 걸린 초, 결과, 메모(메모 첫 낱말이 agentId).
  *  - 훅 입력에는 일 이름과 사용량이 없어(공식 SubagentStop 입력: agent_id, agent_type, agent_transcript_path, last_assistant_message 등) 서브에이전트 기록과 옆의 .meta.json에서 읽는다.
  *  - 토큰은 마지막 요청의 입력, 캐시, 출력 합(완료 알림의 토큰과 같은 값), 초는 첫 요청부터 마지막 요청까지다.
- *  - 일 종류 칸에는 description에서 라우팅 표(docs/ROUTING_TABLE.md, SUBAGENT_ROUTING_FILE로 바꿈)의 일 이름을 찾아 가장 긴 이름을 넣고 메모를 `<agentId> 표에서 찾음`으로 적는다. 못 찾으면 description 그대로에 메모가 agentId 하나뿐이고, 회고가 이 줄을 표 밖 일 종류(auto)로 센다.
+ *  - 일 종류 칸에는 description에서 라우팅 표(docs/ROUTING_TABLE.md, SUBAGENT_ROUTING_FILE로 바꿈)의 일 이름을 찾아 가장 긴 이름을 넣고 메모를 `<agentId> 표에서 찾음`으로 적는다. description에 `표에 없는 일: <이름>`이 있으면 그 이름에 메모 `<agentId> 표에 없는 일`을 적어 보통 줄처럼 세게 한다. 둘 다 못 찾으면 description 그대로에 메모가 agentId 하나뿐이고, 회고가 이 줄을 표 밖 일 종류(auto)로 센다.
  *  - 같은 agentId가 이미 있으면 적지 않는다. 기록 폴더는 SUBAGENT_RECORDS_DIR가 있으면 그것, 없으면 <CLAUDE_CONFIG_DIR 또는 ~/.claude>/subagent-system/records다.
  *  - 어떤 실패도 서브에이전트를 막지 않는다(경고만 stderr에 찍고 종료 코드 0).
  */
@@ -19,6 +19,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ROUTED_MEMO_SUFFIX = '표에서 찾음';
+// 지시문 검사 훅이 표에 맞는 일이 없을 때 받는 표시. 그 뒤 이름을 일 종류로 적어 회고가 표에 없는 일로 모아 세게 한다.
+const NAMED_MEMO_SUFFIX = '표에 없는 일';
+const NAMED_KIND = /표에 없는 일\s*[:：]\s*([^,，]+)/;
 const MAX_TRANSCRIPT_BYTES = 200 * 1024 * 1024;
 const LOCK_WAIT_MS = 3000;
 const LOCK_STALE_MS = 15000;
@@ -170,7 +173,8 @@ function agentIdOf(input) {
 function buildLine(input) {
   const agentId = agentIdOf(input);
   const meta = metaOf(input.agent_transcript_path);
-  const def = flat(input.agent_type || meta.customAgentType || meta.agentType);
+  // 이름(name)을 붙여 띄운 실무자는 agent_type과 meta.agentType이 그 이름이고 정의는 customAgentType에만 있다(비용 기록 subagent-usage.js와 같은 차례). 이름을 정의 칸에 적으면 회고 표가 칸으로 모이지 않았다(11-05~07 사용 기록 121줄 가운데 40줄).
+  const def = flat(meta.customAgentType || input.agent_type || meta.agentType);
   if (!agentId || !def || agentId.startsWith('afork-')) return null;
   const cwd = startCwd(input);
   if (!cwd) return null;
@@ -182,6 +186,7 @@ function buildLine(input) {
   }
   const description = flat(meta.description);
   const routed = description ? routedKind(description) : null;
+  const named = !routed && description ? NAMED_KIND.exec(description)?.[1].trim() || null : null;
   const num = (v) => (v === null || v === undefined ? '-' : String(v));
   return {
     agentId,
@@ -189,12 +194,12 @@ function buildLine(input) {
       stats?.date ?? localDate(new Date()),
       projectRoot(cwd),
       def,
-      routed || description || '-',
+      routed || named || description || '-',
       num(stats?.tokens),
       num(stats?.tools),
       num(stats?.secs),
       'ok',
-      routed ? `${agentId} ${ROUTED_MEMO_SUFFIX}` : agentId,
+      routed ? `${agentId} ${ROUTED_MEMO_SUFFIX}` : named ? `${agentId} ${NAMED_MEMO_SUFFIX}` : agentId,
     ].join('\t'),
   };
 }

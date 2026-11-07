@@ -1,0 +1,773 @@
+{
+  "note": "kit-setup.js buildEntries(caa02fe)가 내는 설치 키와 kind. all은 규칙, 스킬, commit-msg 훅을 모두 고름, none은 아무것도 안 고름(늘 깔리는 것만).",
+  "kitCommit": "caa02fe",
+  "all": [
+    {
+      "key": "agents/haiku-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/haiku-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/haiku-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-xhigh.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-code.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-core.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-db.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-docs.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-feedback.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-rec-align.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-rec-ambiguity.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-rec-report.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-rec-verify.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-routing.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-tests.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/backlog-priority/SKILL.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/git-work/MIXED_COMMIT.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/git-work/PROJECT_PERMISSIONS.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/git-work/RECOVERY.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/git-work/SKILL.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/retro/SKILL.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/review-panel/SKILL.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/AUTO_RETRO.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/COMPANY_RULES.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/DOC_WRITING.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/FEEDBACK.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/RETRO.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/ROUTING_TABLE.md",
+      "kind": "once",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_GUIDE.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_SITUATIONS.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/TESTING.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/ask-log.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/brief-check.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/git/commit-msg",
+      "kind": "code",
+      "exec": true
+    },
+    {
+      "key": "subagent-system/hooks/git/pre-commit",
+      "kind": "code",
+      "exec": true
+    },
+    {
+      "key": "subagent-system/hooks/package.json",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/retro-write-allow.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/usage-autolog.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/rates.json",
+      "kind": "rates",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/claudeMdTidy.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/claudeProjectPaths.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/fix-log.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/fixLogHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/hook-replay.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kit-setup.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitDrift.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitMerge.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitProfile.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitShared.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/main-session-cost.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/package.json",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/speed-review.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/speedReviewHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagent-retro.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagent-usage.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagentRetroHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/agentCostTime.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/askLog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/briefCheck.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/claudeMdTidy.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/commitMsgHook.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/configCombos.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/docContract.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/fixLog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/hookReplay.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitDrift.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitMerge.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitSetup.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/routingTable.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/speedReview.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/subagentCli.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/subagentRetroHelpers.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/transcriptTiming.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/usageAutolog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/workMetrics.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/transcriptTiming.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/work-metrics.js",
+      "kind": "code",
+      "exec": false
+    }
+  ],
+  "none": [
+    {
+      "key": "agents/haiku-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/haiku-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/haiku-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/opus-xhigh.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-high.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-low.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "agents/sonnet-medium.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-core.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-feedback.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "rules/kit-routing.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "skills/retro/SKILL.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/AUTO_RETRO.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/COMPANY_RULES.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/DOC_WRITING.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/FEEDBACK.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/RETRO.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/ROUTING_TABLE.md",
+      "kind": "once",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_GUIDE.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/SUBAGENT_SITUATIONS.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/docs/TESTING.md",
+      "kind": "merge",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/ask-log.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/brief-check.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/git/pre-commit",
+      "kind": "code",
+      "exec": true
+    },
+    {
+      "key": "subagent-system/hooks/package.json",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/retro-write-allow.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/hooks/usage-autolog.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/rates.json",
+      "kind": "rates",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/claudeMdTidy.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/claudeProjectPaths.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/fix-log.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/fixLogHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/hook-replay.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kit-setup.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitDrift.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitMerge.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitProfile.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/kitShared.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/main-session-cost.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/package.json",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/speed-review.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/speedReviewHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagent-retro.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagent-usage.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/subagentRetroHelpers.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/agentCostTime.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/askLog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/briefCheck.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/claudeMdTidy.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/commitMsgHook.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/configCombos.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/docContract.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/fixLog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/hookReplay.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitDrift.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitMerge.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/kitSetup.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/routingTable.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/speedReview.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/subagentCli.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/subagentRetroHelpers.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/transcriptTiming.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/usageAutolog.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/tests/workMetrics.test.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/transcriptTiming.js",
+      "kind": "code",
+      "exec": false
+    },
+    {
+      "key": "subagent-system/scripts/work-metrics.js",
+      "kind": "code",
+      "exec": false
+    }
+  ]
+}

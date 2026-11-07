@@ -1,0 +1,70 @@
+{
+  "bundle": "base",
+  "part": "core",
+  "origin": "kit",
+  "files": [
+    "subagent-system/scripts/kit-setup.js",
+    "subagent-system/scripts/kitMerge.js",
+    "subagent-system/scripts/kitDrift.js",
+    "subagent-system/scripts/kitProfile.js",
+    "subagent-system/scripts/kitShared.js",
+    "subagent-system/scripts/claudeMdTidy.js",
+    "subagent-system/scripts/claudeProjectPaths.js",
+    "subagent-system/scripts/kitBundles.js",
+    "subagent-system/scripts/kitHooks.js",
+    "subagent-system/scripts/kitInstalled.cjs",
+    "subagent-system/scripts/userSettings.cjs",
+    "subagent-system/scripts/package.json",
+    "subagent-system/hooks/ask-log.js",
+    "subagent-system/hooks/package.json",
+    "subagent-system/hooks/kit-hook.cjs",
+    "subagent-system/hooks/git/commit-msg",
+    "subagent-system/hooks/git/pre-commit",
+    "subagent-system/hooks/git/git-dispatch.cjs",
+    "subagent-system/hooks/git/gitHookShared.cjs",
+    "subagent-system/hooks/git/pre-commit.d/10-kit-drift.cjs",
+    "subagent-system/scripts/tests/askLog.test.js",
+    "subagent-system/scripts/tests/claudeMdTidy.test.js",
+    "subagent-system/scripts/tests/commitMsgHook.test.js",
+    "subagent-system/scripts/tests/configCombos.test.js",
+    "subagent-system/scripts/tests/docContract.test.js",
+    "subagent-system/scripts/tests/kitDrift.test.js",
+    "subagent-system/scripts/tests/kitSetup.test.js",
+    "subagent-system/scripts/tests/installBase.test.js",
+    "subagent-system/scripts/tests/kitBundles.test.js",
+    "subagent-system/scripts/tests/kitHooks.test.js",
+    "subagent-system/scripts/tests/kitHookWrapper.test.js",
+    "subagent-system/scripts/tests/gitDispatch.test.js",
+    "subagent-system/scripts/tests/userSettings.test.js",
+    "subagent-system/scripts/tests/fixtures/**"
+  ],
+  "exec": [
+    "subagent-system/hooks/git/commit-msg",
+    "subagent-system/hooks/git/pre-commit"
+  ],
+  "kitOnly": [
+    "subagent-system/VERSION",
+    "subagent-system/docs/TEST_SCENARIOS.md",
+    "subagent-system/scripts/tests/kitLint.test.js",
+    "subagent-system/scripts/tests/kitPublicNames.test.js",
+    "subagent-system/scripts/tests/kitExport.test.js",
+    "bundles/base/user-settings.template.md"
+  ],
+  "hooks": [
+    {
+      "name": "ask-log",
+      "event": "PermissionRequest",
+      "matcher": "*",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/ask-log.js\"",
+      "timeout": 10
+    }
+  ],
+  "gitHooks": [
+    {
+      "hook": "pre-commit",
+      "name": "kit-drift",
+      "order": 10,
+      "file": "subagent-system/hooks/git/pre-commit.d/10-kit-drift.cjs"
+    }
+  ]
+}

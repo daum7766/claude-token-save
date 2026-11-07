@@ -1,0 +1,41 @@
+{
+  "omitted": [
+    "company",
+    "feedback",
+    "work-backlog",
+    "work-docs",
+    "work-git",
+    "work-paths",
+    "work-review",
+    "work-tests"
+  ],
+  "keep": [
+    "rules/kit-code.md",
+    "rules/kit-core.md",
+    "rules/kit-db.md",
+    "rules/kit-docs.md",
+    "rules/kit-feedback.md",
+    "rules/kit-rec-align.md",
+    "rules/kit-rec-ambiguity.md",
+    "rules/kit-rec-report.md",
+    "rules/kit-rec-verify.md",
+    "rules/kit-tests.md",
+    "skills/backlog-priority/SKILL.md",
+    "skills/git-work/MIXED_COMMIT.md",
+    "skills/git-work/PROJECT_PERMISSIONS.md",
+    "skills/git-work/RECOVERY.md",
+    "skills/git-work/SKILL.md",
+    "skills/review-panel/SKILL.md",
+    "subagent-system/docs/COMPANY_RULES.md",
+    "subagent-system/docs/DOC_WRITING.md",
+    "subagent-system/docs/FEEDBACK.md",
+    "subagent-system/docs/TESTING.md",
+    "subagent-system/hooks/git/commit-msg.d/20-why-premise.cjs",
+    "subagent-system/hooks/git/commit-msg.d/30-review-line.cjs",
+    "subagent-system/scripts/fix-log.js",
+    "subagent-system/scripts/fixLogHelpers.js",
+    "subagent-system/scripts/hook-replay.js",
+    "subagent-system/scripts/tests/fixLog.test.js",
+    "subagent-system/scripts/tests/hookReplay.test.js"
+  ]
+}

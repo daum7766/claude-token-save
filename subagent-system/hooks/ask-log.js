@@ -62,9 +62,16 @@ function retroWriteHookRegistered() {
   return groups.some((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => h && /retro-write-allow\.js/.test(String(h.command || ''))));
 }
 
-// retro-write-allow.js를 불러오지 못하거나 판정이 던지면 허용이 아니라고 보고 적는다(기록이 빠지는 쪽보다 더 적히는 쪽이 낫다).
+// 라우팅 묶음이 깔려 있는지. 깐 상태 기록이 없거나 못 읽으면 깔린 것으로 본다(옛 설치). 못 부르면 아래에서 허용 아님으로 처리한다.
+function routingInstalled() {
+  const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  return require('../scripts/kitInstalled.cjs').hasBundle('routing', dir);
+}
+
+// 라우팅 묶음이 없거나 retro-write-allow.js를 불러오지 못하거나 판정이 던지면 허용이 아니라고 보고 적는다(기록이 빠지는 쪽보다 더 적히는 쪽이 낫다).
 function allowedByRetroWrite(data) {
   try {
+    if (!routingInstalled()) return false;
     return retroWriteHookRegistered() && require('./retro-write-allow.js').shouldAllow(data) === true;
   } catch {
     return false;

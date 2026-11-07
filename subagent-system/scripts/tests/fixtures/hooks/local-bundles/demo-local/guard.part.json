@@ -1,0 +1,9 @@
+{
+  "bundle": "demo-local",
+  "part": "guard",
+  "files": ["hooks/demo-guard.py", "hooks/demo-guard-b.py"],
+  "hooks": [
+    { "name": "demo-guard", "event": "PreToolUse", "matcher": "Bash", "command": "python3 \"$HOME/.claude/hooks/demo-guard.py\"", "timeout": 10 },
+    { "name": "demo-guard-b", "event": "PreToolUse", "matcher": "Bash", "command": "python3 \"$HOME/.claude/hooks/demo-guard-b.py\"", "timeout": 10 }
+  ]
+}

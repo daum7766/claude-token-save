@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { usageLineFromArgs, parseUsage } from '../subagentRetroHelpers.js';
-import { localDate } from '../claudeProjectPaths.js';
+import { missingFiles } from './fixtures/installedLayout.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RETRO = path.join(SCRIPTS, 'subagent-retro.js');
@@ -45,6 +45,13 @@ describe('usageLineFromArgs', () => {
     const cols = line.split('\t');
     assert.equal(cols[3], '일 종류');
     assert.equal(cols[8], 'a1 첫째  둘째 셋째');
+  });
+
+  it('메모 첫머리에 agentId가 없으면 적지 않고 오류를 낸다', () => {
+    assert.match(usageLineFromArgs([...without('memo'), '--memo', '9회차 고침 막음 3'], NOW).error, /agentId/);
+    assert.equal(usageLineFromArgs([...without('memo'), '--memo', 'a9dca0a99357f38f3 9회차 고침'], NOW).error, undefined);
+    assert.equal(usageLineFromArgs([...without('memo'), '--memo', 'ainstall-base-fixA-bfa918b3025a2e5c 이름 붙인 실무자'], NOW).error, undefined);
+    assert.equal(usageLineFromArgs([...without('memo'), '--memo', 'a9dca0a99357f38f3(이어서) 재지시'], NOW).error, undefined);
   });
 
   it('%, 따옴표, 역슬래시, 한글은 그대로 남는다', () => {
@@ -694,19 +701,20 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.match(run(['--status'], e).stdout, /회고 잠금: 진행 중/);
   });
 
-  it('--status는 바로 고치기와 애매할 때의 문턱을 profile에서 낸 값으로 찍고, 설정 파일이 없으면 회사용 쪽으로 보며, 옛 판정 키는 읽지 않는다', () => {
+  it('--status는 바로 고치기를 profile에서 낸 값으로 찍고 애매할 때 줄은 찍지 않으며, 설정 파일이 없으면 회사용 쪽으로 보며, 옛 판정 키는 읽지 않는다', () => {
     const e = setup();
     const lines = () => {
       const out = run(['--status'], e).stdout;
-      return { fix: out.match(/^바로 고치기: (.*)$/m)[1], threshold: out.match(/^애매할 때: (.*)$/m)[1] };
+      assert.ok(!/^애매할 때:/m.test(out));
+      return { fix: out.match(/^바로 고치기: (.*)$/m)[1] };
     };
-    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)', threshold: '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기 (profile이 정함)' });
+    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)' });
     fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal' }));
-    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)', threshold: '작으면 하고 알림 (profile이 정함)' });
+    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)' });
     fs.writeFileSync(e.config, JSON.stringify({ profile: 'personal', autoApplyRules: false, actThreshold: 'low-cost-only' }));
-    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)', threshold: '작으면 하고 알림 (profile이 정함)' });
+    assert.deepEqual(lines(), { fix: '켬 (profile이 정함)' });
     fs.writeFileSync(e.config, '{깨짐');
-    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)', threshold: '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기 (profile이 정함)' });
+    assert.deepEqual(lines(), { fix: '끔 (profile이 정함)' });
   });
 
   it('제안 목록 경로는 설정 폴더(CLAUDE_CONFIG_DIR) 아래 docs/PROPOSALS.md이다', () => {
@@ -1426,7 +1434,19 @@ describe('subagent-retro.js --docs와 --docs-done', () => {
     fs.writeFileSync(configFile, JSON.stringify(config));
     return { claude, records, project, skill, claudeMd: path.join(project, 'CLAUDE.md'), configFile };
   };
-  const run = (e, args) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_RECORDS_DIR: e.records, SUBAGENT_CONFIG_FILE: e.configFile }, encoding: 'utf8' });
+  // 세션 폴더는 그 프로젝트다. cwd를 주면 다른 프로젝트 세션에서 돌린 것이 된다.
+  const run = (e, args, cwd = e.project) => spawnSync(process.execPath, [RETRO, ...args], { cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: e.claude, SUBAGENT_RECORDS_DIR: e.records, SUBAGENT_CONFIG_FILE: e.configFile }, encoding: 'utf8' });
+
+  it('다른 프로젝트 세션에서 돌리면 그 프로젝트 CLAUDE.md는 대상에서 빼고 그 프로젝트 세션에서 볼 것으로 따로 찍는다', () => {
+    const e = setup();
+    const other = path.join(path.dirname(e.project), 'other');
+    fs.mkdirSync(other);
+    const r = run(e, ['--docs'], other);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /검토 대상 1개/);
+    assert.ok(!r.stdout.includes(`프로젝트 CLAUDE.md  ${e.claudeMd}`));
+    assert.ok(r.stdout.includes(`다른 프로젝트라 그 프로젝트 세션의 회고에서 볼 것 1개: ${e.claudeMd}`));
+  });
 
   it('처음에는 쓴 스킬 파일과 프로젝트 CLAUDE.md를 줄 수와 함께 대상으로 찍고 플러그인 스킬과 파일 없는 이름은 뺀다', () => {
     const e = setup();
@@ -1481,7 +1501,7 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
     fs.mkdirSync(dir);
     return { dir, config: path.join(root, 'config.json'), usage: path.join(dir, 'subagent-usage.tsv'), fixes: path.join(dir, 'fixes.tsv'), corrections: path.join(dir, 'subagent-corrections.tsv') };
   };
-  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, SUBAGENT_GUIDE_FILE: path.join(e.dir, 'no-guide.md') }, encoding: 'utf8' });
+  const run = (args, e) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, SUBAGENT_GUIDE_FILE: path.join(e.dir, 'no-guide.md') }, encoding: 'utf8' });
   const use = (memo, project = '/p') => ['2026-10-12', project, 'sonnet-low', '번역', '1', '2', '3', 'ok', memo].join('\t');
   const fixRow = (over = {}) => {
     const v = { at: '2026-10-20T00:00:00.000Z', project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: '0', memo: 'm', ...over };
@@ -1489,7 +1509,20 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
   };
   const fixArgs = ['--fix', '--project', '/p/.claude/worktrees/w', '--signal', '정정', '--label', '태그', '--where', 'docs/A.md#절', '--how', '문장', '--memo', '메모'];
 
-  describe('--fix', () => {
+  // 고침 기록(피드백 묶음의 fix-log.js)이 없는 설치에서는 건너뛴다.
+  describe('--fix', { skip: missingFiles('subagent-system/scripts/fix-log.js') }, () => {
+    it('--session을 받아 정정 줄 메모에 세션 표시를 붙이고, 세션을 못 얻으면 경고를 stderr에 찍는다', () => {
+      const e = setup();
+      const withSession = run([...fixArgs, '--session', 'sess-1'], e);
+      assert.equal(withSession.status, 0, withSession.stderr);
+      assert.match(fs.readFileSync(e.fixes, 'utf8'), /세션=sess-1 메모/);
+      assert.ok(!withSession.stderr.includes('세션 id를 얻지 못해'));
+      const e2 = setup();
+      const without = run(fixArgs, e2);
+      assert.equal(without.status, 0, without.stderr);
+      assert.match(without.stderr, /세션 id를 얻지 못해/);
+    });
+
     it('머리줄과 아홉 열 한 줄을 쓰고 범위, 시각, 기준점을 채우며 출력은 두 줄이다', () => {
       const e = setup();
       fs.writeFileSync(e.usage, [use('a1 x'), use('a2 y'), use('a3 z')].join('\n') + '\n');
@@ -1525,7 +1558,7 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
     });
   });
 
-  describe('--fixes', () => {
+  describe('--fixes', { skip: missingFiles('subagent-system/scripts/fix-log.js') }, () => {
     it('첫 줄이 처리할 것 건수이고 이어 처리할 것 줄, 효과 표, 태그 목록을 찍는다', () => {
       const e = setup();
       fs.writeFileSync(e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
@@ -1543,10 +1576,112 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
     });
   });
 
+  // 깐 상태 기록에 피드백이 없으면 fix-log.js 파일이 있어도 고침 기록 칸은 비고 명령은 「피드백 없음」을 찍는다.
+  describe('피드백 없음', () => {
+    const NONE = '피드백 없음';
+    const withLock = (installed) => {
+      const e = setup();
+      const cfg = path.join(path.dirname(e.dir), 'cfg');
+      fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+      if (installed) fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed }));
+      return { e, cfg };
+    };
+    const runIn = (args, { e, cfg }) => spawnSync(process.execPath, [RETRO, ...args], { env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '', CLAUDE_CONFIG_DIR: cfg, SUBAGENT_RECORDS_DIR: e.dir, SUBAGENT_CONFIG_FILE: e.config, SUBAGENT_GUIDE_FILE: path.join(e.dir, 'no-guide.md') }, encoding: 'utf8' });
+    const noFeedback = { base: { parts: {} }, routing: { parts: {} } };
+
+    it('--fixes와 --fix는 「피드백 없음」을 찍고 종료 코드 0이며 고침 기록을 만들지 않는다', () => {
+      const w = withLock(noFeedback);
+      const a = runIn(['--fixes'], w);
+      assert.equal(a.status, 0, a.stderr);
+      assert.match(a.stdout, new RegExp(NONE));
+      const b = runIn(fixArgs, w);
+      assert.equal(b.status, 0, b.stderr);
+      assert.match(b.stdout, new RegExp(NONE));
+      assert.equal(fs.existsSync(w.e.fixes), false);
+    });
+
+    it('--due는 고침 기록에 처리할 것이 있어도 「그 자리에서 고칠 것」을 붙이지 않는다', () => {
+      const w = withLock(noFeedback);
+      fs.writeFileSync(w.e.fixes, [HEAD, fixRow({ anchor: '0' })].join('\n') + '\n');
+      fs.writeFileSync(w.e.usage, [use('a1 모자람(태그): x'), use('b2 모자람(태그): y')].join('\n') + '\n');
+      const r = runIn(['--due'], w);
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(!r.stdout.includes('그 자리에서 고칠 것'));
+    });
+
+    it('깐 상태 기록이 없거나 깨졌으면 피드백이 깔린 것으로 본다', () => {
+      for (const make of [() => withLock(null), () => { const w = withLock(null); fs.writeFileSync(path.join(w.cfg, 'subagent-system', 'bundles.lock.json'), '{깨짐'); return w; }]) {
+        const w = make();
+        const r = runIn(['--fixes'], w);
+        assert.ok(!r.stdout.includes(NONE), r.stdout);
+      }
+    });
+  });
+
+  describe('규칙 점검과 승인 창 보기: --rule-targets', () => {
+    const kitHook = (name) => ({ name, event: 'PreToolUse', command: 'x', timeout: 5 });
+    const build = (installed, localParts = {}) => {
+      const root = tmpDir();
+      const cfg = path.join(root, 'cfg');
+      fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+      fs.mkdirSync(path.join(cfg, 'rules'));
+      fs.writeFileSync(path.join(cfg, 'rules', 'kit-core.md'), 'x');
+      fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed }));
+      for (const [bundle, parts] of Object.entries(localParts)) {
+        const d = path.join(cfg, 'subagent-system', 'local-bundles', bundle);
+        fs.mkdirSync(d, { recursive: true });
+        for (const [part, hooks] of Object.entries(parts)) fs.writeFileSync(path.join(d, `${part}.part.json`), JSON.stringify({ bundle, part, origin: 'local', files: [], hooks }));
+      }
+      return cfg;
+    };
+    const targets = (cfg) => spawnSync(process.execPath, [RETRO, '--rule-targets'], { env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_CONFIG_DIR: cfg }, encoding: 'utf8' });
+
+    it('깐 묶음의 키트 조각 훅과 로컬 조각 훅을 찍고, 안 깐 묶음(safety)의 훅은 없다', () => {
+      const cfg = build({
+        base: { parts: { core: { origin: 'kit', hooks: [kitHook('log-a')] } } },
+        feedback: { parts: { extra: { origin: 'local' } } },
+      }, { feedback: { extra: [kitHook('lint-a')] }, safety: { pieces: [kitHook('guard-a')] } });
+      const r = targets(cfg);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /- rules\/kit-core\.md/);
+      assert.match(r.stdout, /- log-a \(PreToolUse\) base\.core kit/);
+      assert.match(r.stdout, /- lint-a \(PreToolUse\) feedback\.extra local/);
+      assert.ok(!r.stdout.includes('guard-a'));
+    });
+
+    const writeSettings = (cfg, hooks) => fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ hooks }));
+    const own = (command) => [{ matcher: '', hooks: [{ type: 'command', command }] }];
+
+    it('settings.json에 걸린 조각 밖 훅도 목록에 들고, 설정 폴더 밖 스크립트의 훅은 든다 하지 않는다', () => {
+      const cfg = build({ base: { parts: { core: { origin: 'kit', hooks: [kitHook('log-a')] } } } });
+      writeSettings(cfg, {
+        PreToolUse: [...own('zsh "$HOME/.claude/hooks/timed.zsh" hook-a python3 ~/.claude/hooks/hook-a.py'), ...own('node "$HOME/.claude/hooks/hook-b.js" # kit:base/log-a')],
+        Stop: own('sh /opt/other/tool-hook.sh'),
+      });
+      const out = targets(cfg).stdout;
+      assert.match(out, /- hook-a \(PreToolUse\) -\.- settings/);
+      assert.ok(!out.includes('tool-hook'));
+      assert.equal((out.match(/log-a/g) || []).length, 1);
+    });
+
+    it('깐 상태 기록이 없어도 settings.json의 훅을 찍는다', () => {
+      const root = tmpDir();
+      const cfg = path.join(root, 'cfg');
+      fs.mkdirSync(cfg, { recursive: true });
+      writeSettings(cfg, { PreToolUse: own('python3 ~/.claude/hooks/hook-a.py') });
+      assert.match(targets(cfg).stdout, /- hook-a \(PreToolUse\)/);
+    });
+
+    it('safety를 깔면 그 훅이 목록에 든다', () => {
+      const cfg = build({ safety: { parts: { pieces: { origin: 'local' } } } }, { safety: { pieces: [kitHook('guard-a')] } });
+      assert.match(targets(cfg).stdout, /- guard-a \(PreToolUse\) safety\.pieces local/);
+    });
+  });
+
   describe('--due', () => {
     const lines = (n) => Array.from({ length: n }, (_, i) => use(`a${i} 줄`)).join('\n') + '\n';
 
-    it('처리할 것이 있으면 마지막 줄에 그 자리에서 고칠 것 건수가 붙고 첫 줄 판정은 그대로다', () => {
+    it('처리할 것이 있으면 마지막 줄에 그 자리에서 고칠 것 건수가 붙고 첫 줄 판정은 그대로다', { skip: missingFiles('subagent-system/scripts/fix-log.js') }, () => {
       const e = setup();
       fs.writeFileSync(e.usage, lines(3) + [use('a1 개선(태그): x')].join('\n') + '\n');
       const r = run(['--due', '--project', '/p'], e);
@@ -1576,6 +1711,31 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       assert.equal(out[3], '새 태그 완전새것');
       const again = run(logArgs('a2 모자람(지시문목표): y'), e);
       assert.equal(again.stdout.trim().split('\n').length, 2);
+    });
+  });
+
+  describe('--log의 겹치는 ok 줄 거르기', () => {
+    const logArgs = (memo, result = 'ok') => ['--log', '--project', '/p', '--def', 'sonnet-low', '--kind', '번역', '--result', result, '--memo', memo];
+    const lines = (e) => fs.readFileSync(path.join(e.dir, 'subagent-usage.tsv'), 'utf8').trim().split('\n');
+
+    it('같은 agentId 줄이 있으면 모자람, 개선, 높임 없는 ok는 적지 않고, 있으면 적는다', () => {
+      const e = setup();
+      run(logArgs('a9 표에서 찾음'), e);
+      const skip = run(logArgs('a9 결과 요약만'), e);
+      assert.match(skip.stdout, /적지 않았습니다/);
+      assert.equal(lines(e).length, 1);
+      run(logArgs('a9 모자람(고침캡처장면): x'), e);
+      run(logArgs('a9 높임: 범위가 넓음'), e);
+      run(logArgs('a9 다시 보냄', '재지시'), e);
+      assert.equal(lines(e).length, 4);
+      run(logArgs('a9 결과 요약만'), e);
+      assert.equal(lines(e).length, 5, '앞 줄이 재지시면 ok도 적는다');
+    });
+
+    it('같은 agentId 줄이 없으면 ok도 적는다(자동 기록 훅이 없는 설치)', () => {
+      const e = setup();
+      run(logArgs('a8 결과 요약만'), e);
+      assert.equal(lines(e).length, 1);
     });
   });
 

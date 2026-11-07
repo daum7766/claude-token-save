@@ -29,7 +29,7 @@ function assistant(id, ts, usage, content = []) {
   return JSON.stringify({ type: 'assistant', requestId: id, timestamp: ts, message: { id: `m-${id}`, model: 'claude-sonnet-5-5', usage, content } });
 }
 
-function writeAgent(sb, agentId, { description = '일 이름 시험', agentType = 'sonnet-low', lines } = {}) {
+function writeAgent(sb, agentId, { description = '일 이름 시험', agentType = 'sonnet-low', lines, meta = {} } = {}) {
   const base = path.join(sb.subDir, `agent-${agentId}`);
   const body = lines ?? [
     assistant('r1', '2026-10-30T01:00:00.000Z', { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 0, output_tokens: 5 }, [{ type: 'tool_use' }, { type: 'tool_use' }]),
@@ -38,7 +38,7 @@ function writeAgent(sb, agentId, { description = '일 이름 시험', agentType 
     assistant('r2', '2026-10-30T01:00:30.000Z', { input_tokens: 20, cache_creation_input_tokens: 0, cache_read_input_tokens: 300, output_tokens: 7 }, [{ type: 'tool_use' }, { type: 'text' }]),
   ];
   fs.writeFileSync(`${base}.jsonl`, body.join('\n') + '\n');
-  fs.writeFileSync(`${base}.meta.json`, JSON.stringify({ agentType, description }));
+  fs.writeFileSync(`${base}.meta.json`, JSON.stringify({ agentType, description, ...meta }));
   return `${base}.jsonl`;
 }
 
@@ -110,6 +110,16 @@ test('description에 라우팅 표의 일 이름이 있으면 일 종류 칸에 
   assert.equal(row[8], 'aaa111 표에서 찾음');
 });
 
+test('description에 표에 없는 일: <이름>이 있으면 그 이름을 일 종류로 적고 메모에 표에 없는 일이 붙는다', () => {
+  const sb = sandbox();
+  writeSession(sb, '/proj/app');
+  writeAgent(sb, 'aaa111', { description: '표에 없는 일: 정책 점검, 9회차' });
+  runHook(sb, input(sb, 'aaa111'), routingFile(sb));
+  const [row] = rowsOf(sb);
+  assert.equal(row[3], '정책 점검');
+  assert.equal(row[8], 'aaa111 표에 없는 일');
+});
+
 test('description에 표의 일 이름이 여럿 들면 가장 긴 이름이 적힌다', () => {
   const sb = sandbox();
   writeSession(sb, '/proj/app');
@@ -179,6 +189,16 @@ test('메인이 같은 agentId의 줄을 덧붙인 뒤에도 훅은 다시 적�
   fs.writeFileSync(path.join(sb.records, 'subagent-usage.tsv'), '2026-10-30\t/proj/app\tsonnet-low\t분석과 가공\t1\t1\t1\t재지시\taaa111 지시문 탓\n');
   runHook(sb, input(sb, 'aaa111'));
   assert.equal(rowsOf(sb).length, 1);
+});
+
+test('이름을 붙여 띄운 실무자는 이름이 아니라 정의를 적는다', () => {
+  const sb = sandbox();
+  writeSession(sb, '/proj/app');
+  writeAgent(sb, 'aunit-R1-1', { agentType: 'unit-R1', meta: { name: 'unit-R1', customAgentType: 'sonnet-low', spawnedAgentType: 'sonnet-low' } });
+  runHook(sb, input(sb, 'aunit-R1-1', { agent_type: 'unit-R1' }));
+  const rows = rowsOf(sb);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][2], 'sonnet-low');
 });
 
 test('agent_type이 빈 내부 에이전트는 적지 않는다', () => {

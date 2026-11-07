@@ -54,7 +54,9 @@ import {
   configTextWithMode,
   configTextWithFailures,
   countPending,
+  pendingTitles,
   ASK_KINDS,
+  askKinds,
   FABLE_VERDICT_NOTES,
   judgeFableModel,
   normalizeShape,
@@ -214,12 +216,12 @@ describe('내려 보기와 올리기 후보', () => {
   const five = (result = 'ok') => Array.from({ length: 5 }, (_, i) => row('2026-10-0' + (i + 1), 'sonnet-medium', '구현', 10, result, `m${i}`));
 
   it('파일 전체 마지막 5건이 모두 ok이면 내려 보기 후보다', () => {
-    const { all, target } = parseUsage(usageText(...five()));
+    const { all } = parseUsage(usageText(...five()));
     assert.deepEqual(downCandidates(all, new Map()), [{ def: 'sonnet-medium', kind: '구현', to: 'sonnet-low' }]);
   });
 
   it('마지막 5건 중 1건에 정정이 있으면 내려 보기 후보가 아니다', () => {
-    const { all, target } = parseUsage(usageText(...five()));
+    const { all } = parseUsage(usageText(...five()));
     assert.deepEqual(downCandidates(all, new Map([['m2', 1]])), []);
   });
 
@@ -1134,6 +1136,14 @@ describe('회고 잠금과 물을 것 세기', () => {
     assert.equal(countPending('## 제안 목록\n### 하나\n'), 0);
   });
 
+  it('프로젝트를 주면 제목에 다른 폴더의 절대 경로가 든 항목은 세지 않고 그 프로젝트 안의 경로와 경로 없는 항목은 센다', () => {
+    const text = ['## 제안', '### 문서 검토: /home/a/other/CLAUDE.md', '- 묻기: 정책', '### 문서 검토: /home/a/proj/CLAUDE.md', '- 묻기: 정책', '### 경로 없음', '- 묻기: 돈', '### 문서 검토: /home/a/proj-2/CLAUDE.md', '- 묻기: 정책'].join('\n');
+    assert.equal(countPending(text, { onlyAsk: true }), 4);
+    assert.equal(countPending(text, { onlyAsk: true, project: '/home/a/proj' }), 2);
+    assert.equal(countPending(text, { onlyAsk: true, project: '/home/a/proj/' }), 2);
+    assert.deepEqual(pendingTitles(text, { onlyAsk: true, project: '/home/a/proj' }), ['문서 검토: /home/a/proj/CLAUDE.md', '경로 없음']);
+  });
+
   it('개인용 물을 것은 여섯 종 묻기 줄이 있는 항목만 세고 다음 항목의 묻기 줄을 앞 항목에 넣지 않는다', () => {
     const text = ['## 제안', '### 가', '- 묻기: 돈', '### 나', '- 얻는 것: x', '### 다', '- 묻기: 취향', '### 라', '* 묻기: 정책 (외부 공개)', '## 반대', '### 마', '- 묻기: 돈'].join('\n');
     assert.equal(countPending(text), 4);
@@ -1145,6 +1155,46 @@ describe('회고 잠금과 물을 것 세기', () => {
     const text = ['## 제안', '### 가', '- 묻기: 돈', '- 결과: 채택', '### 나', '- 얻는 것: x', '* 결과: 기각', '### 다', '- 묻기: 정책', '### 라', '- 얻는 것: y'].join('\n');
     assert.equal(countPending(text), 2);
     assert.equal(countPending(text, { onlyAsk: true }), 1);
+  });
+});
+
+describe('묻기 종류', () => {
+  const cfgWith = ({ settings, lock }) => {
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'askkinds-'));
+    if (settings !== undefined) fs.writeFileSync(path.join(cfg, 'USER_SETTINGS.md'), settings);
+    if (lock !== undefined) {
+      fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+      fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed: Object.fromEntries(lock.map((n) => [n, { options: [], parts: {} }])) }));
+    }
+    return cfg;
+  };
+  const SETTINGS = '# 사용자 설정\n\n## 올릴 것\n- 돈: 새 결제\n- 외부 공개: 공개 일\n- 정책: 방향\n';
+
+  it('설정이 없으면 기본 여섯 종이다', () => {
+    assert.deepEqual(askKinds(cfgWith({})), ASK_KINDS);
+  });
+
+  it('회사 규칙이 깔렸으면 「올릴 것」 칸 이름을 기본 넷과 승인 예외 둘에 합치고 겹침은 한 번만 둔다', () => {
+    const kinds = askKinds(cfgWith({ settings: SETTINGS, lock: ['base', 'company'] }));
+    assert.deepEqual(kinds, ['돈', '되돌리기 어려운 일', '정책', '목표로 못 가르는 트레이드오프', '외부 공개', '사용자 작업에 걸리는 장치', '문지기 풀기']);
+  });
+
+  it('옛 제안의 묻기 줄 여섯 갈래를 계속 받고 설정에 있는 새 칸 이름도 받는다', () => {
+    const cfg = cfgWith({ settings: SETTINGS, lock: ['company'] });
+    const text = ASK_KINDS.concat(['외부 공개', '취향']).map((k, i) => `### 항목${i}\n- 묻기: ${k}`).join('\n');
+    assert.equal(countPending(`## 제안\n${text}`, { onlyAsk: true }), 6);
+    assert.equal(pendingTitles(`## 제안\n${text}`, { onlyAsk: true, kinds: askKinds(cfg) }).length, 7);
+  });
+
+  it('회사 규칙 없음: 칸 이름을 읽지 않고 기본 여섯 종만 쓰며 실패하지 않는다', () => {
+    assert.deepEqual(askKinds(cfgWith({ settings: SETTINGS, lock: ['base', 'routing'] })), ASK_KINDS);
+  });
+
+  it('깔린 기록이 깨졌으면 모두 깔림으로 본다', () => {
+    const cfg = cfgWith({ settings: SETTINGS });
+    fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), '{ 깨짐');
+    assert.ok(askKinds(cfg).includes('외부 공개'));
   });
 });
 
@@ -1701,8 +1751,8 @@ describe('retroDue 대화 기록 보존 기간 기준', () => {
     assert.equal(afterRetro([2026, 10, 10], 1, { retentionDays: 5 }).status, 'wait');
   });
 
-  const periodMemo = JSON.stringify({ 건수: false, 기간: true, 올림: [] });
   const countMemo = JSON.stringify({ 건수: true, 올림: [] });
+  const periodMemo = JSON.stringify({ 건수: false, 기간: true, 올림: [] });
   const snoozeAt = (iso, memo = '-') => ['미룸', '-', '미룸', iso, '-', '-', '-', '-', memo].join('\t');
   const withSnoozes = (...snoozes) => retroDue(parseUsage(usageText(rowOn('2026-08-01'), mark(2026, 9, 1, 2), rowOn('2026-10-01', 1), ...snoozes, rowOn('2026-10-12', 2))));
 
@@ -1732,7 +1782,6 @@ describe('미룸 줄의 비용 기록 건수(비용: N)', () => {
   const costMapOf = (date, n) => parseCost([[costHeader, ...Array.from({ length: n }, (_, i) => costRow(date, `c${i}`))].join('\n') + '\n']);
   const rowOn = (date, n) => row(date, 'sonnet-medium', '구현', 10, 'ok', `p${n}`);
   const noonOf = (y, m, d) => new Date(y, m - 1, d, 12);
-  const periodMemo = JSON.stringify({ 건수: false, 기간: true, 올림: [] });
   const periodSnooze = (costOnly) => snoozeLine(noonOf(2026, 9, 14), { countSnoozed: false, periodSnoozed: true, costOnly });
   const periodDue = (snooze, costDate, costs) => retroDue(parseUsage(usageText(rowOn('2026-09-01', 0), rowOn('2026-09-01', 1), snooze)), { costMap: costMapOf(costDate, costs) });
 
@@ -1831,7 +1880,12 @@ describe('extractSkillUses', () => {
   });
 });
 
-import { agentIdOf, memoMarks, judgeFixes, similarTags, mergedLabelRows } from '../subagentRetroHelpers.js';
+import { agentIdOf, memoMarks, similarTags, mergedLabelRows } from '../subagentRetroHelpers.js';
+import { missingFiles } from './fixtures/installedLayout.js';
+
+// judgeFixes는 피드백 묶음의 fixLogHelpers.js에 있다. 그 묶음이 없는 설치에서는 읽지 않고 관련 시험을 건너뛴다.
+const NO_FIXLOG = missingFiles('subagent-system/scripts/fixLogHelpers.js');
+const { judgeFixes } = NO_FIXLOG ? {} : await import('../fixLogHelpers.js');
 
 describe('agentId 꼬리 떼기', () => {
   it('괄호 꼬리만 떼고 이름이 붙은 agentId는 그대로 둔다', () => {
@@ -1839,6 +1893,8 @@ describe('agentId 꼬리 떼기', () => {
     assert.equal(agentIdOf('acab-qr-1d6679cb720078db'), 'acab-qr-1d6679cb720078db');
     assert.equal(agentIdOf('acab-qr-1d6679cb720078db(이어서)'), 'acab-qr-1d6679cb720078db');
     assert.equal(agentIdOf(null), null);
+    assert.equal(agentIdOf('56회차'), null);
+    assert.equal(agentIdOf('문서'), null);
   });
 });
 
@@ -1855,7 +1911,7 @@ describe('사용 기록 메모의 모자람과 개선 표시', () => {
   });
 });
 
-describe('judgeFixes 판정', () => {
+describe('judgeFixes 판정', { skip: NO_FIXLOG }, () => {
   const T0 = '2026-10-20T00:00:00.000Z';
   const fix = (over = {}) => ({ at: T0, project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: 5, memo: '', ...over });
   let n = 0;
@@ -1906,7 +1962,7 @@ describe('judgeFixes 판정', () => {
   });
 
   describe('나빠짐 의심', () => {
-    const bad = (i, over = {}) => use(`a${i} 모자람(다른): x`, { result: 'ok', ...over });
+    const bad = (i, over = {}) => use(`a${i} 모자람: x`, { result: 'ok', ...over });
     const series = (count, badEvery, start) => Array.from({ length: count }, (_, i) => (badEvery && i % badEvery === 0 ? bad(start + i, { line: start + i }) : use(`z${start + i} ok`, { line: start + i })));
     const worse = (r) => classes(r).filter((c) => c.startsWith('나빠짐'));
     const f = (over = {}) => fix({ label: '고침', anchor: 50, ...over });
@@ -1932,6 +1988,14 @@ describe('judgeFixes 판정', () => {
       const lines = (postBad) => [...series(50, 0, 1), ...series(30, 0, 51).map((r, i) => (i < postBad ? bad(i + 100, { line: r.line }) : r))];
       assert.deepEqual(worse(run({ fixes: [f()], usage: lines(2) })), []);
       assert.deepEqual(worse(run({ fixes: [f()], usage: lines(3) })), ['나빠짐 의심 고침']);
+    });
+
+    it('다른 태그가 붙은 모자람은 세지 않고, 태그 없는 모자람과 고침 이름표와 같은 태그, 재지시는 센다', () => {
+      const post = (memo, over = {}) => [...series(50, 0, 1), ...series(30, 0, 51).map((r, i) => (i < 5 ? use(`b${i} ${memo}`, { line: r.line, result: 'ok', ...over }) : r))];
+      assert.deepEqual(worse(run({ fixes: [f()], usage: post('모자람(다른): x') })), []);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: post('모자람(고침): x') })), ['나빠짐 의심 고침']);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: post('모자람(다른,고침): x') })), ['나빠짐 의심 고침']);
+      assert.deepEqual(worse(run({ fixes: [f()], usage: post('ok', { result: '재지시' }) })), ['나빠짐 의심 고침']);
     });
 
     it('뒤 비율이 앞 비율보다 0.1 이상 늘어야 걸리고 0.1 미만이면 걸리지 않는다', () => {
@@ -2027,7 +2091,6 @@ describe('같은 모델 effort 내려 보기', () => {
 });
 
 describe('훅이 적은 사용 기록 줄', () => {
-  const known = new Set(['구현']);
   const main = (id, kind = '구현') => row('2026-10-12', 'sonnet-medium', kind, 10, 'ok', `${id} 메인이 적은 메모`);
 
   it('같은 agentId로 메인이 적은 줄이 있으면 훅 줄은 빼고 메인 줄을 쓴다', () => {
@@ -2062,6 +2125,16 @@ describe('훅이 적은 사용 기록 줄', () => {
       const { target } = parseUsage(usageText(...lines));
       assert.deepEqual(upPiles(target), []);
       assert.deepEqual(upCandidates(summarize(target, new Map(), new Map()).rows).up, []);
+    });
+
+    it('표에 없는 일 이름을 읽은 훅 줄도 메인 줄이 있으면 빠지고, 없으면 보통 줄로 센다', () => {
+      const named = (id) => ['2026-10-12', 'proj', 'opus-medium', '정책 점검', 1000, 3, 10, 'ok', `${id} 표에 없는 일`].join('\t');
+      const both = parseUsage(usageText(named('a1'), up('a1', '정책 점검'))).all;
+      assert.equal(both.length, 1);
+      assert.equal(both[0].result, '올림');
+      const alone = parseUsage(usageText(named('a2'))).all;
+      assert.equal(alone.length, 1);
+      assert.equal(alone[0].auto, undefined);
     });
 
     it('표에서 찾은 줄만 5건 쌓이면 내려 보기 후보가 된다', () => {

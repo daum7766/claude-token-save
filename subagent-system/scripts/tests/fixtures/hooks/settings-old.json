@@ -1,0 +1,152 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" demo-check node __HOME__/.claude/hooks/demo-check.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" demo-check node __HOME__/.claude/hooks/demo-check.js",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" stall-check node \"$HOME/.claude/subagent-system/hooks/stall-check.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" subagent-usage node \"$HOME/.claude/subagent-system/scripts/subagent-usage.js\" --hook",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" usage-autolog node \"$HOME/.claude/subagent-system/hooks/usage-autolog.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" demo-guard python3 ~/.claude/hooks/demo-guard.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" demo-guard-b python3 ~/.claude/hooks/demo-guard-b.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" user-guard python3 ~/.claude/hooks/user-guard.py",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__sample__query",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/subagent-system/hooks/kit-hook.cjs\" user2 python3 ~/.claude/hooks/user2.py",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" brief-check node \"$HOME/.claude/subagent-system/hooks/brief-check.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" demo-check node __HOME__/.claude/hooks/demo-check.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" retro-write-allow node \"$HOME/.claude/subagent-system/hooks/retro-write-allow.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh \"$HOME/.claude/hooks/timed.zsh\" ask-log node \"$HOME/.claude/subagent-system/hooks/ask-log.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.sample-tool/bin/sample-hook post",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.sample-tool/bin/sample-hook notify",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

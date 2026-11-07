@@ -1,0 +1,28 @@
+{
+  "name": "base",
+  "title": "설치 바닥",
+  "summary": "묶음을 깔고 빼고 갱신하는 도구와 공용 칸(경로, 설치 값 자리, 승인 창 기록). 늘 깔린다",
+  "order": 0,
+  "selectable": false,
+  "alwaysRules": [],
+  "options": [],
+  "configKeys": [
+    "profile",
+    "kitSourcePath",
+    "kitSources",
+    "partSource",
+    "knownBundles",
+    "disabledHooks",
+    "commitCheck",
+    "decisionWords",
+    "kitFileHashes",
+    "claudeMdKeptLines",
+    "claudeMdLimitLines",
+    "personalMarkers",
+    "installAnswers",
+    "outsideLinesKept",
+    "privateNames"
+  ],
+  "uses": [],
+  "records": []
+}

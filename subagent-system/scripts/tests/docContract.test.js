@@ -21,6 +21,7 @@
 // 전제: 새 문서나 새 바깥 도구 플래그를 문서에 쓰면 아래 목록에 이름을 더한다(더하는 쪽이 실제로 있는 것인지 보게 하려는 것이다).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { missingBundles } from './fixtures/installedLayout.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,14 +33,21 @@ const SKIP = fs.existsSync(path.join(SUB, 'rules')) ? false : '설치본 배치(
 const read = (f) => fs.readFileSync(f, 'utf8');
 const listFiles = (dir, ext) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(ext)).map((f) => path.join(dir, f)) : []);
 
-// 문서: 키트 문서 전부(CHANGES는 이력이라 뺀다). 스킬 문서와 규칙 문서, README, 키트 관리용 CLAUDE.md를 포함한다.
+// 문서: 키트 문서 전부(CHANGES.md와 공개용 CHANGES.public.md는 이력이라 뺀다). 스킬 문서와 규칙 문서, README, 키트 관리용 CLAUDE.md를 포함한다.
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
   const p = path.join(dir, e.name);
   if (e.isDirectory()) return ['scripts', 'node_modules', '.kit-base'].includes(e.name) ? [] : walk(p);
   return e.name.endsWith('.md') ? [p] : [];
 });
-const DOCS = [...walk(SUB), path.join(REPO, 'README.md'), path.join(REPO, 'CLAUDE.md')]
-  .filter((f) => fs.existsSync(f) && path.basename(f) !== 'CHANGES.md');
+// 묶음 몫 설치 안내(bundles/<묶음>/install.md)도 키트 문서다.
+const BUNDLE_DOCS = fs.existsSync(path.join(REPO, 'bundles'))
+  ? fs.readdirSync(path.join(REPO, 'bundles'), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(REPO, 'bundles', e.name, 'install.md')).filter((f) => fs.existsSync(f))
+  : [];
+const DOCS = [...walk(SUB), ...BUNDLE_DOCS, path.join(REPO, 'README.md'), path.join(REPO, 'CLAUDE.md')]
+  .filter((f) => fs.existsSync(f) && !/^CHANGES(\.public)?\.md$/.test(path.basename(f)));
+// 설치 안내 전체: 바닥 몫(APPLY_GUIDE)과 묶음 몫. 개인용과 회사용 표와 JSON 키는 둘을 합쳐 본다.
+// 설치본에는 APPLY_GUIDE가 없어 읽지 않는다(이 시험 전체가 SKIP이다).
+const GUIDE_TEXT = SKIP ? '' : [path.join(SUB, 'APPLY_GUIDE.md'), ...BUNDLE_DOCS].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
 
 const SCRIPT_DIRS = [path.join(SUB, 'scripts'), path.join(SUB, 'hooks')];
 const SCRIPT_FILES = SCRIPT_DIRS.flatMap((d) => listFiles(d, '.js'));
@@ -52,7 +60,7 @@ const spansOf = (text) => [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
 const rel = (f) => path.relative(REPO, f);
 
 // 바깥 도구가 받는 플래그(키트 스크립트에 없다). 문서에 새로 쓰면 여기에 더한다.
-const OUTSIDE_FLAGS = new Set(['--help', '--test', '--test-reporter', '--settings', '--json', '--local', '--marketplace', '--values-stdin', '--continue', '--config', '--debug', '--get', '--unset']);
+const OUTSIDE_FLAGS = new Set(['--help', '--expose-internals', '--test', '--test-reporter', '--settings', '--json', '--local', '--marketplace', '--values-stdin', '--continue', '--config', '--debug', '--get', '--unset']);
 // 바깥 도구(git, claude)의 플래그를 설명하는 문서라, 키트 스크립트 이름이 함께 없는 플래그는 보지 않는다.
 const EXTERNAL_DOC = (f) => /skills\/git-work\//.test(f.split(path.sep).join('/')) || path.basename(f) === 'BACKGROUND.md';
 
@@ -81,10 +89,9 @@ describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 스�
 
 describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 설정 키와 스크립트', { skip: SKIP }, () => {
   it('APPLY_GUIDE 「개인용과 회사용」 표의 첫 칸 (키)는 kit-setup.js나 kitProfile.js에 있다', () => {
-    const text = read(path.join(SUB, 'APPLY_GUIDE.md'));
-    const section = text.slice(text.indexOf('## 개인용과 회사용'));
-    const keys = [...section.matchAll(/^\| [^|]*\(`([a-zA-Z]+)`[^|]*\) \|/gm)].map((m) => m[1]);
-    assert.ok(keys.length >= 3, `표에서 키를 ${keys.length}개만 뽑았다`);
+    const keys = [...GUIDE_TEXT.matchAll(/^\| [^|]*\(`([a-zA-Z]+)`[^|]*\) \|/gm)].map((m) => m[1]);
+    // work-git 묶음의 install.md에 있는 커밋 검사 행은 그 묶음이 원본에 없으면 표에 없다.
+    assert.ok(keys.length >= (missingBundles('work-git') ? 2 : 3), `표에서 키를 ${keys.length}개만 뽑았다`);
     const setup = scriptText.get('kit-setup.js') + scriptText.get('kitProfile.js');
     assert.deepEqual(keys.filter((k) => !setup.includes(k)), []);
   });
@@ -92,7 +99,8 @@ describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 설�
   it('백틱 안의 이름.js는 scripts나 hooks에 있다', () => {
     const missing = [];
     for (const f of DOCS) {
-      for (const span of spansOf(read(f))) {
+      // 「깔려 있으면」 꼴로 가리키는 줄은 그 묶음이 원본에 없을 수 있어 스크립트 존재를 보지 않는다.
+      for (const span of spansOf(read(f).split('\n').filter((l) => !l.includes('깔려 있으면')).join('\n'))) {
         for (const m of span.matchAll(/(?<![\w./<-])((?:[\w-]+\/)*[\w-]+\.js)\b/g)) {
           const name = path.basename(m[1]);
           // 프로젝트 쪽 예시(tool.js 같은 가상 이름)가 아니라 키트 스크립트 이름 꼴만 본다: 하이픈이 든 이름이나 scripts/hooks 경로.
@@ -108,7 +116,7 @@ describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 설�
     const setup = scriptText.get('kit-setup.js');
     const keys = new Set([...setup.matchAll(/\b(?:report|out(?:\.gitAsk)?)\.([a-z]+[A-Z][A-Za-z]*)\s*=[^=]/g)].map((m) => m[1]));
     assert.ok(keys.has('keptCommitAsks') && keys.has('conflictFiles'), `뽑힌 키: ${[...keys].join(', ')}`);
-    const guide = read(path.join(SUB, 'APPLY_GUIDE.md'));
+    const guide = GUIDE_TEXT;
     // 사용자에게 전할 값이 아니라 점검이나 되돌리기에만 쓰는 값. 새 키가 여기 없고 문서에도 없으면 문서가 받을지 먼저 정한다.
     const INTERNAL = new Set(['baseFrom', 'legacyZones', 'hooksRemoved', 'settingsBackup']);
     assert.deepEqual([...keys].filter((k) => !INTERNAL.has(k) && !guide.includes(k)), []);
@@ -119,6 +127,7 @@ describe('TESTING 「문서 계약 시험」: 키트 문서 안의 「절 이름
   // 사용자 CLAUDE.md나 프로젝트 CLAUDE.md를 가리키는 「올릴 것」 같은 말과 섞이지 않게 docs/와 APPLY_GUIDE, BACKGROUND만 이름으로 받는다.
   const NAMES = new Map();
   for (const f of DOCS.filter((x) => x.includes(`${path.sep}docs${path.sep}`) || ['APPLY_GUIDE.md', 'BACKGROUND.md'].includes(path.basename(x)))) NAMES.set(path.basename(f, '.md'), f);
+  // 각 묶음의 install.md는 이름이 같아 문서 이름으로 가리키지 않고 APPLY_GUIDE의 절만 가리킨다.
   const ALIASES = { GUIDE: 'SUBAGENT_GUIDE', SITUATIONS: 'SUBAGENT_SITUATIONS', CHECKLIST: 'SUBAGENT_BRIEF_CHECKLIST' };
   const headingsOf = (f) => read(f).split('\n').filter((l) => /^#{2,4} /.test(l)).map((l) => l.replace(/^#+ /, '').trim());
 
@@ -193,11 +202,9 @@ describe('TESTING 「문서 계약 시험」: 설정 조합과 절차 나열', {
     };
     const personal = keysOf('personal');
     assert.deepEqual(keysOf('company'), personal);
-    const text = read(path.join(SUB, 'APPLY_GUIDE.md'));
-    const section = text.slice(text.indexOf('## 개인용과 회사용'));
-    const tableKeys = [...section.matchAll(/^\| [^|]*\(`([a-zA-Z]+)`[^|]*\) \|/gm)].map((m) => m[1]);
-    // git 확인 창(permissions.ask)과 충돌 파일 줄은 설정 키가 아닌 행이라 (키) 꼴이 없어 뽑히지 않는다.
-    assert.deepEqual([...new Set(tableKeys)].sort(), personal);
+    // 표는 APPLY_GUIDE(바닥 행)와 묶음 install.md의 「개인용과 회사용 행」에 나뉘어 있다. git 확인 창(permissions.ask)과 충돌 파일 줄은 설정 키가 아닌 행이라 (키) 꼴이 없어 뽑히지 않는다.
+    const tableKeys = [...GUIDE_TEXT.matchAll(/^\| [^|]*\(`([a-zA-Z]+)`[^|]*\) \|/gm)].map((m) => m[1]);
+    assert.deepEqual([...new Set(tableKeys)].sort(), missingBundles('work-git') ? personal.filter((k) => k !== 'commitCheck') : personal);
     for (const k of RETIRED) assert.equal(personal.includes(k), false, `PROFILES에 옛 판정 키 ${k}가 있다`);
   });
 
@@ -216,5 +223,47 @@ describe('TESTING 「문서 계약 시험」: 설정 조합과 절차 나열', {
     const subStep1 = text.slice(subFrom, text.indexOf('\n2. 결과를 아래', subFrom));
     assert.ok(subFrom > 0 && subStep1.length > 100, '서브에이전트 순서 1번을 못 찾았다');
     assert.deepEqual([...new Set(names)].filter((n) => !subStep1.includes(n)), []);
+  });
+});
+
+describe('TESTING 「문서 계약 시험」: 원본에 내기', { skip: SKIP }, () => {
+  it('RETRO의 키트 원본 고침 절이 source-of를 먼저 돌려 로컬 조각이면 설치본에서 고치고 원본에 내지 않는다고 적는다', () => {
+    const lines = read(path.join(SUB, 'docs', 'RETRO.md')).split('\n');
+    const i = lines.findIndex((l) => l.includes('`kitSourcePath`(키트 원본 작업 트리 경로'));
+    assert.ok(i >= 0, '키트 원본 고침 절을 못 찾았다');
+    const block = [];
+    for (let j = i; j < lines.length && (j === i || /^\s/.test(lines[j])); j++) block.push(lines[j]);
+    const text = block.join('\n');
+    assert.match(text, /kit-setup\.js[^\n]*source-of/);
+    assert.match(text, /`local`[^\n]*설치본에서 고치고 키트 원본에는 내지 않으며/);
+    assert.match(text, /공개 원본에 낼지는 이 명령이 정하지 않고/);
+  });
+
+  it('AUTO_RETRO 6번의 사례 구절이 특정 프로젝트와 날짜 없이 다른 프로젝트 세션에서 그 프로젝트 항목을 올린 일로 적혀 있다', () => {
+    const text = read(path.join(SUB, 'docs', 'AUTO_RETRO.md'));
+    assert.ok(!/[A-Za-z][\w-]* 세션에서 [A-Za-z][\w-]*/.test(text));
+    assert.match(text, /다른 프로젝트 세션에서 그 프로젝트의 항목을 올린 일/);
+  });
+});
+
+describe('RETRO 「문서 검토 기준」: 문서 쓰기 갈래 없이 라우팅만 깔아도 검토가 빈다', { skip: SKIP }, () => {
+  const text = read(path.join(SUB, 'docs', 'RETRO.md'));
+  it('「문서 검토 기준」에 최소 기준 넷이 있고 DOC_WRITING은 「깔려 있으면」 꼴로만 가리킨다', () => {
+    const from = text.indexOf('\n## 문서 검토 기준');
+    const section = text.slice(from, text.indexOf('\n## ', from + 5));
+    assert.ok(from > 0);
+    for (const k of ['헷갈림', '낡은 줄', '겹침', '근거 없는 규칙']) assert.ok(section.includes(`- ${k}:`), `최소 기준 ${k}`);
+    const bad = text.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => l.includes('DOC_WRITING') && !l.includes('깔려 있으면'));
+    assert.deepEqual(bad.map(([i]) => i), []);
+  });
+  it('바닥과 routing만 깐 폴더에서: work-docs 묶음 소유 문서를 RETRO가 가리키는 줄은 모두 「깔려 있으면」 꼴이다', { skip: missingBundles('work-docs') }, () => {
+    const owner = (name) => fs.readdirSync(path.join(REPO, 'bundles'), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
+      .find((b) => fs.existsSync(path.join(REPO, 'bundles', b, 'core.part.json')) && JSON.parse(read(path.join(REPO, 'bundles', b, 'core.part.json'))).files.some((f) => f.endsWith(`/docs/${name}`)));
+    const named = [...new Set([...text.matchAll(/`([A-Z_]+\.md)`/g)].map((m) => m[1]))].filter((n) => owner(n) === 'work-docs');
+    assert.ok(named.includes('DOC_WRITING.md'), `뽑힌 이름: ${named.join(', ')}`);
+    for (const n of named) {
+      const bad = text.split('\n').filter((l) => l.includes(`\`${n}\``) && !l.includes('깔려 있으면'));
+      assert.deepEqual(bad, [], n);
+    }
   });
 });

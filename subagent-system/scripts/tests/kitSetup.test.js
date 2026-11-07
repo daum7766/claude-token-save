@@ -6,11 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { legacyHashOf } from '../kitMerge.js';
+import { missingFiles, missingBundles } from './fixtures/installedLayout.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KIT_SETUP = path.join(SCRIPTS, 'kit-setup.js');
-// 훅 정의(settings-hook.json)는 키트 폴더에만 있어 설치본 scripts로는 훅을 걸 수 없다. 걸리는 것을 보는 시험은 설치본에서 건너뛴다.
-const SKIP_NO_HOOK_DEF = fs.existsSync(path.join(SCRIPTS, '..', 'settings-hook.json')) ? false : '설치본 배치라 settings-hook.json이 없음(키트 원본에서만 시험)';
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kit-setup-'));
 const write = (dir, name, value) => {
   const file = path.join(dir, name);
@@ -21,17 +21,22 @@ const write = (dir, name, value) => {
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 // 설치본에는 키트 폴더의 입력 파일이 없으므로 시험이 같은 꼴의 최소 입력을 직접 만든다.
 const FIXTURES = tmpDir();
-const KIT_HOOK = write(FIXTURES, 'settings-hook.json', {
-  hooks: { SubagentStop: [{ hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-usage.js" --hook', timeout: 30 }] }] },
-});
 const GIT_PERMISSIONS = write(FIXTURES, 'git-permissions.json', {
   permissions: { ask: ['Bash(git checkout:*)', 'Bash(git commit:*)', 'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git * push *)'] },
 });
 // 사용자 환경에 SUBAGENT_* 경로 재정의가 있어도 시험이 그 값을 물려받지 않게 지운다.
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'CLAUDE_CONFIG_DIR' && !k.startsWith('SUBAGENT_')));
+// 설치는 묶음과 고를 항목 플래그를 모두 요구한다. 시험이 고르지 않은 플래그는 기본 묶음(routing, company, work-tests, work-docs, work-git)과 항목 none으로 채운다(거절 자체는 따로 시험).
+const withChoices = (args) => {
+  if (args[0] !== 'install' || args.includes('--no-choices')) return args.filter((a) => a !== '--no-choices');
+  const out = [...args];
+  if (!out.includes('--bundles')) out.push('--bundles', DEFAULT_BUNDLES);
+  if (!out.includes('--options')) out.push('--options', 'none');
+  return out;
+};
 const run = (args, { stdin, env } = {}) => {
   const clean = cleanEnv();
-  return spawnSync(process.execPath, [KIT_SETUP, ...args], { input: stdin, env: { ...clean, ...env }, encoding: 'utf8' });
+  return spawnSync(process.execPath, [KIT_SETUP, ...withChoices(args)], { input: stdin, env: { ...clean, ...env }, encoding: 'utf8' });
 };
 const names = (dir) => fs.readdirSync(dir).sort();
 
@@ -101,85 +106,77 @@ describe('kit-setup.js config.json 쓰기', () => {
 });
 
 describe('kit-setup.js settings.json 고치기', () => {
-  const mine = { hooks: { SubagentStop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }], Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] }, model: 'opus' };
+  // --add-hooks와 --remove-hooks는 깐 상태 기록(bundles.lock.json)의 훅 정의대로 settings.json의 이름표 등록을 맞춘다.
+  const installedCfg = (profile = 'personal') => {
+    const cfg = tmpDir();
+    install(makeKit(), cfg, '--profile', profile);
+    return cfg;
+  };
+  const kitTags = (settings) => Object.values(settings.hooks ?? {}).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command))).filter((c) => /# kit:/.test(c));
 
-  it('--add-hooks는 키트 훅을 더하고 다른 키와 훅은 그대로 두며 다시 돌리면 이미 있음을 찍는다', () => {
-    const file = write(tmpDir(), 'settings.json', mine);
-    const first = run(['--add-hooks', file, KIT_HOOK, 'SubagentStop']);
-    assert.match(first.stdout, /더함: SubagentStop/);
+  it('--remove-hooks는 이름표가 붙은 키트 훅만 빼고 사용자 훅과 다른 키는 남기며, --add-hooks는 다시 이름표 꼴로 단다', () => {
+    const cfg = installedCfg();
+    const file = path.join(cfg, 'settings.json');
+    const s = read(file);
+    s.model = 'opus';
+    s.hooks.Stop = [{ hooks: [{ type: 'command', command: 'echo mine' }] }];
+    write(cfg, 'settings.json', s);
+    const removed = run(['--remove-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    assert.equal(removed.status, 0, removed.stderr);
     const after = read(file);
     assert.equal(after.model, 'opus');
-    assert.deepEqual(after.hooks.Stop, mine.hooks.Stop);
-    assert.equal(after.hooks.SubagentStop.length, 2);
-    assert.match(JSON.stringify(after.hooks.SubagentStop[1]), /subagent-usage\.js/);
-    assert.match(run(['--add-hooks', file, KIT_HOOK, 'SubagentStop']).stdout, /이미 있음: SubagentStop/);
-    assert.equal(read(file).hooks.SubagentStop.length, 2);
+    assert.deepEqual(after.hooks, { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] });
+    const added = run(['--add-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    assert.equal(added.status, 0, added.stderr);
+    const tags = kitTags(read(file));
+    assert.ok(tags.some((c) => /# kit:base\/ask-log/.test(c)) && tags.some((c) => /# kit:routing\/subagent-usage/.test(c)), tags.join('\n'));
+    assert.deepEqual(read(file).hooks.Stop, [{ hooks: [{ type: 'command', command: 'echo mine' }] }]);
+    const again = run(['--add-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    assert.equal(kitTags(read(file)).length, tags.length, '다시 돌려도 두 번 달지 않는다');
+    assert.equal(again.status, 0, again.stderr);
   });
 
-  it('--add-hooks는 CLAUDE_CONFIG_DIR이 있으면 훅 명령의 $HOME/.claude를 그 폴더로 바꿔 넣는다', () => {
-    const dir = tmpDir();
-    const file = write(dir, 'settings.json', {});
-    run(['--add-hooks', file, KIT_HOOK, 'SubagentStop'], { env: { CLAUDE_CONFIG_DIR: path.join(dir, 'cc') } });
-    const command = read(file).hooks.SubagentStop[0].hooks[0].command;
-    assert.ok(command.includes(path.join(dir, 'cc').split(path.sep).join('/')), command);
-    assert.equal(command.includes('$HOME/.claude'), false);
+  it('--add-hooks는 CLAUDE_CONFIG_DIR이 있으면 훅 명령의 경로를 그 폴더 기준으로 단다', () => {
+    const cfg = installedCfg();
+    const file = path.join(cfg, 'settings.json');
+    run(['--remove-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    run(['--add-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    const commands = kitTags(read(file));
+    assert.ok(commands.length > 0);
+    assert.ok(commands.every((c) => c.includes(cfg.split(path.sep).join('/')) || c.includes('$HOME')), commands.join('\n'));
   });
 
-  it('--add-hooks는 모르는 이벤트나 hooks가 객체가 아닌 파일이면 종료 코드 1이고 파일을 바꾸지 않는다', () => {
-    const file = write(tmpDir(), 'settings.json', '{"hooks":[]}');
-    assert.equal(run(['--add-hooks', file, KIT_HOOK, 'SubagentStop']).status, 1);
+  it('--add-hooks는 hooks가 객체가 아닌 파일이면 종료 코드 1이고 파일을 바꾸지 않는다', () => {
+    const cfg = installedCfg();
+    const file = write(cfg, 'settings.json', '{"hooks":[]}');
+    assert.equal(run(['--add-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } }).status, 1);
     assert.equal(fs.readFileSync(file, 'utf8'), '{"hooks":[]}');
-    assert.equal(run(['--add-hooks', write(tmpDir(), 's.json', {}), KIT_HOOK, 'Stop']).status, 1);
   });
 
-  it('--add-hooks는 심볼릭 링크면 가리키는 실제 파일에 쓰고 파일 권한을 지킨다', () => {
-    const dir = tmpDir();
-    const real = write(dir, 'real.json', mine);
+  it('--add-hooks는 심볼릭 링크면 가리키는 실제 파일에 쓰고 파일 권한을 지킨다', { skip: process.platform === 'win32' }, () => {
+    const cfg = installedCfg();
+    const real = path.join(cfg, 'real.json');
+    fs.renameSync(path.join(cfg, 'settings.json'), real);
     fs.chmodSync(real, 0o600);
-    const link = path.join(dir, 'settings.json');
+    const link = path.join(cfg, 'settings.json');
     fs.symlinkSync(real, link);
-    run(['--add-hooks', link, KIT_HOOK, 'SubagentStop']);
+    run(['--remove-hooks', link], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    run(['--add-hooks', link], { env: { CLAUDE_CONFIG_DIR: cfg } });
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
-    assert.equal(read(real).hooks.SubagentStop.length, 2);
-    if (process.platform !== 'win32') assert.equal(fs.statSync(real).mode & 0o777, 0o600);
+    assert.ok(kitTags(read(real)).length > 0);
+    assert.equal(fs.statSync(real).mode & 0o777, 0o600);
   });
 
-  it('--remove-hooks는 이 키트의 훅 명령만 빼고 사용자의 다른 명령과 같은 묶음의 명령은 남기며 빈 묶음과 빈 이벤트는 지운다', () => {
-    const file = write(tmpDir(), 'settings.json', {
-      hooks: {
-        SubagentStop: [{ hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-usage.js" --hook' }] }, { hooks: [{ type: 'command', command: 'echo mine' }] }],
-        SessionStart: [{ hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --session-start' }, { type: 'command', command: 'keep' }] }],
-      },
-    });
-    const r = run(['--remove-hooks', file, 'SubagentStop', 'SessionStart']);
-    assert.match(r.stdout, /뺀 명령: 2개/);
-    assert.deepEqual(read(file).hooks, { SubagentStop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }], SessionStart: [{ hooks: [{ type: 'command', command: 'keep' }] }] });
-    const only = write(tmpDir(), 's.json', { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --session-start' }] }] }, model: 'm' });
-    run(['--remove-hooks', only, 'SessionStart']);
-    assert.deepEqual(read(only), { model: 'm' });
-  });
-
-  it('--remove-hooks는 키트 폴더 밖의 같은 파일 이름 훅과 이름만 닮은 훅은 남긴다', () => {
-    const mine = [
-      { type: 'command', command: 'node /home/me/hooks/usage-autolog.js' },
-      { type: 'command', command: 'node /home/me/my-subagent-system-notes/usage-autolog.js' },
-      { type: 'command', command: 'node "C:\\Users\\me\\.claude\\other\\retro-write-allow.js"' },
-    ];
-    const kit = [
-      { type: 'command', command: 'node "$HOME/.claude/subagent-system/hooks/usage-autolog.js"' },
-      { type: 'command', command: 'node "C:\\Users\\me\\.claude\\subagent-system\\hooks\\retro-write-allow.js"' },
-    ];
-    const file = write(tmpDir(), 'settings.json', { hooks: { SubagentStop: [{ hooks: [mine[0], mine[1], kit[0]] }], PermissionRequest: [{ hooks: [mine[2], kit[1]] }] } });
-    const r = run(['--remove-hooks', file, 'SubagentStop', 'PermissionRequest']);
-    assert.match(r.stdout, /뺀 명령: 2개/);
-    assert.deepEqual(read(file).hooks, { SubagentStop: [{ hooks: [mine[0], mine[1]] }], PermissionRequest: [{ hooks: [mine[2]] }] });
-  });
-
-  it('--remove-hooks는 지정하지 않은 이벤트의 키트 훅은 건드리지 않고 settings.json이 없으면 종료 코드 1이다', () => {
-    const file = write(tmpDir(), 'settings.json', { hooks: { SubagentStop: [{ hooks: [{ type: 'command', command: 'node subagent-usage.js' }] }] } });
-    assert.match(run(['--remove-hooks', file, 'SessionStart']).stdout, /뺀 명령: 0개/);
-    assert.equal(read(file).hooks.SubagentStop.length, 1);
-    assert.equal(run(['--remove-hooks', path.join(tmpDir(), 'none.json'), 'SessionStart']).status, 1);
+  it('--remove-hooks는 이름표 없는 같은 파일 이름 훅(사용자가 다른 경로에 둔 것)은 남기고 settings.json이 없으면 종료 코드 1이다', () => {
+    const cfg = installedCfg();
+    const file = path.join(cfg, 'settings.json');
+    const mineCmd = 'node /home/me/hooks/usage-autolog.js';
+    const s = read(file);
+    s.hooks.SubagentStop.push({ hooks: [{ type: 'command', command: mineCmd }] });
+    write(cfg, 'settings.json', s);
+    run(['--remove-hooks', file], { env: { CLAUDE_CONFIG_DIR: cfg } });
+    assert.deepEqual(read(file).hooks, { SubagentStop: [{ hooks: [{ type: 'command', command: mineCmd }] }] });
+    assert.equal(run(['--remove-hooks', path.join(tmpDir(), 'none.json')], { env: { CLAUDE_CONFIG_DIR: cfg } }).status, 1);
   });
 
   it('--merge-git-ask check는 아무것도 쓰지 않고 더할 개수와 allow에도 있는 항목을 찍고, merge는 거절한 항목을 빼고 끝에 더한다', () => {
@@ -260,22 +257,56 @@ describe('kit-setup.js 파일과 폴더 옮기기', () => {
 });
 
 // 설치, 업데이트, 제거 시험용 작은 키트. 파일 내용은 시험이 직접 고쳐 가며 쓴다.
+// 키트 원본과 같은 꼴로 bundles/<묶음>/ 정의를 함께 만든다. 묶음 이름은 실제 키트와 같지만 파일은 시험용 최소본이다.
 const GIT_BOTH = {
   permissions: { ask: ['Bash(git checkout:*)', 'Bash(git commit:*)', 'Bash(git push:*)', 'Bash(git * push *)'] },
   personal: { permissions: { ask: ['Bash(git checkout:*)'] } },
 };
-const HOOKS_BOTH = {
-  hooks: {
-    SubagentStop: [{ hooks: [
-      { type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-usage.js" --hook', timeout: 30 },
-      { type: 'command', command: 'node "$HOME/.claude/subagent-system/hooks/usage-autolog.js"', timeout: 30 },
-    ] }],
-    PermissionRequest: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/hooks/retro-write-allow.js"', timeout: 10 }] },
-      { matcher: '*', hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/hooks/ask-log.js"', timeout: 10 }] }],
-  },
-};
 const askLogCmds = (cfg) => (read(path.join(cfg, 'settings.json')).hooks?.PermissionRequest ?? []).flatMap((g) => g.hooks.map((x) => x.command)).filter((c) => c.includes('ask-log.js'));
 const GUIDE_V1 = '# 가이드\n\n줄1\n줄2\n줄3\n줄4\n줄5\n줄6\n줄7\n줄8\n끝\n';
+
+const FAKE_BUNDLE = (name, order, extra = {}) => ({ name, title: `${name} 시험 묶음`, summary: `${name} 요약`, order, selectable: name !== 'base', alwaysRules: [], options: [], configKeys: [], uses: [], records: [], ...extra });
+const FAKE_DEFS = {
+  base: {
+    bundle: FAKE_BUNDLE('base', 0, { configKeys: ['profile', 'commitCheck', 'knownBundles', 'kitFileHashes', 'decisionWords', 'personalMarkers'] }),
+    core: {
+      files: ['subagent-system/scripts/tool.js', 'subagent-system/scripts/package.json', 'subagent-system/hooks/kit-hook.cjs', 'subagent-system/hooks/ask-log.js', 'subagent-system/hooks/git/commit-msg'],
+      exec: ['subagent-system/hooks/git/commit-msg'],
+      kitOnly: ['subagent-system/VERSION'],
+      hooks: [{ name: 'ask-log', event: 'PermissionRequest', matcher: '*', command: 'node "$HOME/.claude/subagent-system/hooks/ask-log.js"', timeout: 10 }],
+    },
+  },
+  routing: {
+    bundle: FAKE_BUNDLE('routing', 20, { configKeys: ['retroMode', 'retroWriteAllow', 'roles', 'removedDefs', 'commandName'] }),
+    core: {
+      files: ['agents/haiku-low.md', 'agents/opus-high.md', 'subagent-system/docs/SUBAGENT_GUIDE.md', 'subagent-system/docs/RETRO.md', 'subagent-system/docs/SUBAGENT_SITUATIONS.md', 'subagent-system/docs/AUTO_RETRO.md',
+        'subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md', 'subagent-system/docs/ROUTING_TABLE.md', 'skills/retro/**', 'subagent-system/hooks/usage-autolog.js', 'subagent-system/hooks/brief-check.js',
+        'subagent-system/hooks/retro-write-allow.js', 'subagent-system/scripts/subagent-usage.js', 'subagent-system/rates.json'],
+      kinds: { 'subagent-system/docs/ROUTING_TABLE.md': 'once', 'subagent-system/rates.json': 'rates' },
+      rename: { 'skills/retro/': 'commandName' },
+      hooks: [
+        { name: 'subagent-usage', event: 'SubagentStop', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-usage.js" --hook', timeout: 30 },
+        { name: 'usage-autolog', event: 'SubagentStop', command: 'node "$HOME/.claude/subagent-system/hooks/usage-autolog.js"', timeout: 30 },
+        { name: 'brief-check', event: 'PreToolUse', matcher: 'Agent', command: 'node "$HOME/.claude/subagent-system/hooks/brief-check.js"', timeout: 10 },
+        { name: 'retro-write-allow', event: 'PermissionRequest', matcher: 'Write|Edit|MultiEdit|NotebookEdit', command: 'node "$HOME/.claude/subagent-system/hooks/retro-write-allow.js"', timeout: 10, when: { config: 'retroWriteAllow', equals: true } },
+      ],
+    },
+  },
+  company: {
+    bundle: FAKE_BUNDLE('company', 10, { alwaysRules: ['rules/kit-core.md'], options: [{ id: 'recommended', title: '권장 규칙', files: ['rules/kit-recommended.md'], default: true }] }),
+    core: { files: ['rules/kit-core.md', 'rules/kit-recommended.md'] },
+  },
+  'work-paths': {
+    bundle: FAKE_BUNDLE('work-paths', 51, { options: [{ id: 'db', title: 'DB 규칙', files: ['rules/kit-db.md'], default: true }] }),
+    core: { files: ['rules/kit-db.md'] },
+  },
+  'work-tests': { bundle: FAKE_BUNDLE('work-tests', 52), core: { files: ['subagent-system/docs/TESTING.md'] } },
+  'work-docs': { bundle: FAKE_BUNDLE('work-docs', 53), core: { files: ['subagent-system/docs/DOC_WRITING.md'] } },
+  'work-git': { bundle: FAKE_BUNDLE('work-git', 50, { configKeys: ['gitAskDeclined'] }), core: { files: ['skills/git-work/**'], kitOnly: ['extras/git-permissions.json'] } },
+  'work-review': { bundle: FAKE_BUNDLE('work-review', 54), core: { files: ['skills/ab-test/**'] } },
+};
+// 시험이 별도로 고르지 않을 때 깔리는 묶음. 옛 키트의 「늘 깔리는 것」에 해당한다.
+const DEFAULT_BUNDLES = 'routing,company,work-tests,work-docs,work-git';
 
 function makeKit(over = {}) {
   const kit = tmpDir();
@@ -299,16 +330,43 @@ function makeKit(over = {}) {
     'subagent-system/skills/ab-test/SKILL.md': '---\nname: ab-test\n---\n본문\n',
     'subagent-system/scripts/tool.js': 'export const v = 1;\n',
     'subagent-system/scripts/package.json': '{"type": "module"}\n',
+    'subagent-system/scripts/subagent-usage.js': '// usage\n',
     'subagent-system/hooks/usage-autolog.js': '// hook\n',
+    'subagent-system/hooks/brief-check.js': '// brief-check\n',
+    'subagent-system/hooks/retro-write-allow.js': '// retro-write-allow\n',
+    'subagent-system/hooks/ask-log.js': '// ask-log\n',
+    'subagent-system/hooks/kit-hook.cjs': '// kit-hook\n',
+    'subagent-system/hooks/git/commit-msg': '#!/bin/sh\n# commit-msg\n',
     'subagent-system/rates.json': { _checked: '2026-10', 'm-a': { input: 1 } },
-    'subagent-system/settings-hook.json': HOOKS_BOTH,
     'extras/git-permissions.json': GIT_BOTH,
     ...over,
   };
   for (const [name, value] of Object.entries(files)) if (value !== null) write(kit, name, value);
+  // 묶음 정의. over에 bundles/로 시작하는 키를 주면 그 파일을 대신 쓴다.
+  for (const [bundle, def] of Object.entries(FAKE_DEFS)) {
+    const bundleFile = `bundles/${bundle}/bundle.json`;
+    if (!(bundleFile in over)) write(kit, bundleFile, def.bundle);
+    const partFile = `bundles/${bundle}/core.part.json`;
+    if (!(partFile in over)) write(kit, partFile, { bundle, part: 'core', origin: 'kit', ...def.core });
+  }
   return kit;
 }
 const kitSet = (kit, name, value) => write(kit, name, value);
+// 조각 정의의 files에 설치 키를 더하거나 뺀다(키트 원본에 파일을 더하고 빼는 시험에서 정의도 함께 맞춘다).
+const kitPartFiles = (kit, bundle, { add = [], remove = [] } = {}) => {
+  const file = path.join(kit, 'bundles', bundle, 'core.part.json');
+  const def = read(file);
+  def.files = [...def.files.filter((f) => !remove.includes(f)), ...add.filter((f) => !def.files.includes(f))];
+  write(kit, `bundles/${bundle}/core.part.json`, def);
+};
+// 묶음에 고를 항목을 하나 더한다. 파일은 조각 files에도 더한다.
+const kitAddOption = (kit, bundle, id, installKey) => {
+  const file = path.join(kit, 'bundles', bundle, 'bundle.json');
+  const def = read(file);
+  def.options = [...def.options, { id, title: `${id} 항목`, files: [installKey], default: false }];
+  write(kit, `bundles/${bundle}/bundle.json`, def);
+  kitPartFiles(kit, bundle, { add: [installKey] });
+};
 const jsonOut = (r) => {
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
@@ -329,8 +387,8 @@ const cfgRead = (cfg, rel) => fs.readFileSync(path.join(cfg, rel), 'utf8');
 const exists = (cfg, rel) => fs.existsSync(path.join(cfg, rel));
 const baks = (dir, prefix) => fs.readdirSync(dir).filter((n) => n.startsWith(prefix));
 const CONFIG = (cfg) => read(path.join(cfg, 'subagent-system/config.json'));
-// 키트가 남기는 knownOptional(선택 항목 목록)을 뺀 설정이다. 설정 키 모양을 통째로 견줄 때 쓴다.
-const CONFIG_KEYS = (cfg) => { const { knownOptional, ...rest } = CONFIG(cfg); return rest; };
+// 키트가 남기는 knownBundles(묶음과 고를 항목 목록)를 뺀 설정이다. 설정 키 모양을 통째로 견줄 때 쓴다.
+const CONFIG_KEYS = (cfg) => { const { knownBundles, ...rest } = CONFIG(cfg); return rest; };
 // profile이 없는 업데이트 전 설치본을 만든다. 설정은 주어진 키만 남긴다.
 const legacyInstalled = (config) => {
   const kit = makeKit();
@@ -380,11 +438,13 @@ describe('kit-setup.js install', () => {
     assert.equal('goalMethodDeclined' in CONFIG(personal), false);
   });
 
-  it('SubagentStop 훅 둘을 한 묶음으로, 개인용만 PermissionRequest 훅을 settings.json에 더한다', () => {
+  it('SubagentStop 훅 둘은 이름표 붙은 명령으로 걸리고, 개인용만 PermissionRequest의 retro-write-allow 훅을 settings.json에 더한다', () => {
     const personal = tmpDir();
     install(makeKit(), personal, '--profile', 'personal');
     const hooks = read(path.join(personal, 'settings.json')).hooks;
-    assert.equal(hooks.SubagentStop[0].hooks.length, 2);
+    const stop = hooks.SubagentStop.flatMap((g) => g.hooks.map((h) => h.command));
+    assert.equal(stop.length, 2);
+    assert.ok(stop.every((c) => /# kit:routing\//.test(c)), stop.join('\n'));
     assert.match(JSON.stringify(hooks.PermissionRequest), /retro-write-allow\.js/);
     const company = tmpDir();
     install(makeKit(), company, '--profile', 'company');
@@ -423,73 +483,62 @@ describe('kit-setup.js install', () => {
     assert.deepEqual(askLogCmds(cfg), [mine.command]);
   });
 
-  it('kit-core는 늘 놓고 --rules, --skills로 고른 것만 더하며 키트에 없는 이름은 오류다', () => {
+  it('company의 kit-core는 묶음을 고르면 늘 놓고 고를 항목은 --options로 고른 것만 놓으며, 키트에 없는 묶음과 항목은 오류다', () => {
     const cfg = tmpDir();
-    const r = install(makeKit(), cfg, '--profile', 'personal', '--rules', 'recommended', '--skills', 'git-work');
+    const r = install(makeKit(), cfg, '--profile', 'personal', '--bundles', 'company,work-paths', '--options', 'company.recommended');
     assert.deepEqual(names(path.join(cfg, 'rules')), ['kit-core.md', 'kit-recommended.md']);
-    assert.equal(exists(cfg, 'skills/git-work/SKILL.md'), true);
-    assert.deepEqual(r.unchosenOptional.rules, ['kit-db.md']);
-    assert.deepEqual(r.newOptional.rules, []);
-    const bad = run(['install', '--kit', makeKit(), '--profile', 'personal', '--rules', 'nope'], { env: { CLAUDE_CONFIG_DIR: tmpDir() } });
-    assert.equal(bad.status, 1);
-    assert.match(bad.stderr, /키트에 없는 규칙: nope/);
+    assert.deepEqual(r.options, ['company.recommended']);
+    assert.deepEqual(r.unchosenOptions, ['work-paths.db']);
+    assert.deepEqual(r.newOptions, []);
+    const badBundle = run(['install', '--kit', makeKit(), '--profile', 'personal', '--bundles', 'nope', '--options', 'none'], { env: { CLAUDE_CONFIG_DIR: tmpDir() } });
+    assert.equal(badBundle.status, 1);
+    assert.match(badBundle.stderr, /키트에 없거나 고를 수 없는 묶음: nope/);
+    const badOption = run(['install', '--kit', makeKit(), '--profile', 'personal', '--bundles', 'company', '--options', 'company.nope'], { env: { CLAUDE_CONFIG_DIR: tmpDir() } });
+    assert.equal(badOption.status, 1);
+    assert.match(badOption.stderr, /company\.nope/);
   });
 
   it('끊긴 설치를 다른 선택으로 다시 돌리면 키트가 놓은 그대로인 선택 항목은 지우고 고친 것은 두고 알린다', () => {
     const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal', '--rules', 'recommended,db', '--skills', 'git-work');
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'company,work-paths,work-git', '--options', 'company.recommended,work-paths.db');
     fs.rmSync(path.join(cfg, 'subagent-system/VERSION'));
     fs.appendFileSync(path.join(cfg, 'rules/kit-db.md'), '- 내가 더한 줄\n');
-    const r = install(kit, cfg, '--profile', 'company');
+    const r = install(kit, cfg, '--profile', 'company', '--bundles', 'company,work-paths', '--options', 'work-paths.db');
     assert.deepEqual(names(path.join(cfg, 'rules')), ['kit-core.md', 'kit-db.md']);
     assert.equal(exists(cfg, 'skills/git-work'), false);
     assert.deepEqual(r.unchosenRemoved, ['rules/kit-recommended.md', 'skills/git-work/SKILL.md']);
-    assert.deepEqual(r.unchosenKept, ['rules/kit-db.md']);
-    assert.ok(r.notes.some((n) => /뺄지 물으세요/.test(n)));
+    assert.equal(r.unchosenKept, undefined);
+    // 고친 파일은 고른 항목(db)이 아니라 안 고른 항목일 때만 남는다.
+    fs.rmSync(path.join(cfg, 'subagent-system/VERSION'));
+    const r2 = install(kit, cfg, '--profile', 'company', '--bundles', 'company', '--options', 'none');
+    assert.deepEqual(r2.unchosenKept, ['rules/kit-db.md']);
+    assert.ok(r2.notes.some((n) => /뺄지 물으세요/.test(n)));
   });
 
-  it('주제별로 나뉜 키트에서 옛 이름 recommended는 kit-rec-* 파일 전부로 풀리고 같이 적은 이름과 겹쳐도 한 번만 놓는다', () => {
-    const split = { 'subagent-system/rules/kit-recommended.md': null, 'subagent-system/rules/kit-rec-a.md': '- a\n', 'subagent-system/rules/kit-rec-b.md': '- b\n' };
-    const cfg = tmpDir();
-    const r = install(makeKit(split), cfg, '--profile', 'personal', '--rules', 'recommended,rec-a');
-    assert.deepEqual(names(path.join(cfg, 'rules')), ['kit-core.md', 'kit-rec-a.md', 'kit-rec-b.md']);
-    assert.deepEqual(r.unchosenOptional.rules, ['kit-db.md']);
-  });
-
-  it('옛 kit-recommended.md를 깔아 둔 설치본은 업데이트에서 kit-rec-* 파일 전부를 받고 옛 파일은 지워진다', () => {
+  it('add는 고른 묶음과 항목의 파일을 .kit-base와 함께 새로 놓고 --dry-run이면 아무것도 쓰지 않는다', () => {
     const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal', '--rules', 'recommended');
-    fs.rmSync(path.join(kit, 'subagent-system/rules/kit-recommended.md'));
-    kitSet(kit, 'subagent-system/rules/kit-rec-a.md', '- a\n');
-    kitSet(kit, 'subagent-system/rules/kit-rec-b.md', '- b\n');
-    const r = update(kit, cfg);
-    assert.deepEqual(names(path.join(cfg, 'rules')), ['kit-core.md', 'kit-rec-a.md', 'kit-rec-b.md']);
-    assert.deepEqual(r.orphansRemoved, ['rules/kit-recommended.md']);
-  });
-
-  it('add는 고른 규칙과 스킬 파일을 .kit-base와 함께 새로 놓고 --dry-run이면 아무것도 쓰지 않는다', () => {
-    const kit = makeKit();
-    const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal');
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'company', '--options', 'none');
     const env = { CLAUDE_CONFIG_DIR: cfg };
-    const dry = jsonOut(run(['add', '--kit', kit, '--rules', 'db', '--skills', 'git-work', '--dry-run'], { env }));
+    const dry = jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths,work-git', '--dry-run'], { env }));
     assert.deepEqual(dry.added, ['rules/kit-db.md', 'skills/git-work/SKILL.md']);
     assert.equal(exists(cfg, 'rules/kit-db.md'), false);
-    const r = jsonOut(run(['add', '--kit', kit, '--rules', 'db', '--skills', 'git-work'], { env }));
+    assert.equal(read(path.join(cfg, 'subagent-system/bundles.lock.json')).installed['work-paths'], undefined);
+    const r = jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths,work-git'], { env }));
     assert.deepEqual(r.added, ['rules/kit-db.md', 'skills/git-work/SKILL.md']);
     assert.equal(cfgRead(cfg, 'rules/kit-db.md'), '- DB 규칙\n');
     assert.equal(cfgRead(cfg, 'subagent-system/.kit-base/skills/git-work/SKILL.md'), cfgRead(cfg, 'skills/git-work/SKILL.md'));
+    assert.ok(read(path.join(cfg, 'subagent-system/bundles.lock.json')).installed['work-paths']);
   });
 
   it('add는 이미 있는 파일을 건너뛰고 고친 내용을 지킨다', () => {
     const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal', '--rules', 'db');
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'company,work-paths', '--options', 'work-paths.db');
     write(cfg, 'rules/kit-db.md', '- 내가 고친 규칙\n');
-    const r = jsonOut(run(['add', '--kit', kit, '--rules', 'db,recommended'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
-    assert.deepEqual(r.skipped, ['rules/kit-db.md']);
+    const r = jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths', '--options', 'work-paths.db,company.recommended'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
+    assert.deepEqual([...r.skipped].sort(), ['rules/kit-core.md', 'rules/kit-db.md']);
     assert.deepEqual(r.added, ['rules/kit-recommended.md']);
     assert.equal(cfgRead(cfg, 'rules/kit-db.md'), '- 내가 고친 규칙\n');
   });
@@ -520,6 +569,12 @@ describe('kit-setup.js install', () => {
     assert.match(again.stderr, /이미 설치/);
     const empty = tmpDir();
     assert.equal(run(['install', '--kit', kit], { env: { CLAUDE_CONFIG_DIR: empty } }).status, 1);
+    const noChoice = run(['install', '--kit', kit, '--profile', 'personal', '--no-choices'], { env: { CLAUDE_CONFIG_DIR: empty } });
+    assert.equal(noChoice.status, 1);
+    assert.match(noChoice.stderr + noChoice.stdout, /묶음을 고르지 않았습니다: --bundles, --options/);
+    const oldFlags = run(['install', '--kit', kit, '--profile', 'personal', '--rules', 'none', '--no-choices'], { env: { CLAUDE_CONFIG_DIR: empty } });
+    assert.equal(oldFlags.status, 1);
+    assert.match(oldFlags.stderr, /--bundles.*--options/);
     assert.equal(run(['install', '--kit', kit, '--profile', 'x'], { env: { CLAUDE_CONFIG_DIR: empty } }).status, 1);
     assert.deepEqual(names(empty), []);
   });
@@ -544,7 +599,7 @@ describe('kit-setup.js install', () => {
 
   const REAL_KIT = path.resolve(SCRIPTS, '..', '..');
   const SKIP_NOT_KIT = fs.existsSync(path.join(REAL_KIT, 'subagent-system', 'rules')) ? false : '설치본 배치라 두 단계 위가 키트 폴더가 아님(키트 원본에서만 시험)';
-  it('같은 설정 폴더로 설치한 회고 스크립트가 install이 쓴 config.json을 같은 경로에서 읽는다', { skip: SKIP_NOT_KIT }, () => {
+  it('같은 설정 폴더로 설치한 회고 스크립트가 install이 쓴 config.json을 같은 경로에서 읽는다', { skip: SKIP_NOT_KIT || missingBundles('company') }, () => {
     const cfg = tmpDir();
     const r = jsonOut(run(['install', '--kit', REAL_KIT, '--profile', 'personal', '--no-git-ask'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
     assert.equal(r.config.file, path.join(cfg, 'subagent-system/config.json'));
@@ -663,10 +718,12 @@ describe('kit-setup.js update', () => {
     const { kit, cfg } = installed();
     kitSet(kit, 'subagent-system/scripts/old.js', 'a\n');
     kitSet(kit, 'subagent-system/scripts/old2.js', 'b\n');
+    kitPartFiles(kit, 'base', { add: ['subagent-system/scripts/old.js', 'subagent-system/scripts/old2.js'] });
     update(kit, cfg);
     fs.writeFileSync(path.join(cfg, 'subagent-system/scripts/old2.js'), 'mine\n');
     fs.rmSync(path.join(kit, 'subagent-system/scripts/old.js'));
     fs.rmSync(path.join(kit, 'subagent-system/scripts/old2.js'));
+    kitPartFiles(kit, 'base', { remove: ['subagent-system/scripts/old.js', 'subagent-system/scripts/old2.js'] });
     const r = update(kit, cfg);
     assert.deepEqual(r.orphansRemoved, ['subagent-system/scripts/old.js']);
     assert.deepEqual(r.orphansKept, ['subagent-system/scripts/old2.js']);
@@ -674,40 +731,107 @@ describe('kit-setup.js update', () => {
     assert.equal(exists(cfg, 'subagent-system/scripts/old2.js'), true);
   });
 
-  it('ROUTING_TABLE.md와 고르지 않은 규칙 및 스킬은 건드리지 않고, 새로 생긴 선택 항목은 알리기만 한다', () => {
+  it('묶음 일부만 내보낸 키트(bundles/omitted.json)로 갱신하면 키트에서 빠진 파일을 지우지 않고 남겨 알린다', () => {
     const { kit, cfg } = installed();
+    kitSet(kit, 'subagent-system/scripts/old.js', 'a\n');
+    kitPartFiles(kit, 'base', { add: ['subagent-system/scripts/old.js'] });
+    update(kit, cfg);
+    fs.rmSync(path.join(kit, 'subagent-system/scripts/old.js'));
+    kitPartFiles(kit, 'base', { remove: ['subagent-system/scripts/old.js'] });
+    kitSet(kit, 'bundles/omitted.json', JSON.stringify({ omitted: ['ghost'], keep: ['subagent-system/scripts/old.js'] }));
+    const r = update(kit, cfg);
+    assert.deepEqual(r.orphansRemoved, []);
+    assert.deepEqual(r.orphansLeft, ['subagent-system/scripts/old.js']);
+    assert.equal(exists(cfg, 'subagent-system/scripts/old.js'), true);
+    assert.ok(r.notes.some((n) => /지우지 않고 남겼습니다/.test(n) && n.includes('subagent-system/scripts/old.js')), '남긴 파일 목록이 알림에 든다');
+  });
+
+  it('공개판 갱신에서 keep에 없는 빠진 파일은 지워지고, 뺀 묶음이라 적힌 묶음이 키트에 있으면 keep을 믿지 않는다', () => {
+    const { kit, cfg } = installed();
+    for (const name of ['gone.js', 'gone2.js']) {
+      kitSet(kit, `subagent-system/scripts/${name}`, 'a\n');
+      kitPartFiles(kit, 'base', { add: [`subagent-system/scripts/${name}`] });
+    }
+    update(kit, cfg);
+    for (const name of ['gone.js', 'gone2.js']) {
+      fs.rmSync(path.join(kit, `subagent-system/scripts/${name}`));
+      kitPartFiles(kit, 'base', { remove: [`subagent-system/scripts/${name}`] });
+    }
+    // gone2.js만 keep에 든다. 뺀 묶음 ghost는 키트에 없으므로 keep을 믿는다.
+    kitSet(kit, 'bundles/omitted.json', JSON.stringify({ omitted: ['ghost'], keep: ['subagent-system/scripts/gone2.js'] }));
+    const r = update(kit, cfg);
+    assert.deepEqual(r.orphansRemoved, ['subagent-system/scripts/gone.js']);
+    assert.deepEqual(r.orphansLeft, ['subagent-system/scripts/gone2.js']);
+    // 전체 키트에 omitted.json이 잘못 들어와(base가 뺀 묶음이라 적힘) 있으면 고아 정리가 멈추지 않고 지운다.
+    kitSet(kit, 'bundles/omitted.json', JSON.stringify({ omitted: ['base'], keep: ['subagent-system/scripts/gone2.js'] }));
+    const r2 = update(kit, cfg);
+    assert.deepEqual(r2.orphansRemoved, ['subagent-system/scripts/gone2.js']);
+    assert.equal(r2.orphansLeft, undefined);
+  });
+
+  it('기준본이 있는 설치에서는 옛 해시 기록에만 있는 설치본 전용 스크립트를 지우지 않는다', () => {
+    const { kit, cfg } = installed();
+    update(kit, cfg);
+    fs.writeFileSync(path.join(cfg, 'subagent-system/scripts/mine.cjs'), 'local\n');
+    const confPath = path.join(cfg, 'subagent-system/config.json');
+    const conf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
+    conf.kitFileHashes = { ...(conf.kitFileHashes ?? {}), 'subagent-system/scripts/mine.cjs': legacyHashOf('subagent-system/scripts/mine.cjs', 'local\n') };
+    fs.writeFileSync(confPath, JSON.stringify(conf, null, 2));
+    const r = update(kit, cfg);
+    assert.equal(exists(cfg, 'subagent-system/scripts/mine.cjs'), true);
+    assert.deepEqual(r.orphansRemoved, []);
+  });
+
+  it('ROUTING_TABLE.md와 고르지 않은 항목은 건드리지 않고, 새로 생긴 고를 항목은 알리기만 한다', () => {
+    const { kit, cfg } = installed(['--bundles', `${DEFAULT_BUNDLES},work-paths`, '--options', 'none']);
     fs.writeFileSync(path.join(cfg, 'subagent-system/docs/ROUTING_TABLE.md'), '내 표\n');
     kitSet(kit, 'subagent-system/docs/ROUTING_TABLE.md', '키트 새 표\n');
     kitSet(kit, 'subagent-system/rules/kit-new.md', '- 새\n');
+    kitAddOption(kit, 'company', 'new', 'rules/kit-new.md');
     const r = update(kit, cfg);
     assert.equal(cfgRead(cfg, 'subagent-system/docs/ROUTING_TABLE.md'), '내 표\n');
     assert.equal(exists(cfg, 'rules/kit-recommended.md'), false);
-    assert.deepEqual(r.newOptional.rules, ['kit-new.md']);
-    assert.deepEqual(r.unchosenOptional.rules, ['kit-db.md', 'kit-recommended.md']);
-    assert.ok(cfgRead(cfg, 'subagent-system/config.json').includes('kit-new.md'), 'knownOptional에 새 항목이 남는다');
+    assert.equal(exists(cfg, 'rules/kit-new.md'), false);
+    assert.deepEqual(r.newOptions, ['company.new']);
+    assert.deepEqual(r.unchosenOptions, ['company.recommended', 'work-paths.db']);
+    assert.ok(cfgRead(cfg, 'subagent-system/config.json').includes('company.new'), 'knownBundles에 새 항목이 남는다');
     const again = update(kit, cfg);
-    assert.deepEqual(again.newOptional.rules, []);
-    assert.deepEqual(again.unchosenOptional.rules, ['kit-db.md', 'kit-new.md', 'kit-recommended.md']);
+    assert.deepEqual(again.newOptions, []);
+    assert.deepEqual(again.unchosenOptions, ['company.recommended', 'company.new', 'work-paths.db']);
   });
 
-  it('knownOptional이 없는 옛 설치는 첫 업데이트에서 고르지 않은 항목을 모두 고르지 않음으로 보고 새것으로 알리지 않으며 목록을 남긴다', () => {
+  it('새 묶음이 키트에 생기면 newBundles로 알리기만 하고 깔지 않는다', () => {
+    const { kit, cfg } = installed();
+    kitSet(kit, 'subagent-system/docs/NEW.md', '# 새\n');
+    write(kit, 'bundles/work-backlog/bundle.json', { name: 'work-backlog', title: '백로그', summary: '요약', order: 55, selectable: true, alwaysRules: [], options: [], configKeys: [], uses: [], records: [] });
+    write(kit, 'bundles/work-backlog/core.part.json', { bundle: 'work-backlog', part: 'core', origin: 'kit', files: ['subagent-system/docs/NEW.md'] });
+    const r = update(kit, cfg);
+    assert.deepEqual(r.newBundles.map((b) => b.name), ['work-backlog']);
+    assert.equal(exists(cfg, 'subagent-system/docs/NEW.md'), false);
+    assert.deepEqual(update(kit, cfg).newBundles, []);
+  });
+
+  it('knownBundles가 없는 옛 설치는 첫 업데이트에서 고르지 않은 항목을 새것으로 알리지 않으며 목록을 남긴다', () => {
     const { kit, cfg } = installed();
     const file = path.join(cfg, 'subagent-system/config.json');
     const c = JSON.parse(fs.readFileSync(file, 'utf8'));
-    delete c.knownOptional;
+    delete c.knownBundles;
     fs.writeFileSync(file, JSON.stringify(c));
-    kitSet(kit, 'subagent-system/rules/kit-new.md', '- 새\n');
     const r = update(kit, cfg);
-    assert.deepEqual(r.newOptional, { rules: [], skills: [], hooks: [] });
-    assert.deepEqual(r.unchosenOptional.rules, ['kit-db.md', 'kit-new.md', 'kit-recommended.md']);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).knownOptional.rules, ['kit-db.md', 'kit-new.md', 'kit-recommended.md']);
+    assert.deepEqual(r.newOptions, []);
+    assert.deepEqual(r.newBundles, []);
+    assert.deepEqual(r.unchosenOptions, ['company.recommended']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).knownBundles.options, ['company.recommended', 'work-paths.db']);
   });
 
-  it('install은 키트의 선택 항목 목록을 config.json의 knownOptional에 남기고 새것은 없다고 낸다', () => {
+  it('install은 키트의 묶음과 고를 항목 목록을 config.json의 knownBundles에 남기고 새것은 없다고 낸다', () => {
     const cfg = tmpDir();
     const r = install(makeKit(), cfg, '--profile', 'personal');
-    assert.deepEqual(r.newOptional, { rules: [], skills: [], hooks: [] });
-    assert.deepEqual(JSON.parse(cfgRead(cfg, 'subagent-system/config.json')).knownOptional.rules, ['kit-db.md', 'kit-recommended.md']);
+    assert.deepEqual(r.newOptions, []);
+    assert.deepEqual(r.newBundles, []);
+    const known = JSON.parse(cfgRead(cfg, 'subagent-system/config.json')).knownBundles;
+    assert.deepEqual(known.options, ['company.recommended', 'work-paths.db']);
+    assert.ok(known.bundles.includes('routing') && !known.bundles.includes('base'));
   });
 
   it('rates.json은 설치본 값을 지키고 키트에만 있는 모델 키만 더하며 값이 다른 모델은 알리기만 한다', () => {
@@ -752,11 +876,12 @@ describe('kit-setup.js update', () => {
     s.hooks.SubagentStop = [{ hooks: [{ type: 'command', command: 'node "$HOME/.claude/subagent-system/scripts/subagent-usage.js" --hook' }] }];
     write(cfg, 'settings.json', s);
     const r = update(kit, cfg);
-    assert.equal(r.settings.legacySessionStartRemoved, 1);
+    assert.ok(r.settings.hooks.removed.includes('이름표 없는 옛 등록 (SessionStart)'), JSON.stringify(r.settings.hooks));
     const after = read(file).hooks;
     assert.deepEqual(after.SessionStart, [{ hooks: [{ type: 'command', command: 'keep' }] }]);
-    assert.equal(JSON.stringify(after.SubagentStop).includes('usage-autolog.js'), true);
-    assert.equal(after.SubagentStop[0].hooks.length, 1);
+    const stop = after.SubagentStop.flatMap((g) => g.hooks.map((h) => h.command));
+    assert.equal(stop.length, 2, '이름표 없는 옛 등록은 이름표 꼴로 바뀌고 두 번 달리지 않는다');
+    assert.ok(stop.every((c) => /# kit:routing\//.test(c)) && stop.some((c) => c.includes('usage-autolog.js')), stop.join('\n'));
   });
 
   const walk = (root, rel = '') => fs.readdirSync(path.join(root, rel)).flatMap((n) => {
@@ -793,9 +918,9 @@ describe('kit-setup.js update', () => {
       assert.equal('retroWriteAllow' in CONFIG(cfg), false, 'set-profile이 retroWriteAllow를 만들었다');
       assert.equal('commitCheck' in CONFIG(cfg), false, 'set-profile이 commitCheck를 만들었다');
       const r = update(kit, cfg);
-      assert.equal(r.config.changes.includes('retroWriteAllow: 없음 -> false'), true, '빠진 권한 스위치는 update가 안전한 쪽(false)으로 채운다');
+      assert.equal(r.config.changes.includes('retroWriteAllow: 없음 -> false'), true, '빠진 권한 스위치는 update가 안전한 쪽(retroWriteAllow는 false, commitCheck는 block)으로 채운다');
       assert.equal(r.config.changes.some((c) => c.startsWith('profile:')), false);
-      const expected = { retroMode: mode, roles: ['백엔드'], profile: to, retroWriteAllow: writeAllow, commitCheck: to === 'personal' ? 'block' : 'off' };
+      const expected = { retroMode: mode, roles: ['백엔드'], profile: to, retroWriteAllow: writeAllow, commitCheck: 'block' };
       if (to === 'company') expected.gitAskDeclined = ['x'];
       assert.deepEqual(CONFIG_KEYS(cfg), expected);
       assert.equal(baks(path.join(cfg, 'subagent-system'), 'config.json.bak-update-').length, 1);
@@ -880,7 +1005,7 @@ describe('kit-setup.js update', () => {
     assert.match(fs.readFileSync(checklist, 'utf8'), /내 줄[\s\S]*키트 줄/);
   });
 
-  it('.kit-base가 없는 옛 설치본의 정의는 description만 달라도 기록 해시와 같으면 교체하되 고치기 전 파일을 백업하고 알린다', () => {
+  it('.kit-base가 없는 옛 설치본의 정의는 description만 달라도 기록 해시와 같으면 교체하되 description은 설치본 것을 지키고 고치기 전 파일을 백업한다', () => {
     const { kit, cfg } = installed();
     fs.rmSync(path.join(cfg, 'subagent-system/.kit-base'), { recursive: true });
     const def = path.join(cfg, 'agents/opus-high.md');
@@ -889,11 +1014,11 @@ describe('kit-setup.js update', () => {
     const keyHash = createHash('sha256').update('---\nname: opus-high\n---\n본문\n').digest('hex');
     write(cfg, 'subagent-system/config.json', { ...CONFIG(cfg), kitFileHashes: { 'agents/opus-high.md': keyHash } });
     kitSet(kit, 'subagent-system/agents/opus-high.md', '---\nname: opus-high\ndescription: 키트 설명\n---\n본문\n');
-    const r = update(kit, cfg);
-    assert.match(fs.readFileSync(def, 'utf8'), /키트 설명/);
+    kitSet(kit, 'subagent-system/agents/opus-high.md', '---\nname: opus-high\ndescription: 키트 설명\n---\n새 본문\n');
+    update(kit, cfg);
+    assert.equal(fs.readFileSync(def, 'utf8'), '---\nname: opus-high\ndescription: 내 일 이름\n---\n새 본문\n');
     const [bak] = baks(path.join(cfg, 'agents'), 'opus-high.md.bak-update-');
     assert.equal(fs.readFileSync(path.join(cfg, 'agents', bak), 'utf8'), text);
-    assert.match(r.notes.join('\n'), /description/);
   });
 
   describe('.kit-base가 없는 옛 설치본의 기준본을 키트 git 기록에서 찾기', { skip: !HAS_GIT && 'git이 없음' }, () => {
@@ -932,7 +1057,7 @@ describe('kit-setup.js update', () => {
       const { kit, cfg } = oldInstall();
       write(cfg, 'subagent-system/VERSION', '2026.10.29\n');
       const r = update(kit, cfg);
-      assert.deepEqual(r.conflictFiles, [GUIDE, CHECKLIST]);
+      assert.deepEqual([...r.conflictFiles].sort(), [CHECKLIST, GUIDE].sort());
       assert.equal(r.files.some((f) => f.baseFrom), false);
     });
 
@@ -1056,7 +1181,7 @@ describe('kit-setup.js update의 물을 것 옮기기와 retroWriteAllow', () =>
     assert.match(path.basename(r.retroPending.backup), /^retro-pending\.md\.bak-update-/);
   });
 
-  it('옮긴 항목은 회고 스크립트의 물을 것 셈에 들어가고 속도 개선과 측정 요청은 물을 것이 아니라 대상 목록에 들어간다', async () => {
+  it('옮긴 항목은 회고 스크립트의 물을 것 셈에 들어가고 속도 개선과 측정 요청은 물을 것이 아니라 대상 목록에 들어간다', { skip: missingFiles('subagent-system/scripts/subagentRetroHelpers.js', 'subagent-system/scripts/speedReviewHelpers.js') }, async () => {
     const { kit, cfg } = withOldPending();
     update(kit, cfg);
     const helpers = await import(path.join(SCRIPTS, 'subagentRetroHelpers.js'));
@@ -1106,7 +1231,7 @@ describe('kit-setup.js update의 물을 것 옮기기와 retroWriteAllow', () =>
     assert.doesNotMatch(JSON.stringify(read(path.join(cfg, 'settings.json')).hooks.PermissionRequest ?? []), /retro-write-allow\.js/);
   });
 
-  it('옛 설치가 set-profile personal 뒤 update로 채운 retroWriteAllow false는 켜지지 않은 채 남고, 켜는 길은 --config-set이며 그때 훅 등록도 함께 맞춰진다', { skip: SKIP_NO_HOOK_DEF }, () => {
+  it('옛 설치가 set-profile personal 뒤 update로 채운 retroWriteAllow false는 켜지지 않은 채 남고, 켜는 길은 --config-set이며 그때 훅 등록도 함께 맞춰진다', () => {
     const { kit, cfg, file } = legacyInstalled({ retroMode: 'auto' });
     const s = read(path.join(cfg, 'settings.json'));
     delete s.hooks.PermissionRequest;
@@ -1274,7 +1399,7 @@ describe('kit-setup.js uninstall', () => {
   const setupInstalled = () => {
     const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal', '--rules', 'recommended', '--skills', 'git-work');
+    install(kit, cfg, '--profile', 'personal', '--options', 'company.recommended');
     write(cfg, 'subagent-system/records/subagent-usage.tsv', 'a\tb\n');
     write(cfg, 'agents/mine.md', '내 정의');
     write(cfg, 'rules/mine.md', '내 규칙');
@@ -1305,7 +1430,7 @@ describe('kit-setup.js uninstall', () => {
     settings.hooks.Stop = [{ hooks: [{ type: 'command', command: 'x' }] }];
     write(cfg, 'settings.json', settings);
     const r = unin(kit, cfg, '--records', 'keep');
-    assert.equal(r.hooksRemoved, 4);
+    assert.equal(r.hooksRemoved, 5);
     assert.deepEqual(read(path.join(cfg, 'settings.json')).hooks, { Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] });
     assert.equal(exists(cfg, 'agents/haiku-low.md'), false);
     assert.equal(exists(cfg, 'agents/mine.md'), true);
@@ -1344,7 +1469,7 @@ describe('kit-setup.js uninstall', () => {
     s.hooks.SubagentStop.push({ hooks: [{ type: 'command', command: 'node /home/me/usage-autolog.js' }] });
     write(cfg, 'settings.json', s);
     const r = unin(kit, cfg, '--records', 'keep');
-    assert.equal(r.hooksRemoved, 4);
+    assert.equal(r.hooksRemoved, 5);
     assert.deepEqual(read(path.join(cfg, 'settings.json')).hooks, { SubagentStop: [{ hooks: [{ type: 'command', command: 'node /home/me/usage-autolog.js' }] }] });
   });
 
@@ -1393,7 +1518,8 @@ describe('kit-setup.js uninstall', () => {
   });
 });
 
-describe('kit-setup.js 개인용 회고 쓰기 허용 훅', () => {
+// 쓰기 허용 훅은 라우팅 묶음의 것이다. 안 깐 설치에서는 건너뛴다.
+describe('kit-setup.js 개인용 회고 쓰기 허용 훅', { skip: missingFiles('subagent-system/hooks/retro-write-allow.js') }, () => {
   const HOOK_PATH = path.join(SCRIPTS, '..', 'hooks', 'retro-write-allow.js');
   const sandbox = ({ allow = true, lock = true, lockAgeMs = 0 } = {}) => {
     const cfg = fs.realpathSync(tmpDir());
@@ -1570,49 +1696,71 @@ describe('kit-setup.js 개인용 회고 쓰기 허용 훅', () => {
   });
 });
 
-describe('kit-setup.js 훅(선택 commit-msg, 늘 설치 brief-check)', () => {
-  const BRIEF_SETTING = 'node "$HOME/.claude/subagent-system/hooks/brief-check.js"';
+describe('kit-setup.js 훅(바닥의 commit-msg 연결과 라우팅의 brief-check)', () => {
   const briefCommand = (cfg) => `node "${cfg.split(path.sep).join('/')}/subagent-system/hooks/brief-check.js"`;
-  const hookKit = (extra = {}) => makeKit({
-    'subagent-system/hooks/brief-check.js': '// brief-check\n',
-    'subagent-system/hooks/git/commit-msg': '#!/usr/bin/env node\n// commit-msg\n',
-    'subagent-system/settings-hook.json': { hooks: { ...HOOKS_BOTH.hooks, PreToolUse: [{ matcher: 'Agent', hooks: [{ type: 'command', command: BRIEF_SETTING, timeout: 10 }] }] } },
-    ...extra,
-  });
   const settingsOf = (cfg) => read(path.join(cfg, 'settings.json'));
-  const briefCommands = (cfg) => (settingsOf(cfg).hooks?.PreToolUse ?? []).flatMap((g) => g.hooks.map((x) => x.command));
+  const briefCommands = (cfg) => (settingsOf(cfg).hooks?.PreToolUse ?? []).flatMap((g) => g.hooks.map((x) => x.command.replace(/^.* (node ".*brief-check\.js").*$/, '$1')));
 
-  it('--hooks 없이 설치하면 brief-check는 파일과 PreToolUse 등록을 늘 놓고 commit-msg는 놓지 않으며 고를 수 있다고 알린다', () => {
-    const cfg = tmpDir();
-    const r = install(hookKit(), cfg, '--profile', 'company');
-    assert.equal(cfgRead(cfg, 'subagent-system/hooks/brief-check.js'), '// brief-check\n');
-    assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
-    assert.equal(exists(cfg, 'subagent-system/hooks/git/commit-msg'), false);
-    assert.deepEqual(r.unchosenOptional.hooks, ['commit-msg']);
-    assert.equal(r.commitMsgHook, undefined);
+  it('라우팅을 고르면 brief-check는 파일과 PreToolUse 등록을 놓고, 바닥만 고르면 놓지 않는다', () => {
+    const withRouting = tmpDir();
+    install(makeKit(), withRouting, '--profile', 'company', '--bundles', 'routing', '--options', 'none');
+    assert.equal(cfgRead(withRouting, 'subagent-system/hooks/brief-check.js'), '// brief-check\n');
+    assert.deepEqual(briefCommands(withRouting), [briefCommand(withRouting)]);
+    assert.match(settingsOf(withRouting).hooks.PreToolUse[0].hooks[0].command, /# kit:routing\/brief-check$/);
+    const baseOnly = tmpDir();
+    install(makeKit(), baseOnly, '--profile', 'company', '--bundles', 'none', '--options', 'none');
+    assert.equal(exists(baseOnly, 'subagent-system/hooks/brief-check.js'), false);
+    assert.equal(settingsOf(baseOnly).hooks.PreToolUse, undefined);
   });
 
-  it('--hooks에 옛 이름 brief-check를 주면 받아서 무시하고 늘 설치됨을 알린다', () => {
+  it('commit-msg 파일은 바닥이 늘 놓고 실행 권한을 주며 고르는 훅이 아니다', { skip: process.platform === 'win32' }, () => {
     const cfg = tmpDir();
-    const r = install(hookKit(), cfg, '--profile', 'personal', '--hooks', 'brief-check');
-    assert.ok(r.notes.some((n) => n.includes('늘 설치')));
-    assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
-    assert.equal(exists(cfg, 'subagent-system/hooks/git/commit-msg'), false);
-  });
-
-  it('--hooks로 commit-msg를 고르면 파일을 놓고 실행 권한을 주며 brief-check도 함께 걸린다', { skip: process.platform === 'win32' }, () => {
-    const cfg = tmpDir();
-    install(hookKit(), cfg, '--profile', 'personal', '--hooks', 'commit-msg');
-    assert.equal(cfgRead(cfg, 'subagent-system/hooks/brief-check.js'), '// brief-check\n');
+    const r = install(makeKit(), cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
     assert.equal(cfgRead(cfg, 'subagent-system/.kit-base/subagent-system/hooks/git/commit-msg'), cfgRead(cfg, 'subagent-system/hooks/git/commit-msg'));
     assert.ok(fs.statSync(path.join(cfg, 'subagent-system/hooks/git/commit-msg')).mode & 0o111);
-    assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
-    assert.equal(settingsOf(cfg).hooks.PreToolUse[0].matcher, 'Agent');
+    assert.equal(r.unchosenOptional, undefined);
+  });
+
+  const kitWithPiece = () => {
+    const kit = makeKit();
+    kitSet(kit, 'subagent-system/hooks/git/commit-msg.d/20-demo.cjs', '// piece\n');
+    kitPartFiles(kit, 'base', { add: ['subagent-system/hooks/git/commit-msg.d/20-demo.cjs'] });
+    return kit;
+  };
+
+  it('검사 조각이 하나도 없는 설치에는 훅을 걸라는 안내를 하지 않는다', () => {
+    const cfg = tmpDir();
+    const r = install(makeKit(), cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
+    assert.equal(r.commitMsgHook, undefined);
+    assert.ok(!r.notes.some((n) => n.includes('commit-msg 훅')));
+  });
+
+  it('공개판 갱신에서 있던 커밋 검사가 꺼질 때만 한 번 알린다', () => {
+    const kit = makeKit();
+    kitSet(kit, 'subagent-system/hooks/git/commit-msg', '#!/usr/bin/env node\n// 옛 한 덩어리 검사\n');
+    const cfg = tmpDir();
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
+    kitSet(kit, 'subagent-system/hooks/git/commit-msg', '#!/bin/sh\nnode git-dispatch.cjs\n');
+    kitSet(kit, 'bundles/omitted.json', JSON.stringify({ omitted: ['ghost'], keep: [] }));
+    const r1 = update(kit, cfg);
+    assert.ok(r1.notes.some((n) => n.includes('커밋 메시지 검사가 꺼졌습니다')), JSON.stringify(r1.notes));
+    const r2 = update(kit, cfg);
+    assert.ok(!r2.notes.some((n) => n.includes('커밋 메시지 검사')), '다음 갱신에는 되풀이하지 않는다');
+  });
+
+  it('공개판을 새로 깔고 갱신하면 커밋 검사 알림이 없다', () => {
+    const kit = makeKit();
+    kitSet(kit, 'subagent-system/hooks/git/commit-msg', '#!/bin/sh\nnode git-dispatch.cjs\n');
+    kitSet(kit, 'bundles/omitted.json', JSON.stringify({ omitted: ['ghost'], keep: [] }));
+    const cfg = tmpDir();
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
+    const r = update(kit, cfg);
+    assert.ok(!r.notes.some((n) => n.includes('커밋 메시지 검사')));
   });
 
   it('commitCheck가 block이면 저장소마다 core.hooksPath를 거는 명령을 알리기만 하고 전역 설정은 걸지 않는다', () => {
     const cfg = tmpDir();
-    const r = install(hookKit(), cfg, '--profile', 'personal', '--hooks', 'commit-msg');
+    const r = install(kitWithPiece(), cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
     assert.equal(r.commitMsgHook.hooksPath, path.join(cfg, 'subagent-system/hooks/git').split(path.sep).join('/'));
     assert.match(r.commitMsgHook.command, /^git -C <저장소 폴더> config --local core\.hooksPath "/);
     assert.doesNotMatch(r.commitMsgHook.command, /--global/);
@@ -1621,42 +1769,31 @@ describe('kit-setup.js 훅(선택 commit-msg, 늘 설치 brief-check)', () => {
 
   it('commitCheck가 block이 아니면 commit-msg를 놓아도 거는 명령을 알리지 않는다', () => {
     const cfg = tmpDir();
-    const r = install(hookKit(), cfg, '--profile', 'company', '--hooks', 'commit-msg');
+    const r = install(kitWithPiece(), cfg, '--profile', 'company', '--bundles', 'none', '--options', 'none');
     assert.equal(r.commitMsgHook, undefined);
     assert.ok(r.notes.some((n) => n.includes('commitCheck가 "off"')));
   });
 
-  it('키트에 없는 훅 이름을 고르면 아무것도 쓰지 않고 멈춘다', () => {
+  it('--dry-run은 파일도 훅 등록도 놓지 않는다', () => {
     const cfg = tmpDir();
-    const r = run(['install', '--kit', hookKit(), '--profile', 'personal', '--hooks', 'no-such-hook'], { env: { CLAUDE_CONFIG_DIR: cfg } });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /키트에 없는 훅: no-such-hook/);
+    install(makeKit(), cfg, '--profile', 'personal', '--dry-run');
     assert.deepEqual(names(cfg), []);
   });
 
-  it('--dry-run은 늘 설치되는 훅도 고른 훅도 놓거나 걸지 않는다', () => {
-    const cfg = tmpDir();
-    install(hookKit(), cfg, '--profile', 'personal', '--hooks', 'commit-msg', '--dry-run');
-    assert.deepEqual(names(cfg), []);
-  });
-
-  it('update는 brief-check를 갱신하고 고르지 않은 commit-msg는 놓지 않으며 --hooks는 받지 않는다', () => {
-    const kit = hookKit();
+  it('update는 brief-check를 갱신하고 훅 등록을 두 번 달지 않으며 옛 --hooks는 받지 않는다', () => {
+    const kit = makeKit();
     const cfg = tmpDir();
     install(kit, cfg, '--profile', 'personal');
     kitSet(kit, 'subagent-system/hooks/brief-check.js', '// brief-check v2\n');
     kitSet(kit, 'subagent-system/VERSION', '2026.10.31\n');
-    const r = update(kit, cfg);
+    update(kit, cfg);
     assert.equal(cfgRead(cfg, 'subagent-system/hooks/brief-check.js'), '// brief-check v2\n');
-    assert.equal(exists(cfg, 'subagent-system/hooks/git/commit-msg'), false);
-    assert.deepEqual(r.unchosenOptional.hooks, ['commit-msg']);
-    assert.deepEqual(r.newOptional.hooks, []);
     assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
     assert.equal(run(['update', '--kit', kit, '--hooks', 'commit-msg'], { env: { CLAUDE_CONFIG_DIR: cfg } }).status, 1);
   });
 
-  it('brief-check가 없던 옛 설치본을 update하면 파일을 놓고 PreToolUse를 건다', () => {
-    const kit = hookKit();
+  it('brief-check 등록이 빠진 설치를 update하면 파일을 놓고 PreToolUse를 다시 건다', () => {
+    const kit = makeKit();
     const cfg = tmpDir();
     install(kit, cfg, '--profile', 'personal');
     fs.rmSync(path.join(cfg, 'subagent-system/hooks/brief-check.js'));
@@ -1670,36 +1807,35 @@ describe('kit-setup.js 훅(선택 commit-msg, 늘 설치 brief-check)', () => {
     assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
   });
 
-  it('add --hooks는 commit-msg 파일을 놓고, 옛 이름 brief-check는 무시하며 알린다', () => {
-    const kit = hookKit();
+  it('add --bundles routing은 brief-check 파일을 놓고 PreToolUse를 걸며 다시 더해도 한 번만 건다', () => {
+    const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal');
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'none', '--options', 'none');
     const env = { CLAUDE_CONFIG_DIR: cfg };
-    const first = jsonOut(run(['add', '--kit', kit, '--hooks', 'brief-check,commit-msg'], { env }));
-    assert.deepEqual(first.added, ['subagent-system/hooks/git/commit-msg']);
-    assert.ok(first.commitMsgHook.command.includes('core.hooksPath'));
-    assert.ok(first.notes.some((n) => n.includes('늘 설치')));
-    const second = jsonOut(run(['add', '--kit', kit, '--hooks', 'brief-check'], { env }));
+    const first = jsonOut(run(['add', '--kit', kit, '--bundles', 'routing'], { env }));
+    assert.ok(first.added.includes('subagent-system/hooks/brief-check.js'));
+    assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
+    const second = jsonOut(run(['add', '--kit', kit, '--bundles', 'routing'], { env }));
     assert.deepEqual(second.added, []);
     assert.deepEqual(briefCommands(cfg), [briefCommand(cfg)]);
   });
 
   it('uninstall은 손대지 않은 훅 파일과 키트의 PreToolUse 훅만 지우고 사용자의 같은 이벤트 훅은 남긴다', () => {
-    const kit = hookKit();
+    const kit = makeKit();
     const cfg = tmpDir();
-    install(kit, cfg, '--profile', 'personal', '--hooks', 'commit-msg');
+    install(kit, cfg, '--profile', 'personal');
     const s = settingsOf(cfg);
     s.hooks.PreToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: 'node /mine/guard.js' }] });
     write(cfg, 'settings.json', s);
     jsonOut(run(['uninstall', '--kit', kit, '--records', 'delete'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
     assert.equal(exists(cfg, 'subagent-system/hooks'), false);
-    assert.deepEqual(briefCommands(cfg), ['node /mine/guard.js']);
+    assert.deepEqual(settingsOf(cfg).hooks.PreToolUse.flatMap((g) => g.hooks.map((x) => x.command)), ['node /mine/guard.js']);
   });
 });
 
 describe('키트 원본 규칙 파일', () => {
   const RULES = path.resolve(SCRIPTS, '..', 'rules');
-  const skip = fs.existsSync(RULES) ? false : '설치본 배치라 키트 원본 rules 폴더가 없음';
+  const skip = (fs.existsSync(RULES) ? false : '설치본 배치라 키트 원본 rules 폴더가 없음') || missingBundles('company', 'work-paths');
   const pathsOf = (name) => fs.readFileSync(path.join(RULES, name), 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(/^paths:/m);
 
   it('경로 규칙(kit-code, kit-db, kit-tests, kit-docs)에는 paths가 있고 늘 읽히는 kit-core와 kit-rec-*에는 없다', { skip }, () => {

@@ -1,0 +1,10 @@
+{
+  "bundle": "demo-local",
+  "part": "check",
+  "files": ["hooks/demo-check.js"],
+  "hooks": [
+    { "name": "demo-check", "event": "UserPromptSubmit", "command": "node \"$HOME/.claude/hooks/demo-check.js\"", "timeout": 10 },
+    { "name": "demo-check", "event": "Stop", "command": "node \"$HOME/.claude/hooks/demo-check.js\"", "timeout": 10 },
+    { "name": "demo-check", "event": "PreToolUse", "matcher": "Edit|Write|Bash", "command": "node \"$HOME/.claude/hooks/demo-check.js\"", "timeout": 10 }
+  ]
+}

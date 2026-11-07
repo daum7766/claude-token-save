@@ -1,0 +1,44 @@
+{
+  "name": "routing",
+  "title": "라우팅(회고 포함)",
+  "summary": "일마다 맞는 정의에 맡기고, 사용과 비용 기록으로 회고가 표를 고친다",
+  "order": 20,
+  "selectable": true,
+  "alwaysRules": [
+    "rules/kit-routing.md"
+  ],
+  "options": [],
+  "configKeys": [
+    "retroMode",
+    "retroWriteAllow",
+    "roles",
+    "removedKinds",
+    "removedDefs",
+    "checklistSyncedVersion",
+    "agentMeterKeepaliveAsked",
+    "agentMeterDeclined",
+    "statusLineCleanup",
+    "docReviewHashes",
+    "repeatsRunDate",
+    "commandName",
+    "turnLockHook"
+  ],
+  "uses": [
+    {
+      "bundle": "feedback",
+      "link": 5,
+      "without": "고침 기록이 없어 회고의 「그 자리에서 고칠 것」 칸이 빠지고 --fix와 --fixes는 「피드백 없음」만 찍는다."
+    },
+    {
+      "bundle": "company",
+      "link": 7,
+      "without": "지시문 검사의 목표 줄, 결정 문서 줄, 지킬 결정 줄 검사, 묻기 종류의 올릴 것 칸, 질문 수 지표가 쉰다"
+    }
+  ],
+  "records": [
+    "records/subagent-usage.tsv",
+    "records/subagent-cost.tsv",
+    "records/corrections.tsv",
+    "records/retro.lock"
+  ]
+}
