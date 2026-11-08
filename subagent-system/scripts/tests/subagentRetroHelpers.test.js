@@ -1952,6 +1952,16 @@ describe('judgeFixes 판정', { skip: NO_FIXLOG }, () => {
     assert.deepEqual(classes(two), ['재발 태그']);
   });
 
+  it('뿌리를 단 고침이 옛 줄보다 늦으면 옛 이름표 묶음은 세지 않고 뿌리 묶음으로만 판정한다', () => {
+    const corrections = [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z')];
+    const old = [fix()];
+    assert.deepEqual(classes(run({ fixes: old, corrections })), ['재발 태그']);
+    const closed = [...old, fix({ at: '2026-10-23T00:00:00.000Z', signal: '재발', how: '유지', root: '장치 없음: 갈래' })];
+    assert.deepEqual(classes(run({ fixes: closed, corrections })), []);
+    const later = [fix({ at: '2026-10-19T00:00:00.000Z', root: '장치 없음: 갈래' }), ...old];
+    assert.deepEqual(classes(run({ fixes: later, corrections })), ['재발 태그(뿌리 장치 없음: 갈래)', '재발 태그']);
+  });
+
   it('물음, 유지, 되돌림으로 닫은 뒤에는 그 기록 뒤의 줄로 다시 판정한다', () => {
     for (const how of ['물음', '유지', '되돌림']) {
       const usage = [use('a1 모자람(태그): x', { line: 6 }), use('b2 모자람(태그): y', { line: 7 }), use('c3 모자람(태그): x', { line: 12 }), use('d4 모자람(태그): y', { line: 13 })];

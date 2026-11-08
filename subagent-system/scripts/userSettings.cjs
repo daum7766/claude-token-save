@@ -29,7 +29,7 @@ function readText(file) {
   }
 }
 
-function readConfig(configDir) {
+function readConfig(configDir = defaultConfigDir()) {
   const text = readText(path.join(configDir, 'subagent-system', 'config.json'));
   if (text === null) return {};
   try {
@@ -192,4 +192,4 @@ function ambiguityLine(config) {
   return `애매할 때: ${askFirst ? '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기' : '작으면 하고 알림'} (profile이 정함)`;
 }
 
-module.exports = { SETTINGS_FILE, DEFAULT_RAISE_KINDS, readUserSettings, callName, decisionWords, decidedByPattern, josa, raiseKinds, ambiguityLine };
+module.exports = { SETTINGS_FILE, DEFAULT_RAISE_KINDS, readConfig, readUserSettings, callName, decisionWords, decidedByPattern, josa, raiseKinds, ambiguityLine };

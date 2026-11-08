@@ -161,14 +161,14 @@ node "$HOME/.claude/subagent-system/scripts/claudeMdTidy.js" --model <지금 세
 
 키트 원본 폴더가 있는 설치(`config.json`의 `kitSourcePath`)에는 업데이트 말고 두 명령이 더 있다. 둘 다 원본의 커밋된 HEAD를 읽는다.
 - `<kit-setup> diff`는 설치본, 기준본, 원본을 파일마다 대 같음, 키트가 앞섬, 설치본만 고침(설치 값 자리 안, 밖), 둘 다 고침, 설치본에만 있음으로 보인다. 파일마다 어느 묶음의 어느 조각인지 함께 나오고, 로컬 조각은 개수만 보이며 비교하지 않는다. 훅 등록 차이와 설정 문서의 사용 방식 줄이 config와 다른 곳도 알린다. 아무것도 쓰지 않고 `--json`이 있다. 「설치본만 고침(밖)」은 원본으로 올릴 후보이고, 줄에 붙은 개인 표지는 `config.json`의 `personalMarkers`에 걸린 낱말이다.
-- `<kit-setup> sync`는 키트가 놓는 파일만 원본 HEAD로 덮고 `.kit-base`를 새로 쓴다. 설치 값 자리(체크리스트의 「이 설치에서 더한 줄」, 정의 description)와 `config.json`, 라우팅 표는 건드리지 않고, `VERSION` 없이 돈다. 깐 상태 기록의 키트 조각 항목과 settings 훅 등록은 원본 정의에 맞춘다. 설치본이 git 저장소이고 그 파일이 깨끗하면 백업하지 않는다. `--dry-run`이 있다. 일반 개선을 원본에 커밋한 뒤 이것으로 설치본을 맞춘다(3방향 `update`로 맞추면 개인 줄이 남거나 충돌한다).
+- `<kit-setup> sync`는 키트가 놓는 파일만 원본 HEAD로 덮고 `.kit-base`를 새로 쓴다. 설치 값 자리(체크리스트의 「이 설치에서 더한 줄」, 정의 description)와 `config.json`, 라우팅 표는 건드리지 않고, `VERSION` 없이 돈다. 깐 상태 기록의 키트 조각 항목과 settings 훅 등록은 원본 정의에 맞춘다. 백업 규칙은 update와 같다(git이 지키는 깨끗한 파일은 백업하지 않음). `--dry-run`이 있다. 일반 개선을 원본에 커밋한 뒤 이것으로 설치본을 맞춘다(3방향 `update`로 맞추면 개인 줄이 남거나 충돌한다).
 이 설치에서 고정 파일을 원본과 다르게 커밋하면 pre-commit이 막는다. 한 번 건너뛰려면 `KIT_DRIFT_SKIP=1`을 붙여 커밋한다.
 
 1. 전제 확인을 한다. 다른 세션이 서브에이전트를 돌리고 있으면 끝날 때까지 기다리자고 한다. 기록 파일을 여러 세션이 동시에 쓰기 때문이다.
 2. `<kit-setup> update --dry-run`을 돌려 보인다. `fromVersion`에서 `toVersion` 사이 `CHANGES.md` 항목을 함께 보인다.
    파일 수(`counts`), 충돌 파일(`conflictFiles`), 사용자가 고쳐 키트 것으로 덮일 스크립트와 훅(`files`의 `overwritten-modified`), 키트에 새로 생긴 묶음과 고를 항목(`newBundles`, `newOptions`), 지워질 파일(`orphansRemoved`), 공개판처럼 묶음 일부만 든 키트라 지우지 않고 남길 파일(`orphansLeft`), 바뀔 훅 등록(`settings.hooks`)을 짚는다. 남길 파일은 파일 이름 목록을 사용자에게 그대로 보이고, 쓰지 않으면 설정 폴더에서 지우면 된다고 알린다(더는 갱신되지 않는 옛 판이다). 내용은 같고 git 훅의 실행 권한만 빠졌던 파일은 `files`에 `execRestored`로 나오며 권한만 되살린 것이다. 설치본이 키트보다 새로우면 거절하고 `--allow-older`로만 덮는다.
    - `needsProfile`이 `true`이고 종료 코드가 2이면 `config.json`에 `profile`이 없는 업데이트 전 설치본이라 `update`가 파일을 하나도 바꾸지 않고 멈춘 것이다. 짐작해 채우지 않는 까닭은 「개인용과 회사용」에 있다. Q1의 표를 보이고 사용자에게 개인용인지 회사용인지 고르게 한 뒤 `<kit-setup> set-profile personal|company`를 돌리고 `update --dry-run`을 다시 돌린다. `set-profile`이 바꾸는 것은 `profile`, 이전 profile의 기본값 그대로인 `retroMode`, 회사용으로 갈 때의 `retroWriteAllow`(켜져 있으면 끄고 훅 등록도 뺌), 설정 문서의 사용 방식 줄뿐이다. 그 밖의 권한과 보호 스위치는 값이 새 profile의 기본값과 달라도 바꾸지 않고 `notes`로 알린다.
-3. 사용자가 진행하라고 하면 `<kit-setup> update`를 돌린다. 고친 파일 옆에 `.bak-update-…` 백업이 남는다. `config.json`의 사용자 값과 고르지 않은 묶음은 건드리지 않고, 묶음의 사용자 파일을 다루는 법은 그 묶음 `install.md`의 `## 업데이트`에 있다. `permissions.ask`는 줄이지 않고, `--git-ask`를 줄 때만 없는 항목을 더한다.
+3. 사용자가 진행하라고 하면 `<kit-setup> update`를 돌린다. 고친 파일 옆에 `.bak-update-…` 백업이 남는다(그 파일이 git 저장소의 추적 파일이고 변경이 없으면 git이 되돌릴 길이라 만들지 않고, 같은 파일의 앞 백업은 휴지통으로 옮겨 가장 새것 하나만 남는다). 사용자 파일(`user-file`)은 건드리지 않았다고 `notes`로 알린다. `config.json`의 사용자 값과 고르지 않은 묶음은 건드리지 않고, 묶음의 사용자 파일을 다루는 법은 그 묶음 `install.md`의 `## 업데이트`에 있다. `permissions.ask`는 줄이지 않고, `--git-ask`를 줄 때만 없는 항목을 더한다.
 4. **충돌 파일**은 `<<<<<<< 설치본`, `=======`, `>>>>>>> 새 키트` 표시가 들어 있고 고치기 전 파일이 옆에 백업돼 있다. 표시가 남은 파일은 다음 `update`가 건드리지 않는다.
    - 개인용: Claude가 충돌마다 양쪽 문장을 읽고 사용자 설정(목적)과 그 파일의 목표에 맞는 쪽으로 푼다. 둘 다 살릴 수 있으면 합친다. 푼 뒤 어느 쪽을 골랐고 왜인지 한 줄씩 알린다.
    - 회사용: 충돌마다 양쪽 원문을 같은 메시지에 보이고 사용자가 고르게 한다. 정책 문서에 걸리는 충돌은 개인용이어도 묻는다.
@@ -183,7 +183,7 @@ node "$HOME/.claude/subagent-system/scripts/claudeMdTidy.js" --model <지금 세
 
 ## 묶음 더하기와 빼기
 
-- 더하기: `<kit-setup> add --bundles 이름,… [--options 묶음.항목,…]`. 고를 항목을 안 주면 그 묶음의 기본 항목이 들어간다. 먼저 `--dry-run`으로 놓일 파일과 훅을 보이고, 그 묶음 `install.md`의 `## 질문`과 `## 설치 뒤`를 한다. 이미 있는 파일은 건너뛰고 `.kit-base`에 기준본을 둔다. 전에 뺄 때 보관한 설치 값(`kept-values.json`)은 되살아난다. git 확인 창은 `--git-ask`를 줄 때만 더한다.
+- 더하기: `<kit-setup> add --bundles 이름,… [--options 묶음.항목,…]`. 고를 항목을 안 주면 그 묶음의 기본 항목이 들어간다. 먼저 `--dry-run`으로 놓일 파일과 훅을 보이고, 그 묶음 `install.md`의 `## 질문`과 `## 설치 뒤`를 한다. 이미 있는 파일은 건너뛰고 결과의 `skipped`로 알린다. 건너뛴 파일 가운데 키트가 놓은 적 없는 것(기준본이 없는 같은 이름 파일)은 사용자 파일로 깐 상태 기록의 `userFiles`에 남고(결과의 `userFiles`), 이후 `update`와 `sync`는 그 파일을 병합하거나 덮지 않고 `user-file`로 알리기만 하며 `uninstall`도 두고 알린다. 그래서 `--dry-run`의 `skipped`에 사용자가 만든 같은 이름 파일이 있으면 더하기 전에 키트 판을 쓸지 묻고, 키트 판이면 그 파일을 지운 뒤 더한다(지우면 기록에서도 빠진다). 지우지 않고 두면 키트 판은 놓이지 않는다. 전에 뺄 때 보관한 설치 값(`kept-values.json`)은 되살아난다. git 확인 창은 `--git-ask`를 줄 때만 더한다.
 - 빼기: `<kit-setup> remove --bundles 이름,… [--options 묶음.항목,…]`. 키트가 놓은 그대로인 파일만 지우고 고친 파일은 옆에 `.bak-remove-…`로 둔다. 설치 값(정의 description, 체크리스트 「이 설치에서 더한 줄」, `rates.json`)은 `subagent-system/kept-values.json`에 보관하고 다시 넣을 때 되살린다. 사용자 훅이 키트 파일을 부르면 그 파일은 지우지 않고 `notes`로 알린다. 결과의 `configKeysKept`(그 묶음의 설정 키는 남김)와 `recordsKept`(기록 파일은 남김)를 알린다. 묶음 `install.md`의 `## 빼기`를 읽고 그 묶음이 따로 정한 확인을 한다. 바닥은 뺄 수 없다.
 - 깐 묶음과 고른 항목은 `<kit-setup> bundles`로 본다. 훅 하나만 잠시 끄거나 켜려면 `hook-off <묶음>/<이름>`, `hook-on <묶음>/<이름>`이다.
 - 사용자 설정 문서의 값은 `<kit-setup> settings`로 보고(어느 곳에서 읽었는지 함께 나온다), 고치려면 `settings-init`을 다시 돌린다.

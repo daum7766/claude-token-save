@@ -5,8 +5,8 @@
 
 1. 서브에이전트를 띄웠거나 도구 호출이 열 번 넘은 작업의 최종 보고를 마치면 `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --due --project "<세션을 시작한 폴더의 절대 경로>"`를 돌립니다.
    - 첫 줄은 `auto`, `ask`, `wait <남은 줄 수>` 가운데 하나입니다. 마지막 줄 끝에 `회고 진행 중`, `물을 것 N건`, `그 자리에서 고칠 것 N건`이 붙을 수 있습니다. 출력의 뜻은 `--help`에 있습니다.
-2. 마지막 줄의 「그 자리에서 고칠 것」은 `kit-feedback.md`가 가리키는 대로 회고 판정보다 먼저 처리합니다.
-3. 첫 줄이 `auto`면 `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --claim`을 돌립니다. `wait`이면 회고하지 않습니다. `ask`이면 RETRO.md의 「회사용」대로 회고할지 묻고, 하자고 하면 `auto`와 같게 `--claim`부터 아래를 따릅니다(메인이 회고 단계를 직접 하지 않습니다. 사용자가 `/retro now`로 시킨 때도 같습니다).
+2. 마지막 줄의 「그 자리에서 고칠 것」은 `kit-feedback.md`가 가리키는 대로 회고 판정보다 먼저 처리합니다. 처리 전에 `--claim`으로 잠금을 잡고, `busy`면 다른 세션이 처리하거나 회고하는 중이라 건너뜁니다. 처리한 뒤 첫 줄이 `auto`면 그 잠금을 쥔 채 3을 `--claim` 없이 잇고, 아니면 `--release`로 풉니다. 까닭: 잠금 없이 처리하면 두 세션이 같은 처리할 것을 함께 고쳤다(2026-11-08, 다른 세션이 이미 고쳐 커밋한 13건에 실무자를 띄웠다).
+3. 첫 줄이 `auto`면 `node "$HOME/.claude/subagent-system/scripts/subagent-retro.js" --claim`을 돌립니다(2에서 잡았으면 다시 돌리지 않습니다). `wait`이면 회고하지 않습니다. `ask`이면 RETRO.md의 「회사용」대로 회고할지 묻고, 하자고 하면 `auto`와 같게 `--claim`부터 아래를 따릅니다(메인이 회고 단계를 직접 하지 않습니다. 사용자가 `/retro now`로 시킨 때도 같습니다).
    - `busy`가 나오면 다른 세션이 회고 중이라 아무것도 띄우지 않고 사용자에게도 알리지 않습니다(그동안 `--due`는 `wait`이고 `회고 진행 중`이 찍힙니다). 3시간 넘은 잠금은 버려진 것으로 보고 다시 잡습니다.
    - `ok`가 나오면 먼저 `node "$HOME/.claude/subagent-system/scripts/speed-review.js" --pick --out <scratchpad>/speed.md`를 돌립니다. 회고 서브에이전트의 `--mark`와 순서가 엉키지 않게 띄우기 전에 합니다.
    - `--pick`에 대상이 있으면 병목 분석 리뷰어를 백그라운드로 띄웁니다(정의와 지시문은 RETRO.md의 「속도와 비용 보기」 3번).

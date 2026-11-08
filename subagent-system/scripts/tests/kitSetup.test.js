@@ -34,9 +34,13 @@ const withChoices = (args) => {
   if (!out.includes('--options')) out.push('--options', 'none');
   return out;
 };
+// 앞 백업을 옮기는 휴지통은 임시 폴더로 바꿔 끼워 시험이 실제 휴지통을 건드리지 않게 한다.
+// 휴지통 도구는 안전장치 묶음에만 있어, 그 묶음을 안 깐 설치본에서는 앞 백업을 지우지 않고 남기는 것이 맞는 동작이다.
+const HAS_TRASH = fs.existsSync(path.join(SCRIPTS, 'trash.js'));
+const TEST_TRASH = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-setup-trash-'));
 const run = (args, { stdin, env } = {}) => {
   const clean = cleanEnv();
-  return spawnSync(process.execPath, [KIT_SETUP, ...withChoices(args)], { input: stdin, env: { ...clean, ...env }, encoding: 'utf8' });
+  return spawnSync(process.execPath, [KIT_SETUP, ...withChoices(args)], { input: stdin, env: { KIT_SETUP_TRASH_HOME: TEST_TRASH, ...clean, ...env }, encoding: 'utf8' });
 };
 const names = (dir) => fs.readdirSync(dir).sort();
 
@@ -234,15 +238,28 @@ describe('kit-setup.js 파일과 폴더 옮기기', () => {
     assert.match(run(['--move-agent-meter', meter]).stdout, /옮길 폴더 없음/);
   });
 
-  it('--backup-file은 <파일>.bak-<이름>-<날짜-시각>으로 복사하고 경로를 찍으며 같은 이름이 있으면 -1을 붙인다', () => {
+  it('--backup-file은 <파일>.bak-<이름>-<날짜-시각>으로 복사하고 경로를 찍으며 없는 파일이면 종료 코드 1이다', () => {
     const dir = tmpDir();
     const file = write(dir, 'settings.json', '{"a":1}');
     const first = run(['--backup-file', file, 'remove']).stdout.trim();
-    const second = run(['--backup-file', file, 'remove']).stdout.trim();
     assert.match(path.basename(first), /^settings\.json\.bak-remove-\d{8}-\d{6}$/);
-    assert.notEqual(first, second);
     assert.equal(fs.readFileSync(first, 'utf8'), '{"a":1}');
     assert.equal(run(['--backup-file', path.join(dir, 'none'), 'remove']).status, 1);
+  });
+
+  it('--backup-file을 거듭 부르면 같은 파일의 같은 이름 백업은 가장 새것 하나만 남고 앞 것은 휴지통으로 간다', { skip: !HAS_TRASH }, () => {
+    const dir = tmpDir();
+    const trash = tmpDir();
+    const file = write(dir, 'settings.json', '{"a":1}');
+    const old = path.join(dir, 'settings.json.bak-remove-20200101-000000');
+    fs.writeFileSync(old, 'old');
+    const other = path.join(dir, 'settings.json.bak-hook-off-20200101-000000');
+    fs.writeFileSync(other, 'other');
+    const made = run(['--backup-file', file, 'remove'], { env: { KIT_SETUP_TRASH_HOME: trash } }).stdout.trim();
+    assert.equal(fs.readFileSync(made, 'utf8'), '{"a":1}');
+    assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(other), true);
+    assert.equal(fs.readdirSync(path.join(trash, 'files')).includes('settings.json.bak-remove-20200101-000000'), true);
   });
 
   it('--check-json은 읽히면 조용히 끝나고 하나라도 깨졌으면 그 파일 이름과 함께 종료 코드 1이다', () => {
@@ -498,6 +515,20 @@ describe('kit-setup.js install', () => {
     assert.match(badOption.stderr, /company\.nope/);
   });
 
+  it('고르지 않은 고를 항목의 파일을 부르는 훅은 걸지 않고, 그 항목을 더하면 건다', () => {
+    const kit = makeKit({ 'subagent-system/hooks/opt-hook.js': '// opt-hook\n' });
+    kitAddOption(kit, 'work-paths', 'hooked', 'subagent-system/hooks/opt-hook.js');
+    const part = read(path.join(kit, 'bundles', 'work-paths', 'core.part.json'));
+    part.hooks = [{ name: 'opt-hook', event: 'PreToolUse', matcher: 'Bash', command: 'node "$HOME/.claude/subagent-system/hooks/opt-hook.js"', timeout: 10 }];
+    write(kit, 'bundles/work-paths/core.part.json', part);
+    const cfg = tmpDir();
+    const hooks = () => JSON.stringify(read(path.join(cfg, 'settings.json')).hooks ?? {});
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'work-paths', '--options', 'work-paths.db');
+    assert.doesNotMatch(hooks(), /opt-hook/);
+    jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths', '--options', 'work-paths.hooked'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
+    assert.match(hooks(), /# kit:work-paths\/opt-hook/);
+  });
+
   it('끊긴 설치를 다른 선택으로 다시 돌리면 키트가 놓은 그대로인 선택 항목은 지우고 고친 것은 두고 알린다', () => {
     const kit = makeKit();
     const cfg = tmpDir();
@@ -541,6 +572,70 @@ describe('kit-setup.js install', () => {
     assert.deepEqual([...r.skipped].sort(), ['rules/kit-core.md', 'rules/kit-db.md']);
     assert.deepEqual(r.added, ['rules/kit-recommended.md']);
     assert.equal(cfgRead(cfg, 'rules/kit-db.md'), '- 내가 고친 규칙\n');
+  });
+
+  it('git이 지키는 깨끗한 파일은 백업을 만들지 않고 고친 파일은 백업을 만들며 앞 백업을 하나만 남긴다', { skip: !HAS_GIT || !HAS_TRASH }, () => {
+    const dir = tmpDir();
+    const file = write(dir, 'settings.json', '{"a":1}');
+    git(dir, 'init', '-q');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'init');
+    const clean = run(['--backup-file', file, 'remove']);
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.match(clean.stdout, /백업 없음/);
+    assert.deepEqual(names(dir).filter((n) => n.includes('.bak-')), []);
+    fs.writeFileSync(file, '{"a":2}');
+    run(['--backup-file', file, 'remove']);
+    fs.writeFileSync(file, '{"a":3}');
+    const last = run(['--backup-file', file, 'remove']).stdout.trim();
+    assert.deepEqual(names(dir).filter((n) => n.includes('.bak-')), [path.basename(last)]);
+    assert.equal(fs.readFileSync(last, 'utf8'), '{"a":3}');
+  });
+
+  it('update가 고친 설정이 git 추적 중이 아니면 .bak-update를 갱신마다 쌓지 않고 하나만 남긴다', () => {
+    const kit = makeKit();
+    const cfg = tmpDir();
+    install(kit, cfg, '--profile', 'personal');
+    for (const v of ['2', '3']) {
+      write(kit, 'subagent-system/rules/kit-core.md', `- 핵심 규칙 v${v}\n`);
+      fs.appendFileSync(path.join(cfg, 'rules/kit-core.md'), `- 내 줄 ${v}\n`);
+      update(kit, cfg, '--allow-older');
+      assert.equal(baks(path.join(cfg, 'rules'), 'kit-core.md.bak-update-').length, 1);
+    }
+  });
+
+  it('add가 건너뛴 사용자 파일은 다음 update가 병합하지 않고 알리기만 하며 사용자가 지우면 키트 판이 놓인다', () => {
+    const kit = makeKit();
+    const cfg = tmpDir();
+    const env = { CLAUDE_CONFIG_DIR: cfg };
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'company', '--options', 'none');
+    write(cfg, 'rules/kit-db.md', '- 내가 만든 같은 이름 규칙\n');
+    const r = jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths', '--options', 'work-paths.db'], { env }));
+    assert.deepEqual(r.skipped, ['rules/kit-db.md']);
+    assert.deepEqual(r.userFiles, ['rules/kit-db.md']);
+    assert.deepEqual(read(path.join(cfg, 'subagent-system/bundles.lock.json')).userFiles, ['rules/kit-db.md']);
+    // 키트가 그 파일을 고쳐도 사용자 파일은 그대로다.
+    write(kit, 'subagent-system/rules/kit-db.md', '- DB 규칙 새 판\n');
+    const u = update(kit, cfg, '--allow-older');
+    assert.equal(u.files.find((f) => f.key === 'rules/kit-db.md').status, 'user-file');
+    assert.ok(u.notes.some((n) => /rules\/kit-db\.md/.test(n) && /건드리지 않았/.test(n)));
+    assert.equal(cfgRead(cfg, 'rules/kit-db.md'), '- 내가 만든 같은 이름 규칙\n');
+    assert.deepEqual(read(path.join(cfg, 'subagent-system/bundles.lock.json')).userFiles, ['rules/kit-db.md']);
+    // 사용자가 파일을 지우면 다음 update가 키트 판을 놓고 사용자 파일 기록에서 뺀다.
+    fs.rmSync(path.join(cfg, 'rules/kit-db.md'));
+    update(kit, cfg, '--allow-older');
+    assert.equal(cfgRead(cfg, 'rules/kit-db.md'), '- DB 규칙 새 판\n');
+    assert.equal(read(path.join(cfg, 'subagent-system/bundles.lock.json')).userFiles, undefined);
+  });
+
+  it('add가 키트가 이미 놓은 파일을 건너뛰면 사용자 파일로 적지 않아 update가 계속 갱신한다', () => {
+    const kit = makeKit();
+    const cfg = tmpDir();
+    install(kit, cfg, '--profile', 'personal', '--bundles', 'company,work-paths', '--options', 'work-paths.db');
+    const r = jsonOut(run(['add', '--kit', kit, '--bundles', 'work-paths', '--options', 'work-paths.db'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
+    assert.ok(r.skipped.includes('rules/kit-db.md'));
+    assert.deepEqual(r.userFiles, []);
+    assert.equal(read(path.join(cfg, 'subagent-system/bundles.lock.json')).userFiles, undefined);
   });
 
   it('--command-name을 주면 retro 스킬이 그 이름 폴더에 놓이고 name 줄이 바뀐다', () => {

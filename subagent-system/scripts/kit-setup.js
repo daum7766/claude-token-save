@@ -7,7 +7,7 @@
  * 같은 폴더의 kitMerge.js(3방향 병합), claudeMdTidy.js(CLAUDE.md 판정), kitProfile.js(개인용과 회사용 판정), kitDrift.js(설치 값 자리와 원본 대조, description 만들기), kitBundles.js(묶음 정의와 파일 목록), kitHooks.js(훅 등록 맞추기), kitInstalled.cjs(깐 상태 기록), userSettings.cjs(설정 문서)를 불러온다.
  * 설정 폴더는 CLAUDE_CONFIG_DIR이 있으면 그것, 없으면 ~/.claude다. 회고 스크립트는 설치본 scripts의 한 단계 위 config.json을 읽으므로 둘은 같은 파일이다.
  * update에서 설치본에 .kit-base가 없는 파일은, 키트가 git 저장소이고 설치본 VERSION과 같은 VERSION의 커밋이 있으면 그 커밋의 원문을 기준본으로 3방향 병합한다. 없으면 기록 해시 대조 뒤 2방향이다.
- * 백업은 한 가지다. 고치는 파일 옆에 <파일>.bak-<이름>-<날짜-시각>으로 복사한다(claudeMdTidy가 찍는 CLAUDE.md 백업 경로와 같은 꼴).
+ * 백업은 한 가지다. 고치는 파일 옆에 <파일>.bak-<이름>-<날짜-시각>으로 복사하고 같은 파일의 같은 이름 앞 백업은 휴지통으로 옮겨 가장 새것 하나만 남긴다. 파일이 git 저장소의 추적 파일이고 변경이 없으면 백업을 만들지 않는다(결과의 backup은 null).
  * 오류가 나면 메시지를 오류 출력에 찍고 종료 코드 1로 끝난다. 설정 파일은 쓰기 전에 모두 읽고 검사한다.
  * update는 config.json에 profile이 없으면(업데이트 전 설치본) 아무것도 바꾸지 않고 JSON(needsProfile)을 찍은 뒤 종료 코드 2로 끝난다. 사용자가 고른 profile을 set-profile로 쓴 다음 update를 다시 돌린다.
  *
@@ -29,6 +29,7 @@
  *   hook-off|hook-on <묶음>/<이름>                               훅 하나를 settings에서 빼거나 다시 걺(config의 disabledHooks)
  *   hooks --compare <settings 가> <settings 나>                  두 settings의 훅 등록을 정규화해 견줌
  *   source-of <설치 경로>                                        그 경로가 키트 조각인지 로컬 조각인지 알림
+ *   unowned [--mark]                                             설정 폴더의 방법 파일 가운데 키트 조각에도 로컬 조각에도 들지 않은 것의 수와, 지난 --mark 뒤 새로 생긴 것. --mark는 지금 목록을 본 것으로 적음
  *   where                                                        기록 폴더 경로
  *   claude-md-done                                               CLAUDE.md 정리를 마친 뒤 늘 읽히는 줄 수를 claudeMdKeptLines에 남기거나 지움
  *
@@ -47,7 +48,7 @@
  *   --merge-git-ask <settings.json> <git-permissions.json> <config.json> check|merge   permissions.ask에 키트 항목을 더함(개인용은 personal 목록)
  *   --remove-agent-meter <settings.json> <agent-meter 폴더>      env에서 agent-meter 경로와 keep-alive 키를 뺌
  *   --move-agent-meter <agent-meter 폴더>                        폴더를 같은 위치의 agent-meter-backup-<날짜-시각>으로 옮김
- *   --backup-file <파일> <이름>                                  <파일>.bak-<이름>-<날짜-시각>으로 복사
+ *   --backup-file <파일> <이름>                                  <파일>.bak-<이름>-<날짜-시각>으로 복사(git이 지키면 만들지 않음, 앞 백업은 휴지통)
  *   --check-json <파일…>                                         JSON으로 읽히는지 봄
  */
 
@@ -56,12 +57,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { planKitFileUpdate, migrateLegacyZones, legacyHashOf } from './kitMerge.js';
 import { analyzeClaudeMd, claudeMdSettingsOf, claudeMdVerdict } from './claudeMdTidy.js';
 import { PROFILES, PROFILE_KEY_OWNER, RETIRED_POLICY_KEYS, profileOf } from './kitProfile.js';
-import { loadDefinitions, entriesFor, selectableBundles, optionIds, expandFiles } from './kitBundles.js';
+import { loadDefinitions, entriesFor, selectableBundles, optionIds, expandFiles, inUnchosenOption } from './kitBundles.js';
 import { syncHooks, labelOf, compareHooks, scriptPathsOf, normalizeCommand } from './kitHooks.js';
 import { RECORDS_DIR } from './claudeProjectPaths.js';
 
@@ -86,6 +87,45 @@ function freePath(base) {
   let out = base;
   for (let i = 1; fs.existsSync(out); i += 1) out = `${base}-${i}`;
   return out;
+}
+
+// 백업은 되돌릴 길이 없을 때만 필요하다. 파일이 git 저장소 안의 추적 파일이고 커밋 안 된 변경이 없으면 git이 되돌릴 길이라 만들지 않는다.
+function gitKeepsFile(file) {
+  const dir = path.dirname(file);
+  if (gitOut(dir, ['rev-parse', '--show-toplevel']) === null) return false;
+  const base = path.basename(file);
+  if (gitOut(dir, ['ls-files', '--error-unmatch', '--', base]) === null) return false;
+  return (gitOut(dir, ['status', '--porcelain', '--', base]) ?? 'x').trim() === '';
+}
+
+// 같은 파일의 같은 이름 꼴 백업(<파일>.bak-<이름>-<날짜-시각>[-n])을 keep만 남기고 휴지통으로 옮긴다. 휴지통 스크립트가 없거나 옮기지 못하면 지우지 않고 남긴다.
+// 시험은 KIT_SETUP_TRASH_HOME으로 휴지통 폴더를 임시 폴더로 바꿔 끼운다.
+function pruneOlderBackups(file, name, keep) {
+  const dir = path.dirname(file);
+  const re = new RegExp(`^${escapeRegExp(`${path.basename(file)}.bak-${name}-`)}\\d{8}-\\d{6}(-\\d+)?$`);
+  let older;
+  try {
+    older = fs.readdirSync(dir).filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((p) => p !== keep);
+  } catch {
+    return;
+  }
+  const trashJs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'trash.js');
+  if (!older.length || !fs.existsSync(trashJs)) return;
+  // trash.js는 process.argv[1]이 자기 파일일 때만 직접 도는 것으로 보므로, 경로는 인자가 아니라 환경 변수로 넘긴다.
+  const code = "import(process.env.KIT_TRASH_MODULE).then(({ trashPaths }) => { const h = process.env.KIT_SETUP_TRASH_HOME; const deps = h ? { platform: 'linux', trashHome: h, run: () => ({ status: 1 }) } : {}; trashPaths(JSON.parse(process.env.KIT_TRASH_PATHS), deps); }).catch(() => {});";
+  spawnSync(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore', timeout: 120000, env: { ...process.env, KIT_TRASH_MODULE: pathToFileURL(trashJs).href, KIT_TRASH_PATHS: JSON.stringify(older) } });
+}
+
+const escapeRegExp = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// <파일>.bak-<이름>-<시각>으로 복사해 경로를 돌려주고 앞 백업은 가장 새것 하나만 남긴다. git이 지키는 파일이면 만들지 않고 null이다. dry면 만들지 않고 만들 경로만 돌려준다.
+function makeBackup(file, name, stampStr, { dry = false } = {}) {
+  if (gitKeepsFile(file)) return null;
+  const b = freePath(`${file}.bak-${name}-${stampStr}`);
+  if (dry) return b;
+  fs.copyFileSync(file, b);
+  pruneOlderBackups(file, name, b);
+  return b;
 }
 
 // settings.json은 심볼릭 링크면 실제 파일에 쓰고, 임시 파일에 쓴 뒤 바꿔 끼워 도중에 끊겨도 원본이 남게 하며, 파일 권한을 지킨다.
@@ -226,10 +266,9 @@ function syncWriteAllowHook(file, nextConfig) {
     if (enabled) return { hook: 'not-registered', note: '깐 상태 기록도 키트 폴더도 없어 retro-write-allow 훅을 걸지 못했습니다. 키트 폴더에서 update를 돌리면 걸립니다' };
     const n = dropWriteAllowRegistrations(st.s);
     if (!n) return { hook: 'already-absent' };
-    const backup = freePath(`${st.f}.bak-write-allow-${stamp()}`);
-    if (st.ex) fs.copyFileSync(st.f, backup);
+    const backup = st.ex ? makeBackup(st.f, 'write-allow', stamp()) : null;
     saveSettings(st);
-    return { hook: 'removed', backup: st.ex ? backup : null };
+    return { hook: 'removed', backup };
   }
   const r = syncHooks(st.s, { defs: inputs.defs, lock: inputs.lock, config: nextConfig, configDir: hooksConfigDir(cfg) });
   const isW = (x) => x.label === WRITE_ALLOW_LABEL;
@@ -240,11 +279,10 @@ function syncWriteAllowHook(file, nextConfig) {
   const out = { hook: result };
   if (result === 'not-registered') out.note = '라우팅 묶음이 깔려 있지 않아 retro-write-allow 훅을 걸지 않았습니다';
   if (r.changes.changed) {
-    const backup = freePath(`${st.f}.bak-write-allow-${stamp()}`);
-    if (st.ex) fs.copyFileSync(st.f, backup);
+    const backup = st.ex ? makeBackup(st.f, 'write-allow', stamp()) : null;
     st.s = r.settings;
     saveSettings(st);
-    out.backup = st.ex ? backup : null;
+    out.backup = backup;
   }
   return out;
 }
@@ -414,9 +452,8 @@ function removeAgentMeter(file, dir) {
   else delete env.CLAUDE_CODE_PLUGIN_DIRS;
   delete env.AGENT_METER_KEEPALIVE;
   if (!Object.keys(env).length) delete s.env;
-  const b = freePath(`${f}.bak-agent-meter-${stamp()}`);
-  fs.copyFileSync(f, b);
-  console.log(`백업: ${b}`);
+  const b = makeBackup(f, 'agent-meter', stamp());
+  console.log(b ? `백업: ${b}` : '백업 없음: git이 되돌릴 길');
   saveSettings(st);
 }
 
@@ -428,9 +465,9 @@ function moveAgentMeter(dir) {
 }
 
 function backupFile(file, name) {
-  const b = freePath(`${file}.bak-${name}-${stamp()}`);
-  fs.copyFileSync(file, b);
-  console.log(b);
+  fs.accessSync(file);
+  const b = makeBackup(file, name, stamp());
+  console.log(b ?? '백업 없음: git이 되돌릴 길');
 }
 
 function checkJson(files) {
@@ -613,7 +650,7 @@ function listFiles(dir, rel = '') {
 
 function parseOptions(args) {
   const valueOpts = ['--kit', '--profile', '--bundles', '--options', '--command-name', '--roles', '--records', '--name', '--choice', '--lang'];
-  const boolOpts = ['--dry-run', '--git-ask', '--no-git-ask', '--allow-older', '--json', '--compare'];
+  const boolOpts = ['--dry-run', '--git-ask', '--no-git-ask', '--allow-older', '--json', '--compare', '--mark'];
   const o = { positional: [] };
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
@@ -718,9 +755,7 @@ function lacksExec(e) {
 }
 
 function backupBeside(ctx, file, name) {
-  const b = freePath(`${file}.bak-${name}-${ctx.stampStr}`);
-  if (!ctx.dry) fs.copyFileSync(file, b);
-  return b;
+  return makeBackup(file, name, ctx.stampStr, { dry: ctx.dry });
 }
 
 function readConfig(ctx) {
@@ -845,14 +880,18 @@ function estimateSelection(cfg, defs, config) {
 }
 
 // 깐 상태 기록에 적을 키트 조각(훅과 git 조각 정의 사본 포함)과 로컬 조각.
+// 고르지 않은 고를 항목의 파일을 부르는 훅은 적지 않는다. 적으면 없는 파일을 부르는 훅이 걸린다.
 function kitPartsFor(defs, selection, commit) {
   const out = {};
   for (const name of ['base', ...selection.bundles.filter((n) => n !== 'base')]) {
     const parts = defs.parts.filter((p) => p.bundle === name && p.origin === 'kit');
     if (!parts.length) continue;
+    const bundle = defs.bundles.get(name);
+    const keyOf = (script) => script.replace(/^\$HOME\/\.claude\//, '');
+    const hooksOf = (p) => p.hooks.filter((h) => !scriptPathsOf(h.command).some((s) => inUnchosenOption(bundle, keyOf(s), selection.options)));
     out[name] = {
       options: selection.options.filter((o) => o.startsWith(`${name}.`)),
-      parts: Object.fromEntries(parts.map((p) => [p.part, { origin: 'kit', ...(commit ? { commit } : {}), hooks: p.hooks, gitHooks: p.gitHooks }])),
+      parts: Object.fromEntries(parts.map((p) => [p.part, { origin: 'kit', ...(commit ? { commit } : {}), hooks: hooksOf(p), gitHooks: p.gitHooks }])),
     };
   }
   return out;
@@ -1060,12 +1099,28 @@ function defDescriptionLine(ctx, key, installedText, firstText) {
   return line;
 }
 
+// add가 이미 있어서 건너뛴 파일의 키 목록(깐 상태 기록의 userFiles). 이 파일들은 키트가 놓은 것이 아니다.
+const userFileKeys = (lock) => new Set(Array.isArray(lock?.userFiles) ? lock.userFiles : []);
+
+// 갱신으로 새 기록(lock2)에 userFiles를 이어 간다. 사용자가 파일을 지워 키트 판이 놓인 키는 뺀다.
+function carryUserFiles(lock2, oldLock, files) {
+  const placed = new Set(files.filter((f) => f.status === 'added').map((f) => f.key));
+  const keep = [...userFileKeys(oldLock)].filter((k) => !placed.has(k));
+  if (keep.length) lock2.userFiles = keep;
+  else delete lock2.userFiles;
+}
+
 function syncEntry(ctx, e, recorded, forceBackup) {
   const baseFile = path.join(ctx.sub, '.kit-base', ...e.key.split('/'));
   const installed = readText(e.dest);
   let base = readText(baseFile);
   const isDef = ctx.mode === 'update' && DEF_KEY_RE.test(e.key);
   const out = { key: e.key };
+  // add가 건너뛴 사용자 파일은 키트 파일이 아니라 병합하지 않고 알리기만 한다. 사용자가 지우면 다음 갱신이 키트 판을 놓는다.
+  if (installed !== null && userFileKeys(ctx.lock).has(e.key)) {
+    out.status = 'user-file';
+    return out;
+  }
   if (base === null && installed !== null && (e.kind === 'merge' || e.kind === 'code')) {
     base = gitBaseText(ctx, e);
     if (base !== null) out.baseFrom = `git:${findKitCommit(ctx).hash.slice(0, 7)}`;
@@ -1357,7 +1412,10 @@ function migrateRetroPending(ctx) {
     writeFile(ctx, file, `${merged.join(eol).replace(/(\r?\n)*$/, eol)}`);
   }
   const backup = freePath(`${pending}.bak-update-${ctx.stampStr}`);
-  if (!ctx.dry) fs.renameSync(pending, backup);
+  if (!ctx.dry) {
+    fs.renameSync(pending, backup);
+    pruneOlderBackups(pending, 'update', backup);
+  }
   return { file, created: existing === null && blocks.length > 0, moved: blocks.length, skippedSameTitle: skipped, backup };
 }
 
@@ -1510,10 +1568,14 @@ function runSync(mode, rawArgs) {
     return t !== null && !t.includes('git-dispatch');
   })());
 
+  ctx.lock = oldLock;
   for (const e of kitEntries) {
     const guideWithZones = zones && e.key === 'subagent-system/docs/SUBAGENT_GUIDE.md';
     report.files.push(syncEntry(ctx, e, recorded, Boolean(guideWithZones)));
   }
+  const userKept = report.files.filter((f) => f.status === 'user-file').map((f) => f.key);
+  if (userKept.length) report.notes.push(`사용자가 둔 같은 이름 파일 ${userKept.length}건은 키트 파일이 아니라 건드리지 않았습니다: ${userKept.join(', ')}. 키트 판을 쓰려면 그 파일을 지우고 update를 다시 돌립니다`);
+  carryUserFiles(lock2, oldLock, report.files);
   dropOrphans(ctx, kitEntries, recorded, report);
   if (mode === 'install') dropUnchosen(ctx, defs, kitEntries, command, report);
   // 공개판처럼 묶음 일부만 있는 키트로 갱신하면, commit-msg 이어 부르기는 깔려 있고 commitCheck도 검사로 남는데 검사 조각이 하나도 없어 소리 없이 꺼질 수 있다. 있던 검사가 이 갱신으로 꺼질 때만 알린다(다음 갱신에는 이미 조각이 없던 상태라 되풀이되지 않는다).
@@ -1618,11 +1680,16 @@ function uninstall(rawArgs) {
     if (!ctx.dry) fs.renameSync(file, b);
     report.keptAsBackup.push(b);
   };
+  const userOwned = userFileKeys(lockApi.readLock(ctx.cfg));
   for (const [key, e] of keys) {
     if (e.kind === 'once') continue;
     const installed = readText(e.dest);
     if (installed === null) {
       report.missing += 1;
+      continue;
+    }
+    if (userOwned.has(key)) {
+      report.skippedUnknown.push(key);
       continue;
     }
     const baseText = readText(path.join(baseRoot, ...key.split('/')));
@@ -1783,10 +1850,13 @@ function addCommand(rawArgs) {
   const kept = readKeptValues(ctx);
   const added = [];
   const skipped = [];
+  const userOwnedNow = [];
   const restored = [];
   for (const e of mine) {
     if (fs.existsSync(e.dest)) {
       skipped.push(e.key);
+      // 키트가 놓았다면 .kit-base에 원문이 있다. 병합 대상인데 없으면 사용자가 둔 같은 이름 파일이다.
+      if ((e.kind === 'merge' || e.kind === 'code') && !fs.existsSync(path.join(ctx.sub, '.kit-base', ...e.key.split('/')))) userOwnedNow.push(e.key);
       continue;
     }
     let text = e.text;
@@ -1805,11 +1875,15 @@ function addCommand(rawArgs) {
     added.push(e.key);
   }
   if (restored.length) writeKeptValues(ctx, kept);
+  // 건너뛴 파일은 사용자가 둔 것이라 깐 상태 기록에 남겨 update와 sync가 키트 파일로 병합하지 않게 한다.
+  const userFiles = [...new Set([...userFileKeys(lock2), ...userOwnedNow])].filter((k) => !added.includes(k));
+  if (userFiles.length) lock2.userFiles = userFiles;
+  else delete lock2.userFiles;
   if (!ctx.dry) lockApi.writeLock(ctx.cfg, lock2);
   if (filled.length && !ctx.dry) writeJson(path.join(ctx.sub, 'config.json'), configNext);
   const settingsBackup = commitSettings(ctx, plan, 'add');
   const out = {
-    mode: 'add', dryRun: ctx.dry, configDir: ctx.cfg, bundles: targets, added, skipped, restoredValues: restored, ...(filled.length ? { configFilled: filled } : {}),
+    mode: 'add', dryRun: ctx.dry, configDir: ctx.cfg, bundles: targets, added, skipped, userFiles, restoredValues: restored, ...(filled.length ? { configFilled: filled } : {}),
     lock: { file: lockApi.lockPath(ctx.cfg), estimated }, settings: { hooks: labelsOf(plan.changes), gitAsk, ...(settingsBackup ? { backup: settingsBackup } : {}) }, notes: [],
   };
   if (estimated) out.notes.push('깐 상태 기록이 없는 옛 설치라 깐 묶음을 파일로 추정해 기록을 만들었습니다');
@@ -2055,20 +2129,6 @@ function diffCommand(rawArgs) {
   console.log(out.join('\n'));
 }
 
-// 설치본이 그 폴더 자체를 저장소로 쓰고 이 파일이 깨끗하게 추적되는 중이면 true다. 이때는 덮어써도 git이 옛 글을 지켜 주므로 백업을 따로 두지 않는다.
-function gitKeepsFile(cfg, file) {
-  const top = gitOut(cfg, ['rev-parse', '--show-toplevel']);
-  if (top === null) return false;
-  try {
-    if (fs.realpathSync(top.trim()) !== fs.realpathSync(cfg)) return false;
-  } catch {
-    return false;
-  }
-  const rel = slash(path.relative(cfg, file));
-  if (gitOut(cfg, ['ls-files', '--error-unmatch', '--', rel]) === null) return false;
-  return (gitOut(cfg, ['status', '--porcelain', '--', rel]) ?? 'x').trim() === '';
-}
-
 // 원본 HEAD를 변환해 키트가 놓는 파일만 설치본에 덮고 .kit-base를 새로 쓴다. 설치 값 자리(체크리스트 절, 정의 description)는 설치본 것을 지킨다.
 // config, retroMode, VERSION, 라우팅 표, rates.json, 선택 항목 고르기는 건드리지 않는다. 로컬 조각 파일은 쓰지 않는다. 깐 상태 기록의 훅 사본과 settings.json의 훅 등록은 원본 HEAD의 정의에 맞춘다.
 function syncCommand(rawArgs) {
@@ -2090,6 +2150,12 @@ function syncCommand(rawArgs) {
     const base = readText(baseFile);
     const target = overlayZones(e.key, e.text, installed);
     const row = { key: e.key };
+    if (installed !== null && userFileKeys(ctx.lock).has(e.key)) {
+      row.status = 'user-file';
+      report.files.push(row);
+      report.counts[row.status] = (report.counts[row.status] ?? 0) + 1;
+      continue;
+    }
     if (installed === null) {
       row.status = 'added';
     } else if (normEol(installed) === normEol(target)) {
@@ -2097,7 +2163,10 @@ function syncCommand(rawArgs) {
     } else {
       row.status = 'overwritten';
       const untouched = base !== null && normEol(maskZones(e.key, installed)) === normEol(maskZones(e.key, base));
-      if (!untouched && !gitKeepsFile(ctx.cfg, e.dest)) row.backup = backupBeside(ctx, e.dest, 'sync');
+      if (!untouched) {
+        row.localEdit = true;
+        row.backup = backupBeside(ctx, e.dest, 'sync');
+      }
     }
     if (row.status !== 'unchanged') {
       writeFile(ctx, e.dest, target);
@@ -2113,10 +2182,14 @@ function syncCommand(rawArgs) {
   // 키트에서 지운 파일도 치운다. 덮어쓰기만 하면 지운 규칙과 스크립트가 설치본에 남아 계속 읽히고 돈다(설치본 검수 6회차 5번).
   dropOrphans(ctx, all, null, report);
   if (lock2) {
+    carryUserFiles(lock2, ctx.lock, report.files);
     if (!ctx.dry) lockApi.writeLock(ctx.cfg, lock2);
     const backup = commitSettings(ctx, plan, 'sync');
     report.settings = { hooks: labelsOf(plan.changes), ...(backup ? { backup } : {}) };
   }
+  // 설치본에서만 고친 키트 파일은 다른 세션의 고침일 수 있어 덮은 것을 조용히 넘기지 않는다. 고침은 키트 원본에 올려야 남는다.
+  const local = report.files.filter((f) => f.localEdit);
+  if (local.length) console.error(`설치본에서만 고친 키트 파일 ${local.length}개를 원본으로 덮었다: ${local.map((f) => f.key).join(', ')}. 그 고침이 필요하면 키트 원본에 올린 뒤 다시 sync한다(백업이 없으면 설치본 git 기록에서 되찾는다).`);
   console.log(JSON.stringify(report, null, 2));
 }
 
@@ -2409,12 +2482,11 @@ function hookToggleCommand(on, rawArgs) {
   writeJson(file, next);
   let backup = null;
   if (r.changes.changed) {
-    backup = freePath(`${st.f}.bak-hook-${on ? 'on' : 'off'}-${stamp()}`);
-    if (st.ex) fs.copyFileSync(st.f, backup);
+    backup = st.ex ? makeBackup(st.f, `hook-${on ? 'on' : 'off'}`, stamp()) : null;
     st.s = r.settings;
     saveSettings(st);
   }
-  console.log(JSON.stringify({ mode: on ? 'hook-on' : 'hook-off', hook: id, disabledHooks: nextList, settings: labelsOf(r.changes), backup: st.ex ? backup : null }, null, 2));
+  console.log(JSON.stringify({ mode: on ? 'hook-on' : 'hook-off', hook: id, disabledHooks: nextList, settings: labelsOf(r.changes), backup }, null, 2));
 }
 
 // 두 settings.json의 훅 등록을 감싸개와 경로 글자를 벗기고 견준다. 차이가 있으면 종료 코드 1이다.
@@ -2447,6 +2519,39 @@ function sourceOfCommand(rawArgs) {
     return;
   }
   console.log(JSON.stringify({ path: key, found: true, bundle: hit.bundle, part: hit.part, origin: 'kit', kind: hit.kind, source: path.join(part.source.root, ...hit.src.split('/')) }, null, 2));
+}
+
+// 설정 폴더의 방법 파일(문서, 규칙, 스킬, 훅, 정의, 스크립트) 가운데 키트 조각에도 로컬 조각에도 들지 않은 것을 찍는다.
+// 까닭: 누구에게나 통하는 방법을 개인 자리에 먼저 만들면 키트로 올라가지 않고 쌓인다. 회고가 새로 생긴 것만 보고 키트로 올릴지 가른다(RETRO 「규칙 점검」).
+const UNOWNED_DIRS = ['agents', 'docs', 'hooks', 'rules', 'scripts', 'skills'];
+const UNOWNED_SKIP = /^docs\/plan\/|^skills\/synced\/|(^|\/)(node_modules|__pycache__|fixtures)\/|\.bak|\.DS_Store$|\.pyc$/;
+function unownedCommand(rawArgs) {
+  const opts = parseOptions(rawArgs);
+  if (opts.positional.length) throw new Error(`모르는 인자: ${opts.positional.join(' ')}`);
+  const { cfg, defs } = looseDefs(opts);
+  // 키트 원본을 모르는 설치는 정의에 키트 조각이 없으니, 키트가 놓은 파일은 기준본(.kit-base)에서 읽는다.
+  const owned = new Set([...defs.parts.flatMap((p) => expandFiles(p)), ...listFiles(path.join(cfg, 'subagent-system', '.kit-base'))]);
+  const found = [];
+  const walk = (rel) => {
+    const abs = path.join(cfg, ...rel.split('/'));
+    if (!fs.existsSync(abs)) return;
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      const key = `${rel}/${e.name}`;
+      if (e.name.startsWith('.') || UNOWNED_SKIP.test(e.isDirectory() ? `${key}/` : key)) continue;
+      if (e.isDirectory()) walk(key);
+      else if (e.isFile() && !owned.has(key)) found.push(key);
+    }
+  };
+  for (const d of UNOWNED_DIRS) walk(d);
+  found.sort();
+  const seenFile = path.join(RECORDS_DIR, 'unowned-seen.txt');
+  const seen = new Set(fs.existsSync(seenFile) ? fs.readFileSync(seenFile, 'utf8').split('\n').filter(Boolean) : []);
+  const fresh = found.filter((k) => !seen.has(k));
+  if (opts.mark) {
+    fs.mkdirSync(path.dirname(seenFile), { recursive: true });
+    fs.writeFileSync(seenFile, `${found.join('\n')}\n`);
+  }
+  console.log(JSON.stringify({ total: found.length, new: fresh, marked: Boolean(opts.mark) }, null, 2));
 }
 
 function whereCommand(rawArgs) {
@@ -2506,6 +2611,7 @@ const SUBCOMMANDS = {
   'hook-on': (a) => hookToggleCommand(true, a),
   hooks: hooksCommand,
   'source-of': sourceOfCommand,
+  unowned: unownedCommand,
   where: whereCommand,
   'claude-md-done': claudeMdDoneCommand,
 };

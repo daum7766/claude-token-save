@@ -1,6 +1,7 @@
 'use strict';
 
 // 깐 상태 기록(subagent-system/bundles.lock.json)을 읽고 쓰는 도우미다. CJS 훅과 ESM 스크립트가 모두 쓰려고 .cjs로 둔다.
+// userFiles(선택): add가 이미 있어서 건너뛴 사용자 파일의 키 목록. update와 sync는 이 파일을 키트 파일로 병합하지 않고 알리기만 한다.
 // 기록은 깐 묶음 목록의 원본이다. 꼴: { lockVersion: 1, installed: { <묶음>: { options: [...], parts: { <조각>: { origin: 'kit'|'local', commit?, hooks?, gitHooks? } } } } }
 // 키트 조각은 깔 때의 훅과 git 조각 정의 사본을 담고, 로컬 조각은 origin만 담는다(설치본이 정본이라 정의는 그때그때 local-bundles에서 읽음).
 // 파일이 없거나 깨졌으면 읽는 쪽은 「모름」으로 보고 깔린 것으로 친다(옛 설치에서 지금 동작을 지키는 쪽).
@@ -62,7 +63,10 @@ function mergeLock(old, { command, bundles = [], kitParts = {}, localParts = {} 
   const base = isObj(old) && isObj(old.installed) ? clone(old) : { lockVersion: LOCK_VERSION, installed: {} };
   const installed = base.installed;
 
-  if (command === 'uninstall') return { ...base, lockVersion: LOCK_VERSION, installed: {} };
+  if (command === 'uninstall') {
+    const { userFiles: _dropped, ...rest } = base;
+    return { ...rest, lockVersion: LOCK_VERSION, installed: {} };
+  }
   if (command === 'remove') {
     for (const name of bundles) {
       if (name === 'base') throw new Error('바닥(base)은 remove로 뺄 수 없습니다. 모두 빼려면 uninstall을 쓰세요');

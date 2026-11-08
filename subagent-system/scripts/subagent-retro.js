@@ -35,7 +35,7 @@
  *   node scripts/subagent-retro.js --repeats [--since YYYY-MM-DD]    최근 30일(--since면 그 날 0시 뒤)의 대화에서 같은 꼴로 되풀이된 사용자 지시, Bash 명령, Agent 지시문을 종류별 상위 20개 찍음. 회고마다 돌지 않고, 마지막으로 돈 날(config.json의 repeatsRunDate)에서 30일이 안 지났으면 건너뜀(--since를 주면 건너뛰지 않고 날짜도 남기지 않음). 설정 파일이 있으면 repeatsRunDate만 씀. 후보는 같은 꼴 3번 이상, 세션 2개 이상. 기록이 없어도 종료 코드 0이고 --since 형식이 틀릴 때만 1
  *   node scripts/subagent-retro.js --extract <파일>                   위에 더해 사용자 메시지를 <파일>에 씀
  *   node scripts/subagent-retro.js --messages <파일> --labels <파일>   정정을 반영해 다시 찍고 정정 기록에 덧붙임
- *   node scripts/subagent-retro.js --mark "<메모>" --messages <파일> --changed <N>   회고 경계 줄을 사용 기록에 덧붙임(N은 회고에서 실제로 바꾼 칸 수. 거절한 후보는 세지 않음). 그때의 표 모양(칸, 시험 표시, 최저선)도 같은 줄에 남겨 다음 회고들이 내림 실패를 셈
+ *   node scripts/subagent-retro.js --mark "<메모>" --messages <파일> --changed <N> [--health <문서 상태 점검 합계> [--root "<공통 뿌리 문장>"]]   회고 경계 줄을 사용 기록에 덧붙임(N은 회고에서 실제로 바꾼 칸 수. 거절한 후보는 세지 않음). 그때의 표 모양(칸, 시험 표시, 최저선)도 같은 줄에 남겨 다음 회고들이 내림 실패를 셈
  *   node scripts/subagent-retro.js --log --project "<세션을 시작한 폴더의 절대 경로>" --def <정의> --kind "<일 종류>" --result ok|재지시|올림 --memo "<메모>"
  *                                     [--tokens N] [--tools N] [--secs N] [--date YYYY-MM-DD]   사용 기록 한 줄(9열)을 덧붙임. `--log --help`는 인자와 메모 쓰는 법 전부를 찍음. 메모에서 처음 보는 태그를 만나면 끝에 `새 태그 <T>(비슷한 기존 태그 <Y>, …)` 줄을, 일 종류가 표에 없으면 `표에 없는 일 종류 <K>(가까운 표 이름 <N>, …)` 줄을 더함(기록은 그대로 남김)
  *   node scripts/subagent-retro.js --fix --project "<세션을 시작한 폴더의 절대 경로>" --signal 정정|모자람|개선|재발 --label "<이름표>" --where "<파일 경로>#<절 이름>" --how 문장|체크리스트|스크립트|훅|되돌림|물음|유지|무관 --memo "<메모>"
@@ -57,6 +57,7 @@ import { askFirstOf } from './kitProfile.js';
 import { locateTranscript } from './subagent-usage.js';
 import { claudeMdVerdict } from './claudeMdTidy.js';
 import { CLAUDE_DIR, RECORDS_DIR, GUIDE_FILE, AGENTS_DIR, CONFIG_FILE, PROJECTS_ROOT, listSessions, readJsonl, sessionCwd, projectRoot, localDate, retentionDays, printTable, appendWithHeader, splitLines } from './claudeProjectPaths.js';
+import { appendHistory, healthHistoryFile, totalGate, totalsHistory } from './docHealth.js';
 import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, pendingTitles, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, mergedLabelRows, isAbsolutePath, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
 
 const requireCjs = createRequire(import.meta.url);
@@ -72,7 +73,7 @@ const MESSAGES_HEADER = ['번호', '세션', '프로젝트', '시각', '끝난 �
 const MAX_SKIPPED_RATIO = 0.2;
 
 function parseArgs(argv) {
-  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, where: false, kinds: false, check: false, repeats: false, docs: false, report: false };
+  const opts = { extract: null, messages: null, labels: null, mark: null, changed: null, since: null, where: false, kinds: false, check: false, repeats: false, docs: false, report: false, health: null, root: null };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'report') opts.report = true;
@@ -572,8 +573,20 @@ function mark(opts) {
   const later = findLaterBoundary(fs.readFileSync(USAGE_FILE, 'utf8'), head.usageLines);
   if (later) fail(`다른 세션이 이미 회고했습니다(경계 줄 ${later.line}, ${later.memo.slice(0, 40)}). 이번 회고의 칸 수정이 겹치는지 확인하세요.`);
   const changed = opts.changed === null ? null : Number(opts.changed);
+  // 문서 상태 점검의 탐지 합계가 앞 두 회고 값보다 줄지 않았으면 공통 뿌리 문장 없이 넘기지 않는다. 낱건만 고치고 방식을 안 바꾸는 것을 막으려는 것이다.
+  const healthFile = healthHistoryFile(RECORDS_DIR);
+  let healthRow = null;
+  if (opts.health !== null) {
+    if (!/^\d+$/.test(opts.health)) fail(`--health는 0 이상의 정수여야 합니다: ${opts.health}`);
+    const total = Number(opts.health);
+    const gate = totalGate(total, totalsHistory(healthFile), opts.root);
+    if (!gate.ok) fail(gate.reason);
+    healthRow = [new Date().toISOString(), '합계', '-', total, flat(opts.root ?? '')];
+    console.log(`문서 상태 점검 합계 ${total}: ${gate.reason}`);
+  }
   const table = readTable();
   fs.appendFileSync(USAGE_FILE, retroLine(head.extractedAt, head.usageLines, changed, flat(opts.mark), table.cells ? tableSnapshot(table.cells) : '-') + '\n');
+  if (healthRow) appendHistory(healthFile, [healthRow]);
   console.log(`회고 경계 줄을 덧붙였습니다(줄 수 ${head.usageLines}, 추출 시각 ${head.extractedAt}, 바꾼 칸 ${changed ?? '모름'}).`);
   if (table.cells) console.log(`표 모양을 같은 줄에 남겼습니다(시험 표시 ${table.trials.length}개, 최저선 ${table.floors.size}개).`);
   else console.log(`표를 읽지 못해 표 모양을 남기지 못했습니다. 이 회고 앞뒤의 칸 이동은 내림 실패로 세지 않습니다: ${table.problems.join('; ')}`);
@@ -1315,7 +1328,7 @@ function usageText() {
 const KNOWN_FLAGS = new Set([
   '--help', '--report', '--where', '--due', '--project', '--snooze', '--retro-mode', '--claude-md-done', '--docs', '--since', '--docs-done', '--claim', '--release', '--failed', '--status', '--slash', '--asks',
   '--kinds', '--remove-kind', '--restore-kind', '--remove-def', '--restore-def', '--shortfalls', '--check-fable', '--record-kit-hashes', '--check-kit-hashes', '--kit', '--check', '--repeats',
-  '--extract', '--messages', '--labels', '--mark', '--changed', '--rule-targets', '--fixes', '--fix', '--signal', '--label', '--how', '--log', '--def', '--kind', '--result', '--memo', '--session', '--tokens', '--tools', '--secs', '--date',
+  '--extract', '--messages', '--labels', '--mark', '--changed', '--rule-targets', '--fixes', '--fix', '--signal', '--label', '--how', '--log', '--def', '--kind', '--result', '--memo', '--session', '--tokens', '--tools', '--secs', '--date', '--health', '--root', '--why-not-device',
 ]);
 
 function usageError(message) {

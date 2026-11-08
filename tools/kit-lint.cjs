@@ -472,7 +472,9 @@ function lintFile(file, cache) {
     return { hits, ignored: [], text };
   }
   const r = analyze(ast, { sourceType, filename: file });
-  for (const id of r.undef) add('no-undef', id, `정의 안 된 이름: ${id.name}`);
+  // 파일 머리의 `/* global a, b */`는 그 파일이 다른 실행 환경(브라우저에 넣어 돌리는 함수 등)의 이름을 쓴다는 표시라 정의된 것으로 본다.
+  const declared = new Set((/^\s*\/\*\s*global\s+([^*]+)\*\//m.exec(text)?.[1] ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+  for (const id of r.undef) if (!declared.has(id.name)) add('no-undef', id, `정의 안 된 이름: ${id.name}`);
   for (const v of r.unused) {
     add('no-unused-vars', v.node, `안 쓰는 ${v.kind === 'import' ? '가져온 이름' : '변수'}: ${v.name}`);
   }

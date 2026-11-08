@@ -2,7 +2,7 @@
 // 무엇: PermissionRequest(matcher *) 훅. Claude Code가 사용자에게 승인 창을 띄울 때마다 무엇을 물었는지 한 줄씩 기록 파일에 덧붙인다.
 //   기록 파일은 설정 폴더(CLAUDE_CONFIG_DIR, 없으면 ~/.claude)의 permission-asks.jsonl이고 환경 변수 ASK_LOG_FILE로 바꾼다.
 //   줄 꼴(JSON): ts(UTC), session, agent_id, agent_type, cwd, tool, hook, reason, input(명령 또는 조회어, 없으면 입력 JSON, 4000자까지).
-//   `hook` 값은 이 훅이 적으면 `claude-code`이고, 사용자가 둔 검사 훅이 같은 파일에 자기 이름을 달아 적어도 된다.
+//   `hook` 값은 이 훅이 적으면 `claude-code`이고, 검사 훅은 이 파일의 logAsk로 자기 이름을 달아 같은 꼴의 줄을 적는다(사용자가 둔 검사 훅이 직접 적어도 된다).
 // 왜: 승인 창은 사용자가 자리를 비운 동안 일을 세우고 사용자의 시간을 쓴다. 무엇이 얼마나 자주 물었는지 기록이 있어야 회고가 이를 넷으로 나눠 줄인다(RETRO 「승인 창 보기」).
 // 전제:
 //   - 아무것도 출력하지 않고 항상 0으로 끝낸다. 출력하면 승인 결정에 끼어들기 때문이다. 훅 안의 오류는 모두 조용히 통과로 처리한다.
@@ -78,13 +78,9 @@ function allowedByRetroWrite(data) {
   }
 }
 
-function main(raw) {
-  const data = JSON.parse(raw);
-  if (allowedByRetroWrite(data)) return;
+// 기록 한 줄을 덧붙인다. 안전장치 훅도 이 함수로 적어 줄 꼴이 하나로 남는다(검사 훅은 겹침 거르기 없이 적고, 뒤따르는 승인 창은 아래 main이 거른다).
+function appendRow(data, hook, reason, now = Date.now()) {
   const file = logFile();
-  const key = inputKey(data);
-  const now = Date.now();
-  if (recentlyLogged(file, key, now)) return;
   const row = {
     ts: new Date(now).toISOString().replace(/\.\d+Z$/, 'Z'),
     session: data.session_id || '',
@@ -92,17 +88,38 @@ function main(raw) {
     agent_type: data.agent_type || '',
     cwd: data.cwd || '',
     tool: data.tool_name || '',
-    hook: 'claude-code',
-    reason: 'Claude Code 승인 창',
-    input: key,
+    hook,
+    reason,
+    input: inputKey(data),
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(row)}\n`, 'utf8');
 }
 
-try {
-  main(fs.readFileSync(0, 'utf8'));
-} catch {
-  // 기록 실패가 승인 흐름을 막지 않게 한다
+// 검사 훅이 부른다. 기록 실패가 판정을 막지 않게 던지지 않는다.
+function logAsk(data, hook, reason) {
+  try {
+    appendRow(data && typeof data === 'object' ? data : {}, hook, reason);
+  } catch {
+    // 기록을 못 써도 막는 판정은 그대로 낸다
+  }
 }
-process.exit(0);
+
+function main(raw) {
+  const data = JSON.parse(raw);
+  if (allowedByRetroWrite(data)) return;
+  const now = Date.now();
+  if (recentlyLogged(logFile(), inputKey(data), now)) return;
+  appendRow(data, 'claude-code', 'Claude Code 승인 창', now);
+}
+
+if (require.main === module) {
+  try {
+    main(fs.readFileSync(0, 'utf8'));
+  } catch {
+    // 기록 실패가 승인 흐름을 막지 않게 한다
+  }
+  process.exit(0);
+}
+
+module.exports = { logAsk };

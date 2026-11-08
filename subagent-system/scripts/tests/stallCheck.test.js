@@ -77,6 +77,63 @@ describe('stall-check 실무자 기다림과 예약', () => {
     assert.match(check(input(['다시 띄운 일'])).reason, /1명\(다시 띄운 일\)/);
     fs.rmSync(root, { recursive: true, force: true });
   });
+  it('실무자가 끝맺기 1분 안에 직접 보낸 보고가 닿았으면 결과 늦음을 띄우지 않고, 그보다 앞선 중간 보고만 있으면 띄운다', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-am-'));
+    const sub = path.join(root, 'sess', 'subagents');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, 'agent-rep.meta.json'), JSON.stringify({ name: 'rep', description: '보고하는 일' }));
+    const rows = [{ type: 'user', timestamp: '2026-11-06T09:00:00Z', message: { content: '일' } }, { type: 'assistant', timestamp: '2026-11-06T10:00:00Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'rep의 결과' }] } }];
+    fs.writeFileSync(path.join(sub, 'agent-rep.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const main = path.join(root, 'sess.jsonl');
+    const input = (sid) => stop({ session_id: sid, transcript_path: main, background_tasks: [{ id: 't0', type: 'teammate', status: 'running', description: '보고하는 일' }] });
+    const say = (at) => JSON.stringify({ type: 'user', timestamp: at, message: { content: '<agent-message from="rep">결과</agent-message>' } });
+    fs.writeFileSync(main, say('2026-11-06T09:50:00Z') + '\n');
+    const sid1 = `stall-test-${process.pid}-am1`;
+    assert.match(check(input(sid1)).reason, /^결과 늦음/);
+    fs.rmSync(path.join(os.tmpdir(), `stall-check-${sid1}.json`), { force: true });
+    fs.writeFileSync(main, say('2026-11-06T09:59:45Z') + '\n');
+    const sid2 = `stall-test-${process.pid}-am2`;
+    assert.doesNotMatch(check(input(sid2))?.reason || '', /결과 늦음/);
+    fs.rmSync(path.join(os.tmpdir(), `stall-check-${sid2}.json`), { force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  it('끝맺은 지 5분이 안 된 실무자는 마지막 답을 싣지 않고 기다리는 실무자로 두고, 5분이 지나도 끝 알림이 없으면 싣는다', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-grace-'));
+    const sub = path.join(root, 'sess', 'subagents');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, 'agent-g.meta.json'), JSON.stringify({ name: 'g', description: '막 끝난 일' }));
+    const rows = [{ type: 'user', timestamp: '2026-11-06T09:00:00Z', message: { content: '일' } }, { type: 'assistant', timestamp: '2026-11-06T10:00:00Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'g의 결과' }] } }];
+    fs.writeFileSync(path.join(sub, 'agent-g.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const main = path.join(root, 'sess.jsonl');
+    fs.writeFileSync(main, '');
+    const input = (sid) => stop({ session_id: sid, transcript_path: main, background_tasks: [{ id: 't0', type: 'teammate', status: 'running', description: '막 끝난 일' }] });
+    const sid1 = `stall-test-${process.pid}-g1`;
+    const soon = check(input(sid1), new Date('2026-11-06T10:01:00Z'));
+    assert.doesNotMatch(soon.reason, /결과 늦음/);
+    assert.match(soon.reason, /^실무자 기다림/);
+    fs.rmSync(path.join(os.tmpdir(), `stall-check-${sid1}.json`), { force: true });
+    const sid2 = `stall-test-${process.pid}-g2`;
+    assert.match(check(input(sid2), new Date('2026-11-06T10:06:00Z')).reason, /^결과 늦음/);
+    fs.rmSync(path.join(os.tmpdir(), `stall-check-${sid2}.json`), { force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  it('끝 알림이 닿은 것을 한 번 보면 기억해, 대화 기록 끝에서 그 줄이 밀려나도 결과 늦음을 띄우지 않는다', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-seen-'));
+    const sub = path.join(root, 'sess', 'subagents');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, 'agent-s.meta.json'), JSON.stringify({ name: 's', description: '받은 일' }));
+    const rows = [{ type: 'user', timestamp: '2026-11-06T09:00:00Z', message: { content: '일' } }, { type: 'assistant', timestamp: '2026-11-06T10:00:00Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 's의 결과' }] } }];
+    fs.writeFileSync(path.join(sub, 'agent-s.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const main = path.join(root, 'sess.jsonl');
+    fs.writeFileSync(main, JSON.stringify({ type: 'user', timestamp: '2026-11-06T10:00:02Z', message: { content: '<teammate-message teammate_id="s">끝</teammate-message>' } }) + '\n');
+    const sid = `stall-test-${process.pid}-seen`;
+    const input = stop({ session_id: sid, transcript_path: main, background_tasks: [{ id: 't0', type: 'teammate', status: 'running', description: '받은 일' }] });
+    assert.doesNotMatch(check(input, new Date('2026-11-06T10:10:00Z'))?.reason || '', /결과 늦음/);
+    fs.writeFileSync(main, '');
+    assert.doesNotMatch(check(input, new Date('2026-11-06T12:00:00Z'))?.reason || '', /결과 늦음/);
+    fs.rmSync(path.join(os.tmpdir(), `stall-check-${sid}.json`), { force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   it('기록이 20분 넘게 그대로인 실무자는 멈춘 듯으로 한 번 알리고, 기록이 다시 자라다 멈추면 또 알린다', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-stuck-'));
     const sub = path.join(root, 'sess', 'subagents');
@@ -117,6 +174,13 @@ describe('stall-check 이어 하기', () => {
     assert.equal(leftoverWork('보고\n\n⑧ **다음**\n- 제가 할 일: 퀴즈 문서 정리를 시작합니다.'), true);
     assert.equal(leftoverWork('보고\n\n**⑧ 다음(이번 묶음 뒤)**\n1. AI: 커밋하고 4회차를 돌립니다.\n2. 대표님: 없습니다.'), true);
     assert.equal(leftoverWork('보고\n\n**⑧ 다음**\n- AI 몫: 3단계를 시작합니다.\n- 대표님 몫: 없습니다.'), true);
+  });
+  it('사용자 몫이 push나 배포 지시뿐이면 참이고, 다른 몫이 섞이면 거짓이다(2026-11-07 진행합니다 하고 멈춤)', () => {
+    assert.equal(leftoverWork('보고\n\n⑧ 다음\n- AI: 혼자 하기를 공통 판단으로 옮기고 멀티 판 순서로 진행합니다.\n- 대표: push 지시(main에 광고 커밋 셋이 쌓여 있습니다).'), true);
+    assert.equal(leftoverWork('보고\n\n⑧ 다음\n- AI: 결과 화면을 이어 고칩니다.\n- 대표: 배포할지 정해 주세요.'), true);
+    assert.equal(leftoverWork('보고\n\n⑧ 다음\n- AI: 결과 화면을 이어 고칩니다.\n- 대표: push 지시. 카드 폭을 골라 주세요.'), false);
+    assert.equal(leftoverWork('보고\n\n⑧ 다음\n- AI: 11-08에 운영 오류 기록을 견줍니다.\n- 대표: push 지시.\n- 기다림: push 지시'), false);
+    assert.equal(leftoverWork('보고\n\n⑧ 다음\n- AI: 배포 뒤 첫 주간 분석에서 녹화 보는 법을 더하겠습니다.\n- 대표: 배포 승인에 답해 주시면 됩니다.'), false);
   });
   it('사용자 몫이 아래 목록에 있거나, 조건이 걸렸거나, 끝냈다고 했거나, 기다림 줄, 정할 것, 한도가 있으면 거짓이다(리뷰 11~14번)', () => {
     assert.equal(leftoverWork('보고\n\n**⑧ 다음**\n- AI: 안을 만듭니다.\n- 대표님이 하실 일\n  - a와 b 가운데 하나를 골라 주세요.'), false);

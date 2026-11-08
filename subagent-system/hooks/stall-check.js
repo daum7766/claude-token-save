@@ -8,6 +8,7 @@
  *  - 예약 정리: 도는 실무자가 없는데 깨우는 예약이 남았으면 지우게 한다. 사용자가 건 예약(/loop 등)은 건드리지 않는다.
  *  - 결과 늦음과 멈춘 듯: 끝난 이름 붙인 실무자의 끝 메시지가 안 닿았으면 그 마지막 답을 실어 알리고, 기록이 20분 넘게 그대로인 실무자는 거두게 한다.
  *  - 이어 하기: 답 끝 「다음」에 AI 할 일이 남았고 사용자 몫이 없고 도는 일도 없으면, 멈추지 말고 이어 하게 한다.
+ *    사용자 몫이 push나 배포 지시뿐이면 AI 할 일을 막지 않는 따로 기다림이라 몫이 없는 것으로 본다.
  * 왜: 2026-10-29~11-06 대화 기록에서 사용자 입력 없이 이어 했어야 할 시간이 약 830분이었다. 이름 붙인 실무자의 끝 메시지가 8시간 늦게 닿았고
  *   멈춘 실무자를 「도는 중」으로 믿고 기다렸으며(11-05, 약 490분), 「AI: 5단계 2번을 시작합니다, 대표: 없음」으로 보고하고 멈췄다(11-06, 226분).
  *   예약은 메인이 쉬는 동안에만 울려 알림이 늦어도 메인을 깨운다. 이름 없는 실무자는 끝 알림이 늦은 적이 없어(885건) 멈춘 경우만 잡는 한 번짜리로 둔다.
@@ -33,6 +34,7 @@ const CHECK_IN = '<check-in>';
 const AGENT_TYPES = /^(?:subagent|teammate|workflow|in_process_teammate|local_agent|remote_agent)$/;
 const LIVE = /^(?:running|pending)$/;
 const STUCK_MIN = 20;
+const LATE_GRACE_MS = 5 * 60000;
 const LONG_LIVED = /\b(?:dev|serve|preview|watch|start)\b|tail\s+-[fF]|--watch/;
 
 // 남을 기다리는 조건(사용자 답, 실무자 결과)과 제 일의 순서(「커밋이 되면」)를 가른다. 뒤쪽은 같은 문장이 바로 하는 끝맺음이면 할 일로 본다(리뷰 2회차 4번).
@@ -41,6 +43,9 @@ const WAITS_SELF = /(끝나면|되면)/;
 const NOW_VERB = /(시작합니다|띄웁니다|이어 갑니다|짭니다|만듭니다|고칩니다)\s*\.?\s*$/;
 const NOTHING = /할 (?:일|것)(?:은|이)? ?(?:따로 )?없|하실 (?:일|것)(?:은|이)? ?(?:따로 )?없|^(?:지금은? |더 )?없(?:습니다|음|어요)|(?:모두|다) (?:끝냈|마쳤)습니다|대기합니다/;
 const ASKS = /(골라|정해|답해|알려|말씀해|승인해|확인해) ?주세요|여쭙/;
+const PARALLEL = /push|푸시|배포/i;
+// 날짜를 정한 할 일과 배포 뒤에 할 일은 지금 이어 할 일이 아니다.
+const LATER = /^(?:(?:\d{1,2}-\d{1,2}|\d{1,2}월 ?\d{1,2}일|내일|모레|다음 주)(?:에|부터|쯤)|(?:배포|push|푸시)\S{0,3} ?(?:뒤|후|되면))/i;
 
 // 「다음」 머리 줄을 찾고, 그 아래에서 AI 줄과 사용자 줄의 내용(같은 줄 뒤와 들여쓴 아래 줄)을 꺼낸다.
 const HEAD = /(?:^|\n)[ \t]*(?:#{1,4}[ \t]+)?(?:\*\*)?(?:⑧[ \t]*)?(?:\*\*)?다음(?:\([^)\n]*\))?(?:\*\*)?[ \t]*[:：]?[ \t]*(?:\*\*)?[ \t]*(?=\n)/g;
@@ -69,11 +74,14 @@ function leftoverWork(text) {
   const user = items.find((x) => /^(?:대표|사용자)/.test(x.who));
   if (!ai || !ai.body) return false;
   const a = firstSentence(ai.body);
-  if (NOTHING.test(a) || WAITS_ON.test(a) || (WAITS_SELF.test(a) && !NOW_VERB.test(a))) return false;
+  if (NOTHING.test(a) || WAITS_ON.test(a) || LATER.test(ai.body.trim()) || (WAITS_SELF.test(a) && !NOW_VERB.test(a))) return false;
   if (!user) return true;
+  // push와 배포 지시는 AI 할 일과 따로 기다리는 몫이라 사용자 몫에서 뺀다(2026-11-07 「진행합니다」 뒤 대표 줄에 push 지시만 있어 두 번 멈춤).
+  const parts = user.body.split(/(?<=[.!?])\s+|\n/).filter((x) => x.trim() && !PARALLEL.test(x));
+  if (user.body && !parts.length) return true;
   // 사용자에게 묻는 문장은 몫 전체에서 찾되, 「~시면 말씀해 주세요」 같은 조건부 안내는 묻는 것으로 보지 않는다.
-  const asks = user.body.split(/(?<=[.!?])\s+|\n/).some((x) => ASKS.test(x) && !/시면/.test(x));
-  return !!user.body && NOTHING.test(firstSentence(user.body)) && !asks;
+  const asks = parts.some((x) => ASKS.test(x) && !/시면/.test(x));
+  return !!user.body && NOTHING.test(firstSentence(parts.join(' '))) && !asks;
 }
 
 const stateFile = (sid) => path.join(os.tmpdir(), `stall-check-${String(sid || 'none').replace(/[^\w-]/g, '')}.json`);
@@ -160,11 +168,15 @@ function agentRecords(transcriptPath) {
   return out;
 }
 // 메인 기록 끝에 그 실무자의 메시지가 끝맺은 시각 뒤로 닿았나. 끝 메시지가 몇 시간 늦게 닿은 일이 있어서다(11-05 checklist-judge2, 8시간).
+// 실무자가 끝맺기 직전에 직접 보낸 보고(agent-message)도 닿은 것으로 센다. 세지 않으면 이미 받은 보고를 또 실어 같은 보고가 두세 번 온다(11-07).
+// 끝맺기 1분보다 앞선 보고는 중간 보고일 수 있어 세지 않는다(11-07 실측: 마지막 보고는 끝맺기 2~15초 전).
+const SENT_BEFORE_END_MS = 60_000;
 function delivered(transcriptPath, name, ended, tail) {
-  const mark = `teammate_id=\\"${name}\\"`;
+  const marks = [[`teammate_id=\\"${name}\\"`, 5000], [`agent-message from=\\"${name}\\"`, SENT_BEFORE_END_MS]];
   for (const line of tail) {
-    if (!line.includes(mark)) continue;
-    try { if (Date.parse(JSON.parse(line).timestamp) >= ended - 5000) return true; } catch { /* 잘린 줄 */ }
+    const hit = marks.find(([mark]) => line.includes(mark));
+    if (!hit) continue;
+    try { if (Date.parse(JSON.parse(line).timestamp) >= ended - hit[1]) return true; } catch { /* 잘린 줄 */ }
   }
   return false;
 }
@@ -216,9 +228,17 @@ function check(input, now = new Date()) {
     const d = String(t.description || '').trim();
     const rec = recs.get(d);
     if (!rec || !rec.ended || tms.filter((x) => String(x.description || '').trim() === d).length > 1) continue;
-    idle.add(t);
     const tag = `${rec.name}:${rec.ended}`;
-    if (!(st.got || []).includes(tag) && !delivered(input.transcript_path, rec.name, rec.ended, (tail ??= tailLines(input.transcript_path)))) {
+    let seen = (st.got || []).includes(tag);
+    // 닿은 것을 본 때 기억한다. 기억하지 않으면 대화가 길어져 그 줄이 읽는 끝부분에서 밀려난 뒤 같은 보고를 또 싣는다(11-07)
+    if (!seen && delivered(input.transcript_path, rec.name, rec.ended, (tail ??= tailLines(input.transcript_path)))) {
+      seen = true;
+      (st.got ||= []).push(tag);
+    }
+    // 끝맺은 지 얼마 안 됐으면 끝 알림이 곧 닿으니 마지막 답을 싣지 않고 기다리는 실무자로 둔다. 실으면 뒤이어 끝 알림이 또 닿아 같은 보고가 두 번 온다(11-07).
+    if (!seen && now.getTime() - rec.ended < LATE_GRACE_MS) continue;
+    idle.add(t);
+    if (!seen) {
       late.push(rec);
       (st.got ||= []).push(tag);
     }

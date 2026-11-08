@@ -4,7 +4,7 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { missingBundles } from './fixtures/installedLayout.js';
+import { missingBundles, partialKit } from './fixtures/installedLayout.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -210,7 +210,7 @@ describe('설치 바닥 빈 폴더 설치', { skip: SKIP }, () => {
     for (const [bundle, cfg] of installs) assertSuiteClean(`${bundle}만 깐 설치`, results.get(cfg));
   });
 
-  it('U5-3 모든 묶음과 기본 항목을 깔면 옛 설치 목록(caa02fe)의 파일이 모두 놓이고 훅 등록이 정의와 같으며, 설치본 시험 전체가 실패 0이다', { timeout: 600000, skip: missingBundles('company', 'feedback', 'routing', 'work-backlog', 'work-docs', 'work-git', 'work-paths', 'work-review', 'work-tests') }, async () => {
+  it('U5-3 모든 묶음과 기본 항목을 깔면 옛 설치 목록(caa02fe)의 파일이 모두 놓이고 훅 등록이 정의와 같으며, 설치본 시험 전체가 실패 0이다', { timeout: 600000, skip: partialKit() }, async () => {
     const cfg = tmp('all');
     setupJson(cfg, ['install', '--kit', kit, '--profile', 'personal', '--bundles', 'all', '--options', 'default']);
     const defs = KIT_DEFS();
@@ -333,6 +333,31 @@ describe('로컬 조각이 있는 설치', { skip: SKIP }, () => {
     delete config.kitSourcePath;
     fs.writeFileSync(file, JSON.stringify(config));
     assert.notEqual(run('source-of', 'subagent-system/scripts/kitMerge.js').status, 0);
+  });
+
+  it('U5-18 unowned는 키트 원본을 몰라도 키트 조각과 로컬 조각에 들지 않은 방법 파일만 찍고, --mark 뒤에는 새로 생긴 것만 새것으로 찍는다', () => {
+    const cfg = installWithDemo();
+    const file = path.join(cfg, 'subagent-system', 'config.json');
+    const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete config.kitSourcePath;
+    fs.writeFileSync(file, JSON.stringify(config));
+    const installed = path.join(cfg, 'subagent-system', 'scripts', 'kit-setup.js');
+    const records = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-unowned-rec-'));
+    const run = (...args) => {
+      const r = spawnSync(process.execPath, [installed, 'unowned', ...args], { env: { ...cleanEnv(), CLAUDE_CONFIG_DIR: cfg, SUBAGENT_RECORDS_DIR: records }, encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const put = (rel) => {
+      fs.mkdirSync(path.dirname(path.join(cfg, rel)), { recursive: true });
+      fs.writeFileSync(path.join(cfg, rel), 'x\n');
+    };
+    put('docs/code/MY_FLOW.md');
+    put('docs/plan/some-decision.md');
+    const first = run('--mark');
+    assert.deepEqual(first.new, ['docs/code/MY_FLOW.md']);
+    put('rules/my-rule.md');
+    assert.deepEqual(run().new, ['rules/my-rule.md']);
   });
 
   it('U5-13 remove로 뺀 로컬 묶음은 update, sync, add를 거쳐도 되살아나지 않고, 다른 묶음의 로컬 조각은 그대로다', { timeout: 300000, skip: missingBundles('work-git') }, () => {

@@ -30,7 +30,7 @@ export function parseFixes(text) {
     if (c[0] === '시각' || c.length < 9) return [];
     const anchor = /^\d+$/.test(c[7]) ? Number(c[7]) : null;
     const ok = !Number.isNaN(Date.parse(c[0])) && ['전역', '프로젝트'].includes(c[2]) && FIX_SIGNALS.includes(c[3]) && c[4] && FIX_HOWS.includes(c[6]) && anchor !== null;
-    return ok ? [{ at: c[0], project: c[1], scope: c[2], signal: c[3], label: c[4], where: c[5], how: c[6], anchor, memo: c.slice(8).join('\t') }] : [];
+    return ok ? [{ at: c[0], project: c[1], scope: c[2], signal: c[3], label: c[4], where: c[5], how: c[6], anchor, memo: c[8], root: c[9] ?? '' }] : [];
   });
 }
 

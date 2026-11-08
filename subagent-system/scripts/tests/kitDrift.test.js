@@ -231,6 +231,7 @@ describe('kit-setup.js sync', { skip: SKIP }, () => {
     assert.equal(get(cfg, 'subagent-system/config.json'), configBefore);
     assert.equal(get(cfg, 'subagent-system/VERSION'), '2026.11.1\n');
     assert.ok(r.counts.overwritten >= 3);
+    assert.deepEqual(r.files.filter((f) => f.localEdit).map((f) => f.key), ['subagent-system/docs/SUBAGENT_SITUATIONS.md']);
     const after = diff(cfg);
     assert.equal(after.counts['installed-only'] + after.counts.both + after.counts['kit-ahead'], 0);
     assert.equal(after.counts['installed-zone'], 2);
@@ -256,6 +257,25 @@ describe('kit-setup.js sync', { skip: SKIP }, () => {
     ok(kitRun(cfg2, ['sync']));
     assert.equal(baks(path.join(cfg2, 'subagent-system/docs')).length, 0, '깨끗한 git 추적 파일은 백업 없음');
     assert.equal(get(cfg2, 'subagent-system/docs/SUBAGENT_SITUATIONS.md'), '# 상황별\n\n키트 줄\n');
+  });
+
+  it('add가 건너뛴 사용자 파일은 sync가 덮지 않고 user-file로 알리며 사용자가 지우면 키트 판을 놓는다', () => {
+    const { kit, cfg } = setup();
+    const lockFile = path.join(cfg, 'subagent-system/bundles.lock.json');
+    const lock = JSON.parse(get(cfg, 'subagent-system/bundles.lock.json'));
+    lock.userFiles = ['subagent-system/docs/RETRO.md'];
+    fs.writeFileSync(lockFile, JSON.stringify(lock, null, 2));
+    put(cfg, 'subagent-system/docs/RETRO.md', '# 내가 만든 회고\n');
+    put(kit, 'subagent-system/docs/RETRO.md', '# 회고\n\n새 내용\n');
+    commitAll(kit, 'kit moves');
+    const r = ok(kitRun(cfg, ['sync']));
+    assert.equal(r.files.find((f) => f.key.endsWith('docs/RETRO.md')).status, 'user-file');
+    assert.equal(get(cfg, 'subagent-system/docs/RETRO.md'), '# 내가 만든 회고\n');
+    assert.deepEqual(JSON.parse(get(cfg, 'subagent-system/bundles.lock.json')).userFiles, ['subagent-system/docs/RETRO.md']);
+    fs.rmSync(path.join(cfg, 'subagent-system/docs/RETRO.md'));
+    ok(kitRun(cfg, ['sync']));
+    assert.equal(get(cfg, 'subagent-system/docs/RETRO.md'), '# 회고\n\n새 내용\n');
+    assert.equal(JSON.parse(get(cfg, 'subagent-system/bundles.lock.json')).userFiles, undefined);
   });
 
   it('--dry-run은 아무것도 쓰지 않는다', () => {
@@ -465,7 +485,7 @@ describe('kit-setup.js descriptions와 update의 description', { skip: SKIP }, (
 
 describe('커밋 때 검사(pre-commit과 kit-setup.js check-staged)', { skip: SKIP }, () => {
   const hooks = (cfg) => path.join(cfg, 'subagent-system/hooks/git');
-  const commit = (cfg, env = {}) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x'], { cwd: cfg, env: { ...gitEnv(), CLAUDE_CONFIG_DIR: cfg, ...env }, encoding: 'utf8' });
+  const commit = (cfg, env = {}, msg = 'x') => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg], { cwd: cfg, env: { ...gitEnv(), CLAUDE_CONFIG_DIR: cfg, ...env }, encoding: 'utf8' });
   const armed = (opts) => {
     const s = setup(opts);
     gitOk(s.cfg, 'init', '-q');
@@ -491,7 +511,7 @@ describe('커밋 때 검사(pre-commit과 kit-setup.js check-staged)', { skip: S
     assert.match(r.stderr, /원본\(kitSourcePath\)에 같은 고침을 커밋한 뒤 kit-setup\.js sync/);
     assert.match(r.stderr, /설치 값 자리/);
     assert.match(r.stderr, /KIT_DRIFT_SKIP=1/);
-    assert.equal(commit(cfg, { KIT_DRIFT_SKIP: '1' }).status, 0, '환경 변수로 한 번 건너뜀');
+    assert.equal(commit(cfg, { KIT_DRIFT_SKIP: '1' }, 'x\n\n키트 2026.11.8.11에 올림').status, 0, '환경 변수로 한 번 건너뜀');
   });
 
   it('원본에 같은 고침을 커밋하면 통과하고, 설치 값 자리(체크리스트 절, 정의 description)만 고친 것도 통과한다', () => {

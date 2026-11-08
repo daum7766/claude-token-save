@@ -25,6 +25,13 @@ export function missingFiles(...keys) {
 
 // 이 묶음이 키트 원본에 모두 있으면 false, 아니면 건너뛰기 까닭. 묶음 일부만 내보낸 공개판 원본에서 빠진 묶음을 가리키는 시험을 가린다.
 // 설치본 배치는 NOT_KIT_SOURCE 쪽이 가리므로 여기서는 키트 원본일 때만 판정한다.
+// 묶음 일부만 든 키트(공개판처럼 bundles/omitted.json이 있는 트리)이면 건너뛸 까닭, 온전한 키트 원본이면 false.
+// 「모든 묶음」을 보는 시험이 묶음 이름을 하나하나 적지 않게 하려는 것이다(묶음이 늘 때마다 목록을 고쳐야 했다).
+export function partialKit() {
+  if (!IS_KIT_SOURCE) return false;
+  return fs.existsSync(path.join(ROOT, 'bundles', 'omitted.json')) ? '묶음 일부만 든 키트' : false;
+}
+
 export function missingBundles(...names) {
   if (!IS_KIT_SOURCE) return false;
   const missing = names.filter((n) => !fs.existsSync(path.join(ROOT, 'bundles', n, 'bundle.json')));

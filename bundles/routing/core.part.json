@@ -21,13 +21,16 @@
     "subagent-system/scripts/main-session-cost.js",
     "subagent-system/scripts/transcriptTiming.js",
     "subagent-system/scripts/work-metrics.js",
+    "subagent-system/scripts/docHealth.js",
     "subagent-system/hooks/brief-check.js",
     "subagent-system/hooks/usage-autolog.js",
     "subagent-system/hooks/retro-write-allow.js",
     "subagent-system/hooks/stall-check.js",
+    "subagent-system/hooks/git/pre-commit.d/20-moved-refs.cjs",
     "subagent-system/scripts/tests/agentCostTime.test.js",
     "subagent-system/scripts/tests/briefCheck.test.js",
     "subagent-system/scripts/tests/kitMerge.test.js",
+    "subagent-system/scripts/tests/movedRefs.test.js",
     "subagent-system/scripts/tests/routingTable.test.js",
     "subagent-system/scripts/tests/speedReview.test.js",
     "subagent-system/scripts/tests/subagentCli.test.js",
@@ -35,6 +38,7 @@
     "subagent-system/scripts/tests/transcriptTiming.test.js",
     "subagent-system/scripts/tests/usageAutolog.test.js",
     "subagent-system/scripts/tests/workMetrics.test.js",
+    "subagent-system/scripts/tests/docHealth.test.js",
     "subagent-system/scripts/tests/retroWriteAllow.test.js",
     "subagent-system/scripts/tests/stallCheck.test.js"
   ],
@@ -69,6 +73,13 @@
       "timeout": 10
     },
     {
+      "name": "handoff-check",
+      "event": "PreToolUse",
+      "matcher": "SendMessage",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/brief-check.js\"",
+      "timeout": 10
+    },
+    {
       "name": "retro-write-allow",
       "event": "PermissionRequest",
       "matcher": "Write|Edit|MultiEdit|NotebookEdit",
@@ -86,5 +97,12 @@
       "timeout": 10
     }
   ],
-  "gitHooks": []
+  "gitHooks": [
+    {
+      "hook": "pre-commit",
+      "name": "moved-refs",
+      "order": 20,
+      "file": "subagent-system/hooks/git/pre-commit.d/20-moved-refs.cjs"
+    }
+  ]
 }

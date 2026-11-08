@@ -1,7 +1,7 @@
 // 무엇: 키트 문서가 가리키는 것이 실제로 있는지 본다(`docs/TESTING.md` 「문서 계약 시험」).
 //   (1) 문서의 백틱 `--플래그`가 키트 스크립트와 훅에 있다. 스크립트 이름이 같은 백틱 안에 있으면 그 스크립트에서 찾는다.
 //   (2) APPLY_GUIDE 「개인용과 회사용」 표의 첫 칸 `(키)`가 kit-setup.js나 kitProfile.js에 있다.
-//   (3) 문서의 백틱 `이름.js`가 scripts/나 hooks/에 있다.
+//   (3) 문서의 백틱 `이름.js`가 scripts/나 hooks/에 있다(스킬이 프로젝트에 두라고 하는 스크립트는 견본 이름으로 본다).
 //   (4) `<문서> 「<절>」` 꼴 가리킴이 그 문서의 제목에 있다. 문서 이름은 README가 아닌 키트 문서 이름이거나 GUIDE, RETRO 같은 줄임말이다.
 //   (5) kit-setup.js가 JSON으로 내는 최상위 키(report.X, gitAsk.X 가운데 camelCase)가 APPLY_GUIDE에 나온다.
 //       스크립트가 알려 주는데 문서가 받지 않으면 Claude가 사용자에게 전하지 못한다.
@@ -53,6 +53,12 @@ const SCRIPT_DIRS = [path.join(SUB, 'scripts'), path.join(SUB, 'hooks')];
 const SCRIPT_FILES = SCRIPT_DIRS.flatMap((d) => listFiles(d, '.js'));
 const scriptText = new Map(SCRIPT_FILES.map((f) => [path.basename(f), read(f)]));
 const ALL_SCRIPT_TEXT = [...scriptText.values()].join('\n');
+// 스킬이 프로젝트 scripts/에 두라고 하는 스크립트의 이름. 스킬 견본(skills/*/templates/*.js)의 이름과, 견본 없이 인터페이스만 정해 프로젝트가 만들게 하는 capture-screenshot.js다.
+const SKILLS_DIR = path.join(SUB, 'skills');
+const TEMPLATE_NAMES = fs.existsSync(SKILLS_DIR)
+  ? fs.readdirSync(SKILLS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).flatMap((e) => listFiles(path.join(SKILLS_DIR, e.name, 'templates'), '.js').map((f) => path.basename(f)))
+  : [];
+const PROJECT_SIDE = new Set([...TEMPLATE_NAMES, 'capture-screenshot.js']);
 // 설치 문서는 `<kit-setup>`으로 kit-setup.js를 줄여 쓴다.
 const ALIAS_SCRIPT = { '<kit-setup>': 'kit-setup.js' };
 
@@ -61,8 +67,8 @@ const rel = (f) => path.relative(REPO, f);
 
 // 바깥 도구가 받는 플래그(키트 스크립트에 없다). 문서에 새로 쓰면 여기에 더한다.
 const OUTSIDE_FLAGS = new Set(['--help', '--expose-internals', '--test', '--test-reporter', '--settings', '--json', '--local', '--marketplace', '--values-stdin', '--continue', '--config', '--debug', '--get', '--unset']);
-// 바깥 도구(git, claude)의 플래그를 설명하는 문서라, 키트 스크립트 이름이 함께 없는 플래그는 보지 않는다.
-const EXTERNAL_DOC = (f) => /skills\/git-work\//.test(f.split(path.sep).join('/')) || path.basename(f) === 'BACKGROUND.md';
+// 바깥 도구(git, claude, 브라우저 자동화)와 프로젝트 쪽 스크립트(스킬 견본을 복사해 둔 것, 캡처 스크립트)의 플래그를 설명하는 문서라, 키트 스크립트 이름이 함께 없는 플래그는 보지 않는다.
+const EXTERNAL_DOC = (f) => /skills\/(git-work|screenshot-attach|before-after-report|mobile-check)\//.test(f.split(path.sep).join('/')) || ['BACKGROUND.md', 'BROWSER_CHECK.md'].includes(path.basename(f));
 
 describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 스크립트 플래그', { skip: SKIP }, () => {
   it('백틱 안의 --플래그는 키트 스크립트나 훅에 있고, 스크립트 이름이 함께 있으면 그 스크립트에 있다', () => {
@@ -105,7 +111,7 @@ describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 설�
           const name = path.basename(m[1]);
           // 프로젝트 쪽 예시(tool.js 같은 가상 이름)가 아니라 키트 스크립트 이름 꼴만 본다: 하이픈이 든 이름이나 scripts/hooks 경로.
           if (!/-/.test(name) && !/(^|\/)(scripts|hooks)\//.test(m[1])) continue;
-          if (!scriptText.has(name)) missing.push(`${rel(f)}: ${m[1]}`);
+          if (!scriptText.has(name) && !PROJECT_SIDE.has(name)) missing.push(`${rel(f)}: ${m[1]}`);
         }
       }
     }

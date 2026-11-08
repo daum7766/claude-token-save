@@ -189,6 +189,15 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP || NO_WHY
     assert.equal(commit('\n대조: overhaul.md 뺀 것 행').status, 0);
   });
 
+  it('결정 문서에 1,000자가 넘는 표 행을 넣으면 막고, 다른 문서나 표가 아닌 줄은 길어도 통과한다', () => {
+    const { checkRowLength } = require(WHY);
+    const long = `| 항목 | ${'가'.repeat(1000)} |`;
+    assert.match(checkRowLength(['d.md'], [['d.md', long]]), /1000자가 넘는 표 행/);
+    assert.equal(checkRowLength(['d.md'], [['a.md', long]]), null);
+    assert.equal(checkRowLength(['d.md'], [['d.md', '가'.repeat(1200)]]), null);
+    assert.equal(checkRowLength(['d.md'], [['d.md', `| 항목 | ${'가'.repeat(900)} |`]]), null);
+  });
+
   it('결정어는 config.json decisionWords를 따른다', () => {
     const { checkDecision } = require(WHY);
     const added = [['a.md', '- 정함(2026-10-31 팀장)']];

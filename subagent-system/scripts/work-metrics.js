@@ -8,6 +8,7 @@
  *   lint                         고침 기록 메모의 표시로 센 검수 지적의 기계화 비율과 린트 규칙별 효과
  *   docs                         저장소별 날짜별 문서(.md) 줄과 파일 증감, 지금 총량(문서가 늘기만 하는지 보려고)
  *   waste                        회고 때 재는 낭비 넷(막는 장치 시간, 문서 읽기 비용, 문서 순증, 대화 낭비)
+ *   health                       문서 상태 점검(다 쓴 기록, 멈춘 진행 기록, 부푼 문서, 끊긴 경로, 재기만 하는 지표, 메모리)의 후보와 증거
  * 자세한 사용법은 인자 없이 실행하면 나온다.
  */
 import fs from 'node:fs';
@@ -32,6 +33,7 @@ import {
 } from './claudeProjectPaths.js';
 import { loadRates, toCounts, cost, lastLinePerRequest } from './subagent-usage.js';
 import { jsonlRows, analyzeTranscript } from './transcriptTiming.js';
+import { repoTop, analyzeRepo, analyzeMemory, compareMetrics, appendHistory, healthHistoryFile, totalsHistory, countsOf, formatHealth } from './docHealth.js';
 
 const require = createRequire(import.meta.url);
 const lockApi = require('./kitInstalled.cjs');
@@ -53,6 +55,7 @@ const USAGE = [
   '  docs [--repo <저장소>]... [--days 7]  (--repo를 빼면 지금 폴더의 저장소와 설정 폴더)',
   '예산은 GUIDE 「기록과 회고」의 예산 문턱(서브에이전트를 띄우거나 도구 호출이 열 번 넘을 것으로 어림되는 작업)을 넘는 일에만 잰다. budget start는 일을 정한 뒤 서브에이전트를 띄우기 전에, budget end는 최종 보고 직전에 부른다. 어림은 budget list의 비슷한 지난 작업 실제값으로 잡는다. budget start는 같은 프로젝트에서 최근 끝난 작업(3건 이상)의 실제 토큰 중앙값의 10분의 1보다 작은 어림을 받지 않는다(정말 작은 일이면 --force). 사용 기록의 토큰 열은 마지막 요청 하나의 문맥 크기라 요청마다 더한 이 토큰과 단위가 다르니, 쓰려면 에이전트마다 토큰 열 × 도구 호출 수 ÷ 2로 바꿔 더하고 메인 몫을 얹는다(문맥이 고르게 자란다는 어림. 토큰 열을 그대로 더한 어림은 45~190배 모자랐다).',
   '  waste [--since YYYY-MM-DD 또는 ISO 시각] [--days 7] [--repo <저장소>]...  (회고 때 낭비 넷: 막는 장치 비용, 문서 읽기 비용, 문서 순증, 대화 낭비. 아무것도 쓰지 않음)',
+  '  health [--repo <저장소>]... [--memory <메모리 폴더>]... [--days 3] [--json] [--record]  (문서 상태 점검: 다 쓴 작업 기록 후보, 멈춘 진행 기록, 부푼 문서, 끊긴 경로, 재기만 하는 지표, 메모리의 후보와 증거. 후보일 뿐 판정은 사람이 한다. 쓰는 것은 없고, 처음 보는 지표의 값과 --record를 줬을 때의 지표 값만 기록 폴더의 health-history.tsv에 남긴다)',
   'budget end는 실제가 어림의 --over배 이상이면 넘음, --under배 이하면 덜 듦으로 적고, 이 둘이면 원인을 --cause나 budget cause로 남긴다. 세션을 못 찾으면 --session <id>를 준다.',
   '시작과 끝의 짝이 안 맞은 작업은 budget list에 열린 작업으로 보이니 같은 이름을 다시 쓰려면 먼저 끝낸다. unused와 asks는 회고 준비가 돌려 지울 후보와 질문 수를 보는 것이라 메인이 평소에 부르지 않는다.',
   '토큰은 입력, 캐시 쓰기, 캐시 읽기, 출력의 합이다. 시간은 사용자를 기다린 시간을 뺀 초다. 기록은 기록 폴더(subagent-retro.js --where)에 쌓인다.',
@@ -987,6 +990,32 @@ async function waste(flags) {
   console.log(`\n④ 대화 낭비\n  사용자 차례 ${conv.turns}개 가운데 같은 말 되풀이 ${conv.repeats}개, 「다시」 꼴 ${conv.again}개`);
 }
 
+// 문서 상태 점검. 후보와 증거만 찍고 문서는 건드리지 않는다. 기록은 지표 값(health-history.tsv)뿐이다.
+function health(flags) {
+  const days = number(flags, 'days', 3);
+  const repos = [...new Set((flags.repo ?? [process.cwd(), CLAUDE_DIR]).map(repoTop).filter(Boolean))];
+  if (!repos.length) fail('git 저장소를 찾지 못했습니다. --repo <저장소>를 주세요.');
+  const now = Date.now();
+  const results = repos.map((repo) => {
+    const net = docNet(repo, 7);
+    return analyzeRepo(repo, { days, now, projectsRoot: PROJECTS_ROOT, extraMetrics: { '최근 7일 문서 순증 줄': net.add - net.del } });
+  });
+  const metrics = Object.assign({}, ...results.map((r) => r.metrics));
+  const historyFile = healthHistoryFile(RECORDS_DIR);
+  const { rose, fresh } = compareMetrics(metrics, historyFile);
+  const since = Date.parse(totalsHistory(historyFile).at(-1)?.at ?? '') || 0;
+  const memories = (flags.memory ?? []).map((m) => analyzeMemory(path.resolve(m), { repos, now, since }));
+  const result = { repos: results, memories, rose, seeded: fresh };
+  const stamp = new Date(now).toISOString();
+  const toWrite = flags.record !== undefined ? Object.entries(metrics) : fresh.map((f) => [f.key, f.value]);
+  appendHistory(historyFile, toWrite.map(([k, v]) => [stamp, '지표', k, v, '']));
+  if (flags.json !== undefined) {
+    const { counts, total } = countsOf(result);
+    return console.log(JSON.stringify({ ...result, repos: results.map(({ metrics: _m, ...r }) => r), counts, total }, null, 2));
+  }
+  console.log(formatHealth(result, { days }));
+}
+
 async function main() {
   const { _: pos, flags } = parseArgs(process.argv.slice(2));
   if (flags.help) return console.log(USAGE);
@@ -1002,6 +1031,7 @@ async function main() {
   if (cmd === 'lint') return lint(flags);
   if (cmd === 'docs') return docs(flags);
   if (cmd === 'waste') return waste(flags);
+  if (cmd === 'health') return health(flags);
   fail(USAGE);
 }
 

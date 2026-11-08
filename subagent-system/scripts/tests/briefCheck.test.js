@@ -311,3 +311,58 @@ describe('지시문 검사 훅 brief-check', () => {
     assert.ok(rows.find((x) => x.name === '코드 정리 검토' && x.model === 'sonnet' && x.effort === 'medium'));
   });
 });
+
+describe('실무자에게 커밋을 시키는 지시 가르기', () => {
+  const { gitStateAsk } = createRequire(import.meta.url)(HOOK);
+  it('하지 말라는 문장과 「」 인용 안의 커밋 말은 시키는 것으로 보지 않는다', () => {
+    // 2026-11-08 오탐 두 건: 금지 문장 속 명령 이름, 만들 훅이 찍을 안내 문구.
+    assert.equal(gitStateAsk('임시 폴더에 `git worktree add --detach x`로 만들지 말고 함수를 걸어 본다.'), false);
+    assert.equal(gitStateAsk('안내 「새 자리로 고친 뒤 다시 커밋한다」를 찍는다.'), false);
+    assert.equal(gitStateAsk('결정 문서 a.md 를 읽되 `git commit`은 쓰지 않는다.'), false);
+  });
+  it('지시문에 커밋은 메인이 한다고 적혀 있으면 다른 문장의 커밋 말도 통과한다', () => {
+    assert.equal(gitStateAsk('고친 뒤 커밋한다.\n커밋은 메인이 한다.'), false);
+  });
+  it('실무자에게 커밋이나 워크트리 만들기를 시키면 잡는다', () => {
+    assert.equal(gitStateAsk('다 고치면 `git commit -m x`로 남긴다.'), true);
+    assert.equal(gitStateAsk('끝나면 커밋한다.'), true);
+    // 커밋은 메인이 한다고 적어도 워크트리 만들기를 시키면 잡는다(실제 지시문 두 건).
+    assert.equal(gitStateAsk('세션 워크트리: `git worktree add -q .claude/worktrees/x -b wt/x main`\n커밋은 메인이 한다.'), true);
+  });
+});
+
+describe('다른 세션에 일을 넘기는 메시지', () => {
+  const { handoffProblems } = createRequire(import.meta.url)(HOOK);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-'));
+  it('넘김 문서의 넘김 절에 목표 줄이 없으면 막는다', () => {
+    const f = path.join(tmp, 'a.md');
+    fs.writeFileSync(f, '목표: 앞 절의 목표\n## 넘김\n할 일: 1. 고친다\n');
+    assert.equal(handoffProblems({ to: 'kit-session', message: `정리를 넘깁니다. 넘김 문서: ${f}` }).length, 1);
+  });
+  it('넘김 절이나 메시지에 목표 줄이 있으면 통과한다', () => {
+    const f = path.join(tmp, 'b.md');
+    fs.writeFileSync(f, '## 넘김\n목표: 두 벌이 갈리지 않게 한다\n할 일: 1.\n');
+    assert.deepEqual(handoffProblems({ to: 'kit-session', message: `넘깁니다: ${f}` }), []);
+    assert.deepEqual(handoffProblems({ to: 'kit-session', message: '넘깁니다.\n목표: 끝낸다' }), []);
+  });
+  it('실무자에게 보내는 이어 말과 넘김이 아닌 메시지는 보지 않는다', () => {
+    assert.deepEqual(handoffProblems({ to: 'a7f17c342defcf26c', message: '넘김 절을 고쳐라' }), []);
+    assert.deepEqual(handoffProblems({ to: 'kit-session', message: '오탐 두 건을 알립니다' }), []);
+  });
+});
+
+describe('고치는 일의 끝난 기준에 전체 시험만 주는 지시', () => {
+  const { fullTestOnly } = createRequire(import.meta.url)(HOOK);
+  const base = '할 일: 훅을 고친다.\n끝난 기준: 키트 시험(`node --test tests/*.test.js`) EXIT=0.';
+  it('중간 확인도 끝에 한 번도 없으면 잡는다', () => {
+    // 전체 시험 명령만 주면 실무자가 고칠 때마다 한 번에 10분짜리를 돌린다(2026-11-08).
+    assert.equal(fullTestOnly(base, '구현과 문서: 훅 고치기'), true);
+  });
+  it('전체는 끝에 한 번이라고 적었거나 고친 파일의 시험을 따로 적으면 통과한다', () => {
+    assert.equal(fullTestOnly(base + '\n작업 중에는 고친 파일의 시험만 돌리고 전체는 끝에 한 번.', '구현과 문서: 훅 고치기'), false);
+  });
+  it('시험을 돌리는 것이 일인 지시와 고치지 않는 지시는 보지 않는다', () => {
+    assert.equal(fullTestOnly(base, '시험 실행과 결과 정리: 키트'), false);
+    assert.equal(fullTestOnly('끝난 기준: 전체 시험 결과를 표로 낸다.', '분석과 가공: 결과'), false);
+  });
+});

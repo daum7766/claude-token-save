@@ -34,7 +34,7 @@ const PUBLIC_EXTRA = [
   '.gitignore',
 ];
 const README_SRC = 'README.public.md';
-const DEFAULT_BUNDLES = ['base', 'routing'];
+const DEFAULT_BUNDLES = ['base', 'routing', 'safety']; // 일하는 노하우 묶음은 비공개 저장소 권한으로만 나눈다(11-08 대표)
 const CHANGES_SRC = 'subagent-system/CHANGES.public.md';
 const CHANGES_OUT = 'subagent-system/CHANGES.md';
 const SKIP_DIRS = new Set(['node_modules', '.git']);

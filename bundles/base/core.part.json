@@ -22,6 +22,7 @@
     "subagent-system/hooks/git/pre-commit",
     "subagent-system/hooks/git/git-dispatch.cjs",
     "subagent-system/hooks/git/gitHookShared.cjs",
+    "subagent-system/hooks/git/commit-msg.d/10-kit-note.cjs",
     "subagent-system/hooks/git/pre-commit.d/10-kit-drift.cjs",
     "subagent-system/scripts/tests/askLog.test.js",
     "subagent-system/scripts/tests/claudeMdTidy.test.js",
@@ -29,6 +30,7 @@
     "subagent-system/scripts/tests/configCombos.test.js",
     "subagent-system/scripts/tests/docContract.test.js",
     "subagent-system/scripts/tests/kitDrift.test.js",
+    "subagent-system/scripts/tests/kitNote.test.js",
     "subagent-system/scripts/tests/kitSetup.test.js",
     "subagent-system/scripts/tests/installBase.test.js",
     "subagent-system/scripts/tests/kitBundles.test.js",
@@ -60,6 +62,12 @@
     }
   ],
   "gitHooks": [
+    {
+      "hook": "commit-msg",
+      "name": "kit-note",
+      "order": 10,
+      "file": "subagent-system/hooks/git/commit-msg.d/10-kit-note.cjs"
+    },
     {
       "hook": "pre-commit",
       "name": "kit-drift",

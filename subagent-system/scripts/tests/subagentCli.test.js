@@ -1494,7 +1494,7 @@ describe('subagent-retro.js --docs와 --docs-done', () => {
 });
 
 describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
-  const HEAD = ['시각', '프로젝트', '범위', '신호', '이름표', '고친 곳', '방식', '기준점', '메모'].join('\t');
+  const HEAD = ['시각', '프로젝트', '범위', '신호', '이름표', '고친 곳', '방식', '기준점', '메모', '뿌리'].join('\t');
   const setup = () => {
     const root = tmpDir();
     const dir = path.join(root, 'records');
@@ -1507,7 +1507,7 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
     const v = { at: '2026-10-20T00:00:00.000Z', project: '/p', scope: '프로젝트', signal: '정정', label: '태그', where: 'A.md#절', how: '문장', anchor: '0', memo: 'm', ...over };
     return [v.at, v.project, v.scope, v.signal, v.label, v.where, v.how, v.anchor, v.memo].join('\t');
   };
-  const fixArgs = ['--fix', '--project', '/p/.claude/worktrees/w', '--signal', '정정', '--label', '태그', '--where', 'docs/A.md#절', '--how', '문장', '--memo', '메모'];
+  const fixArgs = ['--fix', '--project', '/p/.claude/worktrees/w', '--signal', '정정', '--label', '태그', '--where', 'docs/A.md#절', '--how', '문장', '--memo', '메모', '--root', '장치 없음: 문서 규칙'];
 
   // 고침 기록(피드백 묶음의 fix-log.js)이 없는 설치에서는 건너뛴다.
   describe('--fix', { skip: missingFiles('subagent-system/scripts/fix-log.js') }, () => {
@@ -1523,7 +1523,7 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       assert.match(without.stderr, /세션 id를 얻지 못해/);
     });
 
-    it('머리줄과 아홉 열 한 줄을 쓰고 범위, 시각, 기준점을 채우며 출력은 두 줄이다', () => {
+    it('머리줄과 열 열 한 줄을 쓰고 범위, 시각, 기준점을 채우며 출력은 두 줄이다', () => {
       const e = setup();
       fs.writeFileSync(e.usage, [use('a1 x'), use('a2 y'), use('a3 z')].join('\n') + '\n');
       const r = run(fixArgs, e);
@@ -1535,15 +1535,15 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       assert.equal(lines[0], HEAD);
       assert.equal(out[1], lines[1]);
       const c = lines[1].split('\t');
-      assert.equal(c.length, 9);
+      assert.equal(c.length, 10);
       assert.ok(!Number.isNaN(Date.parse(c[0])));
-      assert.deepEqual(c.slice(1), ['/p', '프로젝트', '정정', '태그', 'docs/A.md#절', '문장', '3', '메모']);
+      assert.deepEqual(c.slice(1), ['/p', '프로젝트', '정정', '태그', 'docs/A.md#절', '문장', '3', '메모', '장치 없음: 문서 규칙']);
     });
 
     it('두 번째 호출은 머리줄을 다시 쓰지 않고 줄만 덧붙인다', () => {
       const e = setup();
       run(fixArgs, e);
-      run(fixArgs, e);
+      run([...fixArgs.slice(0, -1), '장치 없음: 다른 갈래'], e);
       assert.equal(fs.readFileSync(e.fixes, 'utf8').trim().split('\n').filter((l) => l === HEAD).length, 1);
       assert.equal(fs.readFileSync(e.fixes, 'utf8').trim().split('\n').length, 3);
     });

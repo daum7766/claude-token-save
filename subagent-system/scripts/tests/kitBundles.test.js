@@ -11,39 +11,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { NEW_FILES, loadDefinitions, expandFiles, entriesFor, linksCovered, selectableBundles, optionIds, srcOf } from '../kitBundles.js';
 import * as shared from '../kitShared.js';
-import { NOT_KIT_SOURCE, missingFiles, missingBundles } from './fixtures/installedLayout.js';
+import { NOT_KIT_SOURCE, missingFiles, missingBundles, partialKit } from './fixtures/installedLayout.js';
 
 const require = createRequire(import.meta.url);
 const lockApi = require('../kitInstalled.cjs');
 
 // 묶음 전체를 견주는 시험은 일부만 내보낸 공개판 원본에서는 건너뛴다.
-const WHOLE_KIT = missingBundles('company', 'feedback', 'routing', 'work-backlog', 'work-docs', 'work-git', 'work-paths', 'work-review', 'work-tests');
+const WHOLE_KIT = partialKit();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// caa02fe 기준 설치 목록(fixtures/entries-caa02fe.json)에 없던 파일. 설치 바닥 단위들이 더했다. 기준 목록과 견줄 때 이 파일들은 뺀다.
-// 설치 바닥이 끝난 뒤에는 NEW_FILES가 비어 있고, 이 목록이 「새 파일 목록」 기준이다. 새 파일을 더하면 이 목록에도 더한다.
-const ADDED_AFTER_CAA02FE = [
-  'subagent-system/hooks/stall-check.js',
-  'subagent-system/scripts/tests/stallCheck.test.js',
-  'subagent-system/scripts/kitBundles.js',
-  'subagent-system/scripts/kitInstalled.cjs',
-  'subagent-system/scripts/kitHooks.js',
-  'subagent-system/scripts/userSettings.cjs',
-  'subagent-system/hooks/kit-hook.cjs',
-  'subagent-system/hooks/git/git-dispatch.cjs',
-  'subagent-system/hooks/git/gitHookShared.cjs',
-  'subagent-system/hooks/git/pre-commit.d/10-kit-drift.cjs',
-  'subagent-system/hooks/git/commit-msg.d/20-why-premise.cjs',
-  'subagent-system/hooks/git/commit-msg.d/30-review-line.cjs',
-  'subagent-system/scripts/tests/kitBundles.test.js',
-  'subagent-system/scripts/tests/kitHooks.test.js',
-  'subagent-system/scripts/tests/kitHookWrapper.test.js',
-  'subagent-system/scripts/tests/gitDispatch.test.js',
-  'subagent-system/scripts/tests/userSettings.test.js',
-  'subagent-system/scripts/tests/retroWriteAllow.test.js',
-  'subagent-system/scripts/tests/installBase.test.js',
-  'subagent-system/scripts/tests/fixtures/entries-caa02fe.json',
-];
 const KIT = path.resolve(HERE, '..', '..', '..');
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'entries-caa02fe.json'), 'utf8'));
 
@@ -95,7 +71,7 @@ describe('U1 묶음 정의', { skip: NOT_KIT_SOURCE }, () => {
     for (const p of real.parts) for (const k of new Set([...expandFiles(p), ...p.kitOnly])) holders.set(k, [...(holders.get(k) ?? []), p.id]);
     const bad = [...scanned].filter((k) => (holders.get(k) ?? []).length !== 1);
     assert.deepEqual(bad, [], '조각이 없거나 둘 이상인 파일');
-    assert.equal(real.bundles.size, 10);
+    assert.equal(real.bundles.size, fs.readdirSync(path.join(KIT, 'bundles')).filter((d) => fs.existsSync(path.join(KIT, 'bundles', d, 'bundle.json'))).length);
     assert.equal(real.bundles.get('base').selectable, false);
   });
 
@@ -131,19 +107,22 @@ describe('U1 묶음 정의', { skip: NOT_KIT_SOURCE }, () => {
     assert.match(errs[0].msg, /ask-log\.js/);
   });
 
-  it('U1-5 전부 고른 목록은 지금 설치 목록(caa02fe)과 같고, 아무것도 안 고른 목록도 같다(옮겨 간 파일 하나만 더함)', { skip: WHOLE_KIT }, () => {
-    const newSet = new Set(ADDED_AFTER_CAA02FE);
+  it('U1-5 전부 고른 목록과 아무것도 안 고른 목록에 옛 설치 목록(caa02fe)의 파일이 같은 종류로 모두 든다(옮겨 간 파일 하나만 더함)', { skip: WHOLE_KIT }, () => {
+    // 새로 생긴 파일은 견주지 않는다. 옛 목록의 파일이 빠지거나 종류가 바뀌는 것만 잡는다(새 파일마다 목록을 고치지 않게).
     // 시험 도구 폴더 아래 파일은 시험이 늘 때마다 바뀌므로 비교에서 뺀다.
-    const comparable = (list) => list.filter((e) => !newSet.has(e.key) && !e.key.startsWith('subagent-system/scripts/tests/fixtures/'));
+    const lost = (list, expected) => {
+      const have = new Set(KINDS_OF(list));
+      return KINDS_OF(expected.filter((e) => !e.key.startsWith('subagent-system/scripts/tests/fixtures/'))).filter((k) => !have.has(k));
+    };
 
     const all = entriesFor(real, { bundles: selectableBundles(real), options: optionIds(real) });
-    assert.deepEqual(KINDS_OF(comparable(all)), KINDS_OF(FIXTURE.all));
+    assert.deepEqual(lost(all, FIXTURE.all), []);
 
     // 지금 설치가 「아무것도 안 고름」일 때 늘 깔리던 것: 회사 규칙, 라우팅, 피드백, 시험, 문서 쓰기 묶음과 고를 항목 없음.
     // 달라진 점 하나: commit-msg 훅 파일은 옛 설치에서 고르는 훅이었고 이제 바닥이 늘 깐다.
     const none = entriesFor(real, { bundles: ['company', 'routing', 'feedback', 'work-tests', 'work-docs'], options: [] });
     const expectedNone = [...FIXTURE.none, { key: 'subagent-system/hooks/git/commit-msg', kind: 'code', exec: true }];
-    assert.deepEqual(KINDS_OF(comparable(none)), KINDS_OF(expectedNone));
+    assert.deepEqual(lost(none, expectedNone), []);
   });
 
   it('U1-5 바닥만 고르면 바닥 파일만 나오고, 고를 항목과 일 이름 바꿈과 빼기 목록이 반영된다', { skip: WHOLE_KIT }, () => {
@@ -246,7 +225,7 @@ describe('U1 묶음 정의', { skip: NOT_KIT_SOURCE }, () => {
     // 회사 규칙 단위(C1)가 푼 번호: 6(kit-core 「애매할 때」가 바닥 명령 kit-setup.js settings를 읽음)
     const SOLVED_BY_COMPANY = [6];
     // 로컬 몫 번호: 설치본에만 있는 장치에 걸리는 번호라 그 로컬 정의의 uses에 적는다. 번호만 두고 장치 이름은 두지 않는다. 실제 정의가 덮는지는 설치본을 대상으로 따로 본다.
-    const LOCAL_SHARE = [8, 12];
+    const LOCAL_SHARE = [8];
     const covered = new Set([...kitLinks, ...SOLVED_BY_BASE, ...SOLVED_BY_FEEDBACK, ...SOLVED_BY_COMPANY, ...LOCAL_SHARE]);
     assert.deepEqual([...covered].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (const n of [...SOLVED_BY_BASE, ...SOLVED_BY_FEEDBACK, ...SOLVED_BY_COMPANY, ...LOCAL_SHARE]) assert.ok(!kitLinks.has(n), `${n}번은 키트 uses에도 있음`);

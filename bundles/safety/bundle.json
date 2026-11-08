@@ -1,0 +1,24 @@
+{
+  "name": "safety",
+  "title": "안전장치",
+  "summary": "되살릴 수 없는 재귀 삭제, 미커밋 변경을 버리는 git 되돌리기, 운영 DB를 바꾸는 Supabase SQL을 실행 전에 막거나 묻고, 켜면 지우기를 휴지통으로 옮기게 하는 훅",
+  "order": 40,
+  "selectable": true,
+  "alwaysRules": [],
+  "options": [
+    {
+      "id": "supabase",
+      "title": "Supabase SQL 막기",
+      "files": [
+        "subagent-system/hooks/supabase-sql-guard.js"
+      ],
+      "default": true
+    }
+  ],
+  "configKeys": [
+    "safetyTempDirs",
+    "deleteToTrash"
+  ],
+  "uses": [],
+  "records": []
+}

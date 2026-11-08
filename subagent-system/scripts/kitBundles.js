@@ -455,6 +455,9 @@ export function optionIds(defs, { bundles, onlyDefault = false } = {}) {
   return names.flatMap((n) => (defs.bundles.get(n)?.options ?? []).filter((o) => !onlyDefault || o.default).map((o) => `${n}.${o.id}`));
 }
 
+// 고르지 않은 고를 항목에 든 설치 키인지. 그 파일은 깔리지 않으므로 그 파일을 부르는 훅도 걸지 않는다(kit-setup.js가 깐 상태 기록에 훅을 적을 때 쓴다).
+export const inUnchosenOption = (bundle, key, options) => bundle.options.some((o) => matchesAny(o.files, key) && !options.includes(`${bundle.name}.${o.id}`));
+
 // 깔 파일 목록. selection은 { bundles: 묶음 이름들, options: '<묶음>.<항목>'들 }이고 바닥은 늘 든다.
 // 고를 항목(options)에 든 파일은 그 항목을 골랐을 때만, 그 밖 파일은 묶음을 고르면 늘 든다. 로컬 조각 파일은 kind local로 내고 src는 null이다.
 export function entriesFor(defs, selection, { removedDefs = [], commandName = 'retro' } = {}) {
@@ -470,10 +473,8 @@ export function entriesFor(defs, selection, { removedDefs = [], commandName = 'r
   for (const part of defs.parts) {
     if (!wantBundles.has(part.bundle)) continue;
     const bundle = defs.bundles.get(part.bundle);
-    const gated = bundle.options.map((o) => ({ id: `${bundle.name}.${o.id}`, files: o.files }));
     for (const key of expandFiles(part)) {
-      const gate = gated.find((g) => matchesAny(g.files, key));
-      if (gate && !wantOptions.has(gate.id)) continue;
+      if (inUnchosenOption(bundle, key, [...wantOptions])) continue;
       if (removed.has(key)) continue;
       if (part.origin === 'local') {
         out.push({ key, src: null, kind: 'local', exec: false, bundle: part.bundle, part: part.part });
