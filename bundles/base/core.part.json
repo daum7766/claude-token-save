@@ -48,6 +48,7 @@
     "subagent-system/VERSION",
     "subagent-system/docs/TEST_SCENARIOS.md",
     "subagent-system/scripts/tests/kitLint.test.js",
+    "subagent-system/scripts/tests/kitReplayDiff.test.js",
     "subagent-system/scripts/tests/kitPublicNames.test.js",
     "subagent-system/scripts/tests/kitExport.test.js",
     "bundles/base/user-settings.template.md"

@@ -15,6 +15,8 @@ const SCAN_DIRS = ['subagent-system/docs', 'subagent-system/scripts', 'subagent-
 const SCAN_FILES = ['subagent-system/rates.json', 'subagent-system/VERSION'];
 // 설치 키와 원본 경로가 다른 세 갈래. 그 밖의 키는 원본에서도 같은 경로다.
 const KEY_ROOTS = ['agents', 'rules', 'skills'];
+// 키트가 지키려는 여섯 조각의 이름 키(정의는 README.md 「이 키트가 지키는 것」). 묶음의 serves 키는 이 중 하나다.
+export const PIECE_KEYS = ['portable', 'no-conflict', 'kit-only-change', 'self-improve', 'root-fix', 'proactive-fix'];
 const KINDS = ['merge', 'code', 'once', 'rates'];
 const NAME_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const PART_FILE_RE = /^([^/]+)\/(bundle\.json|([^/]+)\.part\.json)$/;
@@ -153,6 +155,22 @@ function checkUses(uses, where, problems) {
   return out;
 }
 
+// serves: { 조각 키: [그 묶음이 까는 설치 키나 글롭] }. 없어도 되고(남의 로컬 묶음이 갱신에 막히지 않게), 모르는 키는 warn으로 버리고, 꼴이 틀리면 null(error)이다.
+function checkServes(serves, where, problems) {
+  if (serves === undefined) return { serves: {} };
+  if (!isObj(serves)) return { bad: 'serves가 객체가 아닙니다' };
+  const out = {};
+  for (const [k, v] of Object.entries(serves)) {
+    if (!strList(v) || !v.length) return { bad: `serves.${k}는 비지 않은 문자열 배열이어야 합니다` };
+    if (!PIECE_KEYS.includes(k)) {
+      problems.push({ level: 'warn', msg: `${where}: serves의 모르는 조각 키 ${k}를 건너뜁니다(${PIECE_KEYS.join(', ')})` });
+      continue;
+    }
+    out[k] = v;
+  }
+  return { serves: out };
+}
+
 function normalizeBundle(raw, dirName, where, problems) {
   const err = (msg) => problems.push({ level: 'error', msg: `${where}: ${msg}` });
   if (!isObj(raw)) return err('최상위가 객체가 아닙니다'), null;
@@ -172,6 +190,8 @@ function normalizeBundle(raw, dirName, where, problems) {
     }
     options.push({ id: o.id, title: o.title, files: o.files, default: o.default });
   }
+  const sv = checkServes(raw.serves, where, problems);
+  if (sv.bad) return err(sv.bad), null;
   return {
     name: raw.name,
     title: raw.title,
@@ -182,6 +202,7 @@ function normalizeBundle(raw, dirName, where, problems) {
     options,
     configKeys: raw.configKeys ?? [],
     uses: checkUses(raw.uses, where, problems),
+    serves: sv.serves,
     records: raw.records ?? [],
   };
 }

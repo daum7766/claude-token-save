@@ -2,7 +2,7 @@
 
 되살릴 수 없는 일을 실행 전에 막거나 묻는 훅(정해진 때 자동으로 도는 명령) 묶음이다. 이 묶음을 고른 설치에서만 아래 절을 읽는다. `<kit-setup>`과 `묻는 방법`은 `APPLY_GUIDE.md`를 따른다.
 - `rm-guard`: 재귀 삭제(`rm -r`, `rm -rf`)의 대상을 따진다. Claude 임시 폴더 안, 파일 하나, 다시 만들어지는 캐시, git에서 되살릴 수 있는 폴더는 묻지 않고, 대상을 미리 알 수 없는 꼴(모르는 변수, 명령 치환, `xargs`)과 Claude 임시 폴더가 아닌 `/tmp`는 다시 쓰는 법과 함께 거절하며, 그 밖의 실제 경로는 승인 창을 띄운다.
-- `git-discard-guard`: 커밋하지 않은 변경이 있는 파일을 `git checkout`, `git restore`로 되돌리려 하면 막는다.
+- `git-discard-guard`: 커밋하지 않은 변경이 있는 파일을 `git checkout`, `git restore`로 되돌리려 하면 막고, 모든 세션이 함께 쓰는 보관함을 바꾸는 `git stash`(`list`, `show` 제외)도 막는다.
 - `supabase-sql-guard`(고를 항목): Supabase MCP의 SQL 실행에서 데이터를 고치거나 지우거나 구조, 권한을 바꾸는 SQL만 승인 창을 띄운다. 조회와 INSERT는 통과한다.
 - 휴지통으로 지우기(설정 `deleteToTrash`): 켜면 `rm-guard`가 임시 폴더와 캐시 밖의 `rm`(파일 하나 포함)과 작업 트리에서도 지우는 `git rm`을 거절하고, 대신 `node "$HOME/.claude/subagent-system/scripts/trash.js" <대상>…`으로 운영체제의 휴지통에 옮기게 한다. git 안 파일은 옮긴 뒤 그 파일만 지정해 커밋한다. 휴지통에 못 보내면 스크립트는 지우지 않고 실패로 끝난다.
 - 막거나 물을 때마다 승인 창 기록(`permission-asks.jsonl`)에 한 줄을 남긴다. 회고가 그 기록으로 쓸데없이 뜬 창을 줄인다.

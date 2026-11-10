@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadRates, toCounts, cost } from '../subagent-usage.js';
-import { conversationWaste, countDecisionLines, summarizeLint, summarizePairs, judge, fileItems, tooLowEstimate } from '../work-metrics.js';
+import { hookCensus, alwaysReadChars, outputByHook, conversationWaste, countDecisionLines, summarizeLint, summarizePairs, judge, fileItems, tooLowEstimate } from '../work-metrics.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(SCRIPTS, 'work-metrics.js');
@@ -351,8 +351,8 @@ describe('안 쓰는 매뉴얼', () => {
 describe('사용자에게 온 질문 수', () => {
   describe('countDecisionLines', () => {
     const cases = [
-      ['정할 것 아래 질문 줄을 센다', '한 일을 했습니다.\n\n정할 것\n1. 광고를 붙일지\n2. 색을 바꿀지\n\n알아 둘 것\n- 위험 하나\n', 2],
-      ['선택지처럼 들여쓴 줄은 질문 하나에 딸린 것이라 세지 않는다', '정할 것\n1. 광고 위치\n   - a. 위\n   - b. 아래\n2. 문구\n', 2],
+      ['정할 것 아래 질문 줄을 센다', '한 일을 했습니다.\n\n정할 것\n1. 알림을 붙일지\n2. 색을 바꿀지\n\n알아 둘 것\n- 위험 하나\n', 2],
+      ['선택지처럼 들여쓴 줄은 질문 하나에 딸린 것이라 세지 않는다', '정할 것\n1. 알림 위치\n   - a. 위\n   - b. 아래\n2. 문구\n', 2],
       ['결정할 것 이름도 같게 센다', '### 결정할 것\n1. 하나\n', 1],
       ['없음이라고 적으면 0이다', '정할 것: 없음\n', 0],
       ['다음 제목을 만나면 멈춘다', '정할 것\n1. 하나\n알아 둘 것\n- 위험\n- 위험 둘\n', 1],
@@ -374,7 +374,7 @@ describe('사용자에게 온 질문 수', () => {
       msg(10, 'mid', '정할 것\n1. 중간 글의 질문은 최종 보고가 아니다\n'),
       toolOnly(20, 'tool1'),
       toolResult(30, 't-tool1'),
-      msg(40, 'final1', '끝냈습니다.\n\n정할 것\n1. 광고를 붙일지\n2. 색을 바꿀지\n   - a. 파랑\n\n알아 둘 것\n- 위험\n'),
+      msg(40, 'final1', '끝냈습니다.\n\n정할 것\n1. 알림을 붙일지\n2. 색을 바꿀지\n   - a. 파랑\n\n알아 둘 것\n- 위험\n'),
       prompt(100, '두 번째 요청'),
       msg(110, 'final2', '끝냈습니다.\n'),
     ]);
@@ -435,6 +435,29 @@ describe('사용자에게 온 질문 수', () => {
     });
   });
 
+  it('훅 거절 줄은 창에서 빼 따로 찍고, 바깥 도구 창은 대화 기록에서 대상을 찾아 가른다', () => {
+    const b = build();
+    const rows = fs.readFileSync(path.join(b.env.proj, `${SESSION}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const mig = (sec, id, ref, q) => ({ type: 'assistant', timestamp: at(sec), message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name: 'mcp__supabase__apply_migration', input: { project_id: ref, name: id, query: q } }] } });
+    writeSession(b.env, [...rows, mig(80, 'g1', 'prodref', '-- 운영에 넣는 것'), mig(81, 'g2', 'devref', '-- 개발에서 먼저')]);
+    const extra = (sec, hook, tool, input) => JSON.stringify({ ts: at(sec), session: SESSION, hook, tool, input, cwd: '/work/proj', reason: 'r' });
+    fs.appendFileSync(b.asks, [extra(82, 'rm-guard:deny', 'Bash', 'rm -rf x'), extra(83, 'rm-guard:trash', 'Bash', 'rm y'), extra(84, 'claude-code', 'mcp__supabase__apply_migration', '-- 운영에 넣는 것'), extra(85, 'claude-code', 'mcp__supabase__apply_migration', '-- 개발에서 먼저'), extra(86, 'claude-code', 'mcp__supabase__apply_migration', '-- 기록에 없음')].join('\n') + '\n');
+    const r = b.env.run(args(b, ['--project', '/work/proj']));
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /확인 창 6건/);
+    assert.match(r.out, /창이 아닌 거절\(Claude만 받음, 위 수에서 뺌\): rm-guard:deny 1, rm-guard:trash 1/);
+    assert.match(r.out, /apply_migration prodref 1/);
+    assert.match(r.out, /apply_migration devref 1/);
+    assert.match(r.out, /apply_migration 모름 1/);
+    // 입력에 대상이 없으면 세션 폴더 위쪽의 .mcp.json에서 서버에 묶인 project_ref를 읽는다.
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-'));
+    fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({ mcpServers: { supabase: { url: 'https://x.invalid/mcp?project_ref=boundref' } } }));
+    fs.mkdirSync(path.join(proj, 'sub'));
+    fs.appendFileSync(b.asks, JSON.stringify({ ts: at(87), session: 'none', hook: 'claude-code', tool: 'mcp__supabase__apply_migration', input: '-- x', cwd: path.join(proj, 'sub'), reason: 'r' }) + '\n');
+    const r2 = b.env.run(args(b));
+    assert.match(r2.out, /apply_migration boundref\(서버 고정\) 1/);
+  });
+
   it('기간 밖의 확인 창과 깨진 줄은 세지 않는다', () => {
     const b = build();
     const r = b.env.run(args(b, ['--project', '/work/proj', '--since', '2026-10-11']));
@@ -455,7 +478,7 @@ describe('사용법', () => {
 
 describe('프로젝트 문서 파일째 보기 fileItems', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wm-files-'));
-  for (const rel of ['quiz/guide.md', 'vs/guide.md', '_temp/draft.md', 'HOME.md']) {
+  for (const rel of ['setup/guide.md', 'api/guide.md', '_temp/draft.md', 'HOME.md']) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), '# x\n');
   }
@@ -464,13 +487,13 @@ describe('프로젝트 문서 파일째 보기 fileItems', () => {
   const ev = (talk = [], bash = []) => ({ talk, bash });
 
   it('폴더 안 상대 경로로 이름 짓고 _temp는 빼서, 이름이 같은 파일을 가른다', () => {
-    assert.deepEqual(items.map((i) => i.name).sort(), ['HOME.md', 'quiz/guide.md', 'vs/guide.md']);
+    assert.deepEqual(items.map((i) => i.name).sort(), ['HOME.md', 'api/guide.md', 'setup/guide.md']);
   });
 
   it('파일 읽기 입력이나 셸 명령에 상대 경로가 나오면 쓴 것으로 보고, 같은 이름의 다른 폴더 파일은 세지 않는다', () => {
-    assert.equal(by('quiz/guide.md').hit(ev(['{"file_path":"/p/docs/quiz/guide.md"}'])), true);
-    assert.equal(by('quiz/guide.md').hit(ev([], ['sed -n 1,20p docs/quiz/guide.md'])), true);
-    assert.equal(by('vs/guide.md').hit(ev(['{"file_path":"/p/docs/quiz/guide.md"}'])), false);
+    assert.equal(by('setup/guide.md').hit(ev(['{"file_path":"/p/docs/setup/guide.md"}'])), true);
+    assert.equal(by('setup/guide.md').hit(ev([], ['sed -n 1,20p docs/setup/guide.md'])), true);
+    assert.equal(by('api/guide.md').hit(ev(['{"file_path":"/p/docs/setup/guide.md"}'])), false);
   });
 });
 
@@ -541,10 +564,34 @@ describe('낭비 넷', () => {
       assert.match(r.out, /막음: 2건 hook-c 2/);
       assert.match(r.out, /오탐 후보: 1건/);
       assert.match(r.out, /지시된 재시도 등 다른 이유: 1건/);
+      assert.match(r.out, /hook-c: 2 \/ 0 \/ 2/);
     } else assert.match(r.out, /막음과 오탐 후보: 피드백 없음/);
     assert.match(r.out, /\.md Read 호출 1건, 읽은 글자 5/);
     assert.match(r.out, /③ 문서 순증/);
     assert.match(r.out, /사용자 차례 3개 가운데 같은 말 되풀이 1개, 「다시」 꼴 1개/);
+  });
+
+  it('장치마다 다시 내 통과한 막음을 헛막음 후보로 세고, 잡은 수보다 많으면 좁힐 후보로 찍는다', () => {
+    const env = fixture();
+    if (!fs.existsSync(path.join(SCRIPTS, 'fixLogHelpers.js'))) return;
+    fs.writeFileSync(path.join(env.records, 'hook-blocks.tsv'), lines([['2026-10-10T00:00:00+0900', 's1', '결정 대조', 'Stop'], ['2026-10-10T00:00:01+0900', 's1', '결정 대조', 'Agent'], ['2026-10-10T00:00:02+0900', 's2', '결정 대조', 'Agent'], ['2026-10-10T00:00:03+0900', 's2', '논의 중', 'Bash']]));
+    fs.writeFileSync(path.join(env.records, 'hook-false-positive.tsv'), lines([['2026-10-10T00:00:05+0900', 's1', '결정 대조', '고친 것 없음', '통과', 'Stop'], ['2026-10-10T00:00:06+0900', 's1', '결정 대조', '지시된 재시도', '통과', 'x'], ['2026-10-10T00:00:07+0900', 's2', '논의 중', '오탐 후보', '다시 막음', 'y']]));
+    const r = env.run(['waste', '--since', '2026-10-01', '--repo', env.root]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /결정 대조: 3 \/ 2 \/ 2 좁힐 후보/);
+    assert.match(r.out, /논의 중: 1 \/ 0 \/ 1$/m);
+  });
+
+  it('비율이 절반 아래여도 한 세션 최대가 10번을 넘으면 좁힐 후보로 찍는다', () => {
+    const env = fixture();
+    if (!fs.existsSync(path.join(SCRIPTS, 'fixLogHelpers.js'))) return;
+    const blocks = Array.from({ length: 11 }, (_, i) => [`2026-10-10T00:00:${String(i).padStart(2, '0')}+0900`, 's1', '결정 대조', 'Stop']);
+    fs.writeFileSync(path.join(env.records, 'hook-blocks.tsv'), lines(blocks));
+    fs.writeFileSync(path.join(env.records, 'hook-false-positive.tsv'), lines([['2026-10-10T00:01:00+0900', 's1', '결정 대조', '고친 것 없음', '통과', 'Stop']]));
+    const r = env.run(['waste', '--since', '2026-10-01', '--repo', env.root]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /결정 대조: 11 \/ 1 \/ 11 좁힐 후보\(한 세션 10번 넘음\)/);
+    assert.match(r.out, /좁힐 후보\(.*\): 결정 대조/);
   });
 
   it('--since에 회고의 추출 시작 시각(ISO)을 그대로 받고, 날짜도 시각도 아니면 거절한다', () => {
@@ -555,6 +602,26 @@ describe('낭비 넷', () => {
     const bad = env.run(['waste', '--since', '10월 1일', '--repo', env.root]);
     assert.notEqual(bad.code, 0);
     assert.match(bad.err + bad.out, /YYYY-MM-DD 날짜나 ISO 시각/);
+  });
+
+  it('--since가 ISO 시각(Z)이면 +0900 기록도 시각을 풀어서 견준다(글자로 견주면 9시간 어긋남)', () => {
+    const env = fixture();
+    // 판정 원문의 꼴: 06:58:30Z 이후는 15:58:30+0900 이후다. 14:00+0900(05:00Z)은 앞이고 16:30+0900(07:30Z)은 뒤다.
+    fs.writeFileSync(path.join(env.records, 'hook-time.tsv'), lines([
+      ['2026-11-08T14:00:00+0900', 'hook-a', '700', ''],
+      ['2026-11-08T16:30:00+0900', 'hook-a', '300', ''],
+      ['2026-11-08T07:30:00Z', 'hook-b', '200', ''],
+      ['2026-11-08T05:00:00Z', 'hook-b', '900', ''],
+    ]));
+    fs.writeFileSync(path.join(env.records, 'hook-blocks.tsv'), lines([['2026-11-08T14:00:00+0900', 's', 'hook-c'], ['2026-11-08T16:30:00+0900', 's', 'hook-c'], ['2026-11-08T05:00:00.000Z', 's', 'hook-c']]));
+    fs.writeFileSync(path.join(env.records, 'hook-output.tsv'), lines([['2026-11-08T14:00:00+0900', 'hook-a', '40'], ['2026-11-08T16:30:00+0900', 'hook-a', '60']]));
+    const r = env.run(['waste', '--since', '2026-11-08T06:58:30Z', '--repo', env.root]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /훅 시간: 2건, 끊김 0건, 합계 500ms/);
+    // 피드백 묶음을 안 깐 설치는 막음 칸이 「피드백 없음」이라 이 줄을 건너뛴다.
+    if (!r.out.includes('피드백 없음')) assert.match(r.out, /막음: 1건 hook-c 1/);
+    assert.match(r.out, /합계 60,/);
+    assert.doesNotMatch(r.out, /NaN/);
   });
 
   it('피드백이 깔리지 않았으면 막음 칸이 「피드백 없음」이고 실패하지 않는다', () => {
@@ -572,5 +639,105 @@ describe('낭비 넷', () => {
     const section = retro.split('## 속도와 비용 보기')[1].split('\n## ')[0];
     assert.match(section, /work-metrics\.js" waste/);
     assert.match(section, /앞 회고/);
+  });
+});
+
+describe('장치 층 ⑤', () => {
+  const lines = (rows) => rows.map((r) => r.join('\t')).join('\n') + '\n';
+  const wrapped = (name) => ({ hooks: [{ type: 'command', command: `node "$HOME/.claude/subagent-system/hooks/kit-hook.cjs" ${name} node x.js` }] });
+
+  it('훅 수를 이벤트별로 세고 감싸개 이름표를 모은다', () => {
+    const c = hookCensus({ hooks: { Stop: [wrapped('a'), { hooks: [{ command: 'echo' }] }], PreToolUse: [wrapped('b')] } });
+    assert.deepEqual(c.byEvent, { Stop: 2, PreToolUse: 1 });
+    assert.equal(c.total, 3);
+    assert.deepEqual(c.names, ['a', 'b']);
+    assert.equal(hookCensus(null).total, 0);
+  });
+
+  it('늘 읽는 글자는 CLAUDE.md, rules, @로 부른 문서를 한 번씩만 센다', () => {
+    const env = setup();
+    fs.mkdirSync(path.join(env.claude, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(env.claude, 'CLAUDE.md'), '1234\n@EXTRA.md\n');
+    fs.writeFileSync(path.join(env.claude, 'EXTRA.md'), '12345');
+    fs.writeFileSync(path.join(env.claude, 'rules', 'r.md'), '123@EXTRA.md');
+    const r = alwaysReadChars(env.claude);
+    assert.equal(r.files, 3);
+    assert.equal(r.total, 15 + 5 + 12);
+  });
+
+  it('훅별 글자를 묶는다', () => {
+    const m = outputByHook([['t', 'a', '5'], ['t', 'a', '7'], ['t', 'b', 'x']]);
+    assert.deepEqual(m.get('a'), { runs: 2, chars: 12 });
+    assert.equal(m.has('b'), false);
+  });
+
+  function layer(env, { output = true, historyHooks } = {}) {
+    fs.writeFileSync(path.join(env.claude, 'settings.json'), JSON.stringify({ hooks: { Stop: [wrapped('talker'), wrapped('quiet'), wrapped('blocker')] } }));
+    fs.writeFileSync(path.join(env.claude, 'CLAUDE.md'), 'abcde');
+    if (output) fs.writeFileSync(path.join(env.records, 'hook-output.tsv'), lines([['2026-10-10T00:00:00+0900', 'talker', '30'], ['2026-10-10T00:00:01+0900', 'talker', '20']]));
+    fs.writeFileSync(path.join(env.records, 'hook-blocks.tsv'), lines([['2026-10-10T00:00:00+0900', 's', 'blocker 판정', 'Stop']]));
+    if (historyHooks !== undefined) fs.writeFileSync(path.join(env.records, 'device-layer-history.tsv'), `시각\t훅 수\t늘 읽는 글자\t하루 넣은 글자\t잡은 수\n2026-10-01T00:00:00Z\t${historyHooks}\t5\t\t5\n`);
+  }
+  const waste5 = (env, extra = []) => env.run(['waste', '--since', '2026-10-01', '--repo', env.root, ...extra]);
+
+  it('훅 수, 늘 읽는 글자, 넣은 글자를 찍고 막음도 글자도 없는 훅을 뺄 후보로 찍는다', () => {
+    const env = setup();
+    layer(env);
+    const r = waste5(env);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /깐 훅 3개 Stop 3 \(감싸개를 거치는 훅 3개\)/);
+    assert.match(r.out, /늘 읽는 글자: 5/);
+    assert.match(r.out, /합계 50/);
+    assert.match(r.out, /talker: 2번, 50자/);
+    assert.match(r.out, /뺄 후보\(.*\): quiet$/m);
+  });
+
+  it('기록 기간이 7일보다 짧으면 뺄 후보를 띄우지 않고 판정을 보류한다', () => {
+    const env = setup();
+    layer(env);
+    const day = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(path.join(env.records, 'hook-output.tsv'), lines([[`${day}T00:00:00+0900`, 'talker', '30']]));
+    const r = env.run(['waste', '--since', '2026-10-01', '--repo', env.root]);
+    assert.match(r.out, /뺄 후보: 판정 보류\(기록 \d일/);
+    assert.doesNotMatch(r.out, /뺄 후보\(/);
+  });
+
+  it('글자 기록이 없으면 뺄 후보 판정을 보류한다', () => {
+    const env = setup();
+    layer(env, { output: false });
+    assert.match(waste5(env).out, /판정 보류/);
+  });
+
+  it('--record로 남기고, 다음에는 앞 값과 견주어 잡은 수가 안 늘었으면 좁힐 후보로 올린다', () => {
+    const env = setup();
+    layer(env, { historyHooks: 2 });
+    const r = waste5(env, ['--record']);
+    assert.match(r.out, /훅 2 → 3 \(\+1\)/);
+    assert.match(r.out, /늘어난 쪽: 훅 수\./);
+    assert.match(r.out, /기계 검사/);
+    assert.equal(fs.readFileSync(path.join(env.records, 'device-layer-history.tsv'), 'utf8').trim().split('\n').length, 3);
+    const none = setup();
+    layer(none);
+    waste5(none);
+    assert.equal(fs.existsSync(path.join(none.records, 'device-layer-history.tsv')), false);
+  });
+
+  it('넣은 글자와 잡은 수를 실제 기간으로 하루치로 나누고, 기간이 없는 옛 줄과는 하루치를 견주지 않는다', () => {
+    const env = setup();
+    layer(env, { historyHooks: 3 });
+    const r = waste5(env, ['--record']);
+    assert.match(r.out, /앞 값에 기간이 없어 하루치는 견주지 않음/);
+    assert.match(r.out, /늘어난 쪽: 없음/);
+    const last = fs.readFileSync(path.join(env.records, 'device-layer-history.tsv'), 'utf8').trim().split('\n').at(-1).split('\t');
+    assert.equal(last.length, 6);
+    assert.ok(Number(last[5]) > 1, last[5]);
+    // 하루보다 짧은 구간도 합계를 그대로 하루 평균으로 쓰지 않는다(바닥 1시간).
+    const short = setup();
+    layer(short);
+    const hour = new Date(Date.now() - 2 * 3600000).toISOString();
+    fs.writeFileSync(path.join(short.records, 'hook-output.tsv'), lines([[new Date().toISOString(), 'talker', '100']]));
+    const s = short.run(['waste', '--since', hour, '--repo', short.root]);
+    assert.match(s.out, /합계 100, 하루 평균 (\d+) \(/);
+    assert.ok(Number(s.out.match(/하루 평균 (\d+)/)[1]) > 1000, s.out.match(/하루 평균 \d+[^\n]*/)[0]);
   });
 });

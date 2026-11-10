@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const KIT = path.resolve(HERE, '..', '..', '..');
@@ -37,8 +38,7 @@ function sampleKit({ changes } = {}) {
   put(kit, 'subagent-system/docs/KIT_ONLY.md', '키트에서만');
   put(kit, 'extras/perm.json', '{}');
   put(kit, 'CLAUDE.md', '관리 지침');
-  put(kit, 'README.md', '비공개 README: 뺀 묶음 소개');
-  put(kit, 'README.public.md', 'readme');
+  put(kit, 'README.md', '첫 줄\n<!-- 비공개 -->\n비공개 README: 뺀 묶음 소개\n<!-- /비공개 -->\n<!-- 공개판: 공개판 소개 -->\n끝 줄\n');
   put(kit, 'LICENSE', 'license');
   put(kit, 'subagent-system/APPLY_GUIDE.md', 'guide');
   put(kit, 'subagent-system/BACKGROUND.md', 'background');
@@ -93,8 +93,7 @@ describe('공개판 트리 만들기', { skip: SKIP }, () => {
     assert.ok(!files.some((f) => f.startsWith('bundles/hidden/')), '뺀 묶음 폴더');
     assert.ok(!files.some((f) => f.startsWith('extras/')), 'extras');
     assert.ok(!files.includes('CLAUDE.md'), '키트 뿌리 CLAUDE.md');
-    assert.ok(!files.includes('README.public.md'), '공개용 README 원본 이름은 남기지 않는다');
-    assert.equal(fs.readFileSync(path.join(out, 'README.md'), 'utf8'), 'readme', 'README.md는 공개용 원본 내용');
+    assert.equal(fs.readFileSync(path.join(out, 'README.md'), 'utf8'), '첫 줄\n공개판 소개\n끝 줄\n', 'README.md는 비공개 칸을 빼고 공개판 줄을 푼 내용');
     assert.ok(!files.some((f) => f.includes('node_modules')), 'node_modules');
     assert.ok(!files.some((f) => /hidden/.test(f) && f !== 'bundles/omitted.json'), '뺀 묶음 파일');
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, 'bundles', 'omitted.json'), 'utf8')), { omitted: ['hidden'], keep: ['rules/kit-hidden.md'] });
@@ -136,10 +135,39 @@ describe('깨끗한 작업 트리만 내보낸다', { skip: SKIP }, () => {
   });
 });
 
+describe('공개판 README 뽑기', { skip: SKIP }, () => {
+  const { publicReadme } = createRequire(import.meta.url)(TOOL);
+  it('비공개 칸을 빼고 공개판 줄은 들여쓰기째 남긴다', () => {
+    assert.equal(publicReadme('a\n  <!-- 비공개 -->\n  - 비밀\n  <!-- /비공개 -->\n<!-- 공개판:   - 공개 -->\nb'), 'a\n  - 공개\nb');
+  });
+  it('짝이 안 맞거나 줄 가운데 표시가 있으면 멈춘다', () => {
+    assert.throws(() => publicReadme('<!-- 비공개 -->\nx'), /닫히지 않았습니다/);
+    assert.throws(() => publicReadme('<!-- /비공개 -->'), /열지 않은/);
+    assert.throws(() => publicReadme('<!-- 비공개 -->\n<!-- 비공개 -->'), /다시 열렸습니다/);
+    assert.throws(() => publicReadme('<!-- 비공개 -->\n<!-- 공개판: x -->\n<!-- /비공개 -->'), /공개판 줄/);
+    assert.throws(() => publicReadme('글 <!-- 비공개 --> 글'), /통째로/);
+    assert.throws(() => publicReadme('a\n<!--비공개-->\nSECRET\n<!--/비공개-->'), /정해진 꼴/);
+    assert.throws(() => publicReadme('<!--공개판: x -->'), /정해진 꼴/);
+    assert.throws(() => publicReadme('<!-- \u1107\u1175\u1100\u1169\u11BC\u1100\u1162 -->\nSECRET'), /닫히지 않았습니다/);
+  });
+  it('공개판에 없는 파일 링크와 뺀 묶음 소개 줄을 찾는다', () => {
+    const { readmeLeaks } = createRequire(import.meta.url)(TOOL);
+    const got = readmeLeaks('- [가](a.md)\n- [나](b.md#x)\n- [다](https://x.y)\n  - 피드백 루프: 설명\n- **피드백 루프**: 설명\n피드백 루프 이야기', ['a.md'], ['피드백 루프']);
+    assert.deepEqual(got, ['2줄: 공개판에 없는 파일을 가리킴 b.md', '4줄: 공개판에서 뺀 묶음 「피드백 루프」 소개', '5줄: 공개판에서 뺀 묶음 「피드백 루프」 소개']);
+  });
+  it('표시를 못 지키면 내보내기도 멈춘다', () => {
+    const kit = sampleKit();
+    put(kit, 'README.md', '<!-- 비공개 -->\n빠진 묶음\n');
+    const r = exportKit(kit, ['--out', path.join(tmp('out'), 'tree')]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /닫히지 않았습니다/);
+  });
+});
+
 describe('비공개 이름 검사', { skip: SKIP }, () => {
   it('내보낸 트리가 어떤 저장소의 무시 폴더 안에 있어도 폴더를 직접 훑어 잡는다', () => {
     const kit = sampleKit();
-    put(kit, 'README.public.md', 'DEMO_SECRET_NAME 안내');
+    put(kit, 'README.md', 'DEMO_SECRET_NAME 안내');
     const host = tmp('host');
     gitIn(host, 'init', '-q');
     put(host, '.gitignore', 'out/\n');
@@ -167,7 +195,7 @@ describe('비공개 이름 검사', { skip: SKIP }, () => {
 
   it('공개 파일에 비공개 이름이 있으면 멈춘다', () => {
     const kit = sampleKit();
-    put(kit, 'README.public.md', 'DEMO_SECRET_NAME 안내');
+    put(kit, 'README.md', 'DEMO_SECRET_NAME 안내');
     const r = exportKit(kit, ['--out', path.join(tmp('out'), 'tree')]);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /비공개 이름/);
@@ -202,13 +230,25 @@ describe('공개 저장소 폴더에 얹기(--into)', { skip: SKIP }, () => {
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.ok(!fs.existsSync(path.join(repo, 'old', 'removed.md')), '지워진 파일');
     assert.ok(!fs.existsSync(path.join(repo, 'old')), '빈 폴더');
-    assert.equal(fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), 'readme');
+    assert.equal(fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), '첫 줄\n공개판 소개\n끝 줄\n');
     assert.ok(fs.existsSync(path.join(repo, 'bundles', 'omitted.json')));
     assert.equal(git(repo, 'rev-parse', 'HEAD').stdout, headBefore, '커밋은 하지 않는다');
     const status = git(repo, 'status', '--porcelain').stdout;
     assert.match(status, /^D {1,2}old\/removed\.md/m);
     assert.match(status, /^A {1,2}bundles\/omitted\.json/m);
     assert.match(r.stdout, /git -C ".+" commit -F ".+COMMIT_MSG\.txt"/);
+  });
+
+  it('공개 저장소 폴더에 「공개판 」으로 시작하지 않는 커밋을 막는 검사를 건다', () => {
+    const kit = sampleKit();
+    const repo = fakeRepo();
+    const r = exportKit(kit, ['--out', path.join(tmp('out'), 'tree'), '--into', repo, '--remote', 'example.invalid/pub/kit']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const bad = git(repo, 'commit', '-q', '-m', 'brief-check: 직접 고침');
+    assert.notEqual(bad.status, 0, '직접 고친 커밋은 막힌다');
+    assert.match(bad.stderr, /kit-export/);
+    const ok = git(repo, 'commit', '-q', '-m', '공개판 1.0');
+    assert.equal(ok.status, 0, ok.stderr);
   });
 
   it('--remote가 없거나 다른 원격이면 멈춘다', () => {
@@ -276,5 +316,64 @@ describe('공개 저장소 폴더에 얹기(--into)', { skip: SKIP }, () => {
     const r2 = exportKit(kit, ['--out', path.join(tmp('out'), 'tree'), '--into', noRemote, '--remote', 'x']);
     assert.equal(r2.status, 1);
     assert.match(r2.stderr, /원격/);
+  });
+});
+
+describe('임시 폴더 정리', { skip: SKIP }, () => {
+  const { mkTmp, cleanTemps } = createRequire(import.meta.url)(TOOL);
+  const leftOf = (dir) => fs.readdirSync(dir).filter((n) => n.startsWith('kit-export-'));
+  // 실행 하나가 쓰는 시스템 임시 폴더를 시험용 폴더로 돌려, 남은 것을 그대로 센다
+  const withTmp = (kit, args) => {
+    const t = tmp('sys');
+    const cfg = fakeConfig();
+    commitKit(kit);
+    const r = spawnSync('node', [TOOL, '--kit', kit, '--bundles', 'base', ...args], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, TMPDIR: t } });
+    return { r, left: leftOf(t), t };
+  };
+
+  it('남길 폴더만 빼고 이 실행이 만든 임시 폴더를 지운다', () => {
+    const a = mkTmp('unit-a');
+    const b = mkTmp('unit-b');
+    fs.writeFileSync(path.join(a, 'x.txt'), 'x');
+    assert.equal(cleanTemps([b]), 1);
+    assert.equal(fs.existsSync(a), false);
+    assert.equal(fs.existsSync(b), true);
+    assert.equal(cleanTemps(), 1);
+    assert.equal(fs.existsSync(b), false);
+  });
+  const ENDS = ['kit-export-msg', 'kit-export-tree'];
+  const kinds = (left) => left.map((n) => n.replace(/-[A-Za-z0-9]+$/, '')).sort();
+  it('--check가 오류로 죽어도(시험 폴더가 없어 터지는 견본) 시험용 임시 폴더는 남기지 않고 결과물(트리, 메시지 파일)만 남긴다', () => {
+    const { r, left } = withTmp(sampleKit(), ['--check']);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /ENOENT/);
+    assert.deepEqual(kinds(left), ENDS);
+  });
+  it('--check가 시험 실패로 멈춰도 시험용 임시 폴더(stage, cfg-tests, cfg-new, k1031, emptycfg)를 모두 만든 뒤 남기지 않는다', () => {
+    const kit = sampleKit();
+    put(kit, 'bundles/base/core.part.json', part('base', ['rules/kit-demo.md', 'skills/demo/**'], ['subagent-system/docs/KIT_ONLY.md', 'subagent-system/VERSION', 'subagent-system/scripts/tests/ok.test.js']));
+    put(kit, 'subagent-system/scripts/tests/ok.test.js', "import { it } from 'node:test'; it('ok', () => {});\n");
+    put(kit, 'tools/kit-lint.cjs', 'process.exit(0);\n');
+    const { r, left } = withTmp(kit, ['--check']);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /공개판 키트 시험:/);
+    assert.match(r.stdout, /라우팅만 새로 깔기: 종료/);
+    assert.match(r.stdout, /임시 폴더 7개 지움/);
+    assert.deepEqual(kinds(left), ENDS);
+  });
+  it('--check 없이 돌리면 트리와 메시지 파일을 남기고 시험용 폴더는 처음부터 만들지 않는다', () => {
+    const { r, left } = withTmp(sampleKit(), []);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.deepEqual(kinds(left), ENDS);
+  });
+  it('트리를 만들다 멈춰도(깨끗하지 않은 작업 트리) 임시 폴더를 남기지 않는다', () => {
+    const kit = sampleKit();
+    commitKit(kit);
+    put(kit, 'README.md', '커밋 안 된 수정');
+    const t = tmp('sys');
+    const r = spawnSync('node', [TOOL, '--kit', kit, '--bundles', 'base', '--check'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: fakeConfig(), TMPDIR: t } });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /깨끗하지 않습니다/);
+    assert.deepEqual(leftOf(t).map((n) => n.replace(/-[A-Za-z0-9]+$/, '')), ['kit-export-tree']);
   });
 });

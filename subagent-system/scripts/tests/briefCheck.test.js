@@ -139,6 +139,12 @@ describe('지시문 검사 훅 brief-check', () => {
 
   it('description에 표의 일 이름도 「표에 없는 일:」도 없으면 deny하고 꼴을 알린다', () => {
     assert.match(reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC) })), /표에 없는 일: <이름>/);
+    // 후보: 보낸 정의가 맡는 칸의 일 이름만 싣는다(sonnet-high는 「리뷰 지적 수정」 한 칸, 다른 칸 이름은 없다)
+    const hi = reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC) }));
+    assert.match(hi, /sonnet-high가 맡는 칸의 일 이름: 리뷰 지적 수정\./);
+    assert.doesNotMatch(hi, /문서 작성|최종 코드 리뷰/);
+    const med = reason(run({ subagent_type: 'sonnet-medium', description: '9회차 막음 고침', prompt: brief(GOAL + DOC) }));
+    assert.match(med, /일 이름: 문서 작성, 구현과 문서\./);
     assert.equal(run({ subagent_type: 'sonnet-high', description: '리뷰 지적 수정: 9회차 막음 고침', prompt: brief(GOAL + DOC) }).out, null);
     assert.equal(run({ subagent_type: 'sonnet-high', description: '표에 없는 일: 막음 고침, 9회차', prompt: brief(GOAL + DOC) }).out, null);
     assert.match(reason(run({ subagent_type: 'sonnet-high', description: '9회차 막음 고침', prompt: brief(GOAL + DOC + '표에 없는 일: 막음 고침\n') })), /description에 라우팅 표/);
@@ -181,6 +187,47 @@ describe('지시문 검사 훅 brief-check', () => {
     assert.match(reason(run(short)), /부딪힐 때/);
     fs.writeFileSync(file, GOAL + DOC + FILLER + '\n지킬 결정: 사용자가 정한 기능은 빼지 않는다.\n부딪힐 때: 결정 문서가 먼저다.\n');
     assert.equal(run(short).out, null);
+  });
+
+  describe('묶음 판정 검사는 번호가 이름표로 선 꼴만 묶음 표시로 본다', () => {
+    const { isBatchJudging } = createRequire(import.meta.url)(HOOK);
+    it('이름표 꼴은 묶음 표시다', () => {
+      assert.equal(isBatchJudging('PLAN.md의 「묶음 2. 비로그인 편집기」를 적용한다.', '구현'), true);
+      assert.equal(isBatchJudging('구현을 적용한다.', '구현과 문서: 편집기(묶음 3, 서버 함수)'), true);
+      assert.equal(isBatchJudging('표의 묶음 01을 채워 판정한다.', '문서 점검'), true);
+      assert.equal(isBatchJudging('맡은 묶음(묶음 1, 흐름 문서)을 점검한다.', '점검'), true);
+      assert.equal(isBatchJudging('rhaul/apply/packet-02.md를 적용한다.', '문서 갱신'), true);
+      assert.equal(isBatchJudging('검수한다.', '문서 검토 묶음 2 보고'), true);
+    });
+    it('개수, 차례, 단위, 이상이 붙은 셈 말은 묶음 표시가 아니다', () => {
+      for (const t of ['효과 표 묶음 6개는 이름만 바뀌었다.', '겹친 묶음 291개를 센다.', '겹친 묶음 3 이상이고 가리킴이 아닌 것.', '정답 묶음 2차를 만든다.', '첫 묶음 13건 반영.', '고침 묶음 5c046f32를 점검한다.']) {
+        assert.equal(isBatchJudging(`${t} 판정한다.`, '문서 검토'), false, t);
+      }
+      assert.equal(isBatchJudging('판정한다.', '용어 점검 첫 묶음 13건 반영'), false);
+    });
+    it('판정, 적용, 검수, 점검 낱말이 없으면 이름표가 있어도 보지 않는다', () => {
+      assert.equal(isBatchJudging('「묶음 2. 편집기」를 만든다.', '구현(묶음 2)'), false);
+    });
+    it('셈 말만 있는 긴 지시는 지킬 결정 줄이 없어도 막지 않는다', () => {
+      const p = brief(GOAL + DOC + '효과 표 묶음 6개를 판정한다.\n');
+      assert.equal(run({ subagent_type: 'opus-medium', description: '문서 내용 검토: 판정', prompt: p }, { routing: null }).out, null);
+    });
+    it('이름표가 있는 나눈 묶음 일은 지킬 결정 줄이 없으면 막는다', () => {
+      const p = brief(GOAL + DOC + 'PLAN.md의 「묶음 2. 비로그인 편집기」를 적용한다.\n');
+      assert.match(reason(run({ subagent_type: 'sonnet-medium', description: '구현과 문서: 편집기(묶음 2)', prompt: p })), /부딪힐 때/);
+    });
+  });
+
+  describe('조회용 기본 정의는 목표 줄과 결정 문서를 요구하지 않는다', () => {
+    const lookup = FILLER + '공식 문서에서 훅 입력 필드를 찾아 인용해 답하라.';
+    it('web-fetch와 claude-code-guide의 긴 물음은 통과한다', () => {
+      for (const type of ['web-fetch', 'claude-code-guide', 'Explore']) assert.equal(run({ subagent_type: type, description: '공식 문서 확인', prompt: lookup }).out, null, type);
+    });
+    it('일을 맡기는 정의와 정의를 안 밝힌 지시는 그대로 요구한다', () => {
+      assert.match(reason(run({ subagent_type: 'sonnet-medium', description: '문서 작성', prompt: lookup })), /목표/);
+      assert.match(reason(run({ description: '문서 작성', prompt: lookup })), /목표/);
+      assert.match(reason(run({ subagent_type: 'general-purpose', description: '문서 작성', prompt: lookup })), /목표/);
+    });
   });
 
   describe('결정어(U4-11)', () => {
@@ -288,6 +335,16 @@ describe('지시문 검사 훅 brief-check', () => {
       assert.match(reason(run(low, { records: rec, transcript: t })), /1건이다/);
     });
 
+    it('이 세션에서 띄운 시험이라도 마지막 회고 경계 앞의 것은 세지 않는다', () => {
+      usage(['회고\t-\t회고\t2026-11-07T20:08:35.776Z\t1\t0\t-']);
+      const t = path.join(rec, 'session-old.jsonl');
+      const launch = (id, ts) => JSON.stringify({ type: 'assistant', timestamp: ts, message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { subagent_type: 'haiku-high', description: '분석과 가공', prompt: 'x' } }] } });
+      fs.writeFileSync(t, [launch('t1', '2026-11-07T15:19:06.499Z'), launch('t2', '2026-11-07T15:55:28.752Z')].join('\n') + '\n');
+      assert.match(reason(run(low, { records: rec, transcript: t })), /0건이다/);
+      fs.appendFileSync(t, launch('t3', '2026-11-08T01:10:38.328Z') + '\n');
+      assert.match(reason(run(low, { records: rec, transcript: t })), /1건이다/);
+    });
+
     it('시험 정의로 2건 보냈으면 칸 정의로 보내도 통과한다', () => {
       usage(['회고\t-\t회고', row('haiku-high', '분석과 가공', 'a1111111111'), row('haiku-high', '분석과 가공', 'a3333333333')]);
       assert.equal(run(low, { records: rec }).out, null);
@@ -345,6 +402,21 @@ describe('다른 세션에 일을 넘기는 메시지', () => {
     assert.deepEqual(handoffProblems({ to: 'kit-session', message: `넘깁니다: ${f}` }), []);
     assert.deepEqual(handoffProblems({ to: 'kit-session', message: '넘깁니다.\n목표: 끝낸다' }), []);
   });
+  it('이 세션이 이름을 붙여 띄운 실무자에게 보내는 이어 말은 넘김이 아니다', () => {
+    const t = path.join(tmp, 'session.jsonl');
+    const launch = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'u1', name: 'Agent', input: { description: '고치기', subagent_type: 'opus-high', name: 'turn-play-fix', prompt: '목표: x' } }] } });
+    const other = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '"name":"turn-play-fix" 라고 적은 글' }] } });
+    fs.writeFileSync(t, `${other}\n`);
+    const msg = { to: 'turn-play-fix', message: '끝나면 메인이 따로 맡깁니다. 다시 확인해 주세요.' };
+    assert.equal(handoffProblems(msg, { transcriptPath: t }).length, 1);
+    fs.writeFileSync(t, `${other}\n${launch}\n`);
+    assert.deepEqual(handoffProblems(msg, { transcriptPath: t }), []);
+    assert.deepEqual(handoffProblems({ to: 'turn-play-fix [pane 2]', message: msg.message }, { transcriptPath: t }), []);
+    // 세션 이름으로 보낸 넘김은 그대로 막는다.
+    assert.equal(handoffProblems({ to: 'other-session', message: msg.message }, { transcriptPath: t }).length, 1);
+    // 대화 기록을 못 읽으면 지금처럼 검사한다.
+    assert.equal(handoffProblems(msg, { transcriptPath: path.join(tmp, 'none.jsonl') }).length, 1);
+  });
   it('실무자에게 보내는 이어 말과 넘김이 아닌 메시지는 보지 않는다', () => {
     assert.deepEqual(handoffProblems({ to: 'a7f17c342defcf26c', message: '넘김 절을 고쳐라' }), []);
     assert.deepEqual(handoffProblems({ to: 'kit-session', message: '오탐 두 건을 알립니다' }), []);
@@ -364,5 +436,229 @@ describe('고치는 일의 끝난 기준에 전체 시험만 주는 지시', () 
   it('시험을 돌리는 것이 일인 지시와 고치지 않는 지시는 보지 않는다', () => {
     assert.equal(fullTestOnly(base, '시험 실행과 결과 정리: 키트'), false);
     assert.equal(fullTestOnly('끝난 기준: 전체 시험 결과를 표로 낸다.', '분석과 가공: 결과'), false);
+  });
+  it('파일을 고치지 않는다고 밝혔거나 판정 파일만 쓰게 한 지시는 일 종류와 상관없이 보지 않는다', () => {
+    // 일 종류가 문서 내용 검토인 판정 지시가 제약의 전체 시험 말과 「판정 대상에 넣는다」에 걸려 헛막혔다(2026-11-08).
+    const review = '목표: 바퀴 5를 판정한다. 끝난 기준: 판정 파일에 막음 표를 쓴다.\n판정 대상에 넣는다.\n하지 말 것:\n- 파일을 고치지 않는다(판정 파일만 쓴다).\n- 키트 전체 시험(`node --test tests/*.test.js`)은 메인이 이미 돌렸다.';
+    assert.equal(fullTestOnly(review, '문서 내용 검토: 바퀴 5 판정'), false);
+    assert.equal(fullTestOnly('할 일: 훅을 고친다.\n끝난 기준: 판정 파일만 쓴다. 전체 시험은 보지 않는다.', '구현과 문서: 판정'), false);
+    assert.equal(fullTestOnly('할 일: 문서를 넣는다.\n끝난 기준: 결과 파일 경로를 답한다.\n제약: 파일은 결과 파일 말고 고치지 않는다. 코드는 읽기만. pytest는 돌려도 된다.', '문서 내용 검토: 4회차'), false);
+  });
+  it('앞에 말이 붙어 범위를 줄이는 「고치지 않는다」는 고치지 않는 지시로 보지 않는다', () => {
+    for (const limit of ['그 밖의 파일은 고치지 않는다.', '너는 문서를 고치지 않는다. 시험 파일은 고쳐도 된다.', '개발 DB에 이미 들어간 앞 회차 파일은 고치지 않는다.']) {
+      assert.equal(fullTestOnly(`${base}\n${limit}`, '구현과 문서: 훅 고치기'), true, limit);
+    }
+  });
+});
+
+describe('목업대로 옮기는 일의 사용자 확인 줄', () => {
+  // 확인받지 않은 화면의 목업까지 「목업 그대로 이식」으로 맡겨 사용자가 「목업 나한테 안 보여주지 않았어?」라고 짚었다.
+  const mk = (readme) => {
+    const d = fs.mkdtempSync(path.join(dir, 'mk-'));
+    const m = path.join(d, 'content', 'mockups-v2');
+    fs.mkdirSync(path.join(m, 'shots'), { recursive: true });
+    if (readme !== null) fs.writeFileSync(path.join(m, 'README.md'), readme);
+    return m;
+  };
+  const impl = (m, extra = '') => ({ subagent_type: 'sonnet-medium', description: '구현과 문서: 목록과 상세 화면 목업 그대로 이식', prompt: brief(GOAL + DOC + `목록 화면을 새 목업대로 고친다. 목업 판: ${m}/shots/list-1440.png\n${extra}`) });
+
+  it('목업 폴더 README에 확인 줄이 없으면 막고 폴더를 알린다', () => {
+    const m = mk('# 새 목업\n판정 7회차 통과\n');
+    const r = reason(run(impl(m)));
+    assert.match(r, /사용자 확인 줄이 없다/);
+    assert.ok(r.includes(m));
+  });
+
+  it('README가 없어도 막는다', () => {
+    assert.match(reason(run(impl(mk(null)))), /사용자 확인 줄이 없다/);
+  });
+
+  it('README에 확인 줄이 있으면 통과한다', () => {
+    const m = mk('# 새 목업\n사용자 확인: 11-08 목록, 상세, 결과 「목록방식은 괜찮아보여」\n');
+    assert.equal(run(impl(m)).out, null);
+  });
+
+  it('지시문에만 확인 줄이 있고 목업 폴더가 있으면 README 줄을 요구한다', () => {
+    const m = mk('# 새 목업\n');
+    assert.match(reason(run(impl(m, '사용자 확인: 11-08 목록 화면\n'))), /README\.md에 사용자 확인 줄/);
+  });
+
+  it('목업 폴더가 지시에 없으면 지시문의 확인 줄이나 없음(까닭)을 받는다', () => {
+    const art = { subagent_type: 'sonnet-medium', description: '구현과 문서: 사과 멀티 판 목업 옮기기', prompt: brief(GOAL + DOC + '목업: 아티팩트 https://claude.ai/artifact/x 대로 옮긴다.\n') };
+    assert.match(reason(run(art)), /확인한 표시가 없다/);
+    assert.equal(run({ ...art, prompt: art.prompt + '\n사용자 확인: 11-04 판 화면 「빼고가자」\n' }).out, null);
+    assert.equal(run({ ...art, prompt: art.prompt + '\n사용자 확인: 없음(사용자가 직접 그린 목업)\n' }).out, null);
+  });
+
+  it('옮긴 결과를 보는 리뷰, 판정 지시와 「」 안의 인용은 보지 않는다', () => {
+    const m = mk(null);
+    assert.equal(run({ ...impl(m), description: '최종 코드 리뷰: 목록 새 목업 이식' }).out, null);
+    const quoted = { subagent_type: 'sonnet-medium', description: '구현과 문서: 훅 고치기', prompt: brief(GOAL + DOC + '「목업 그대로 이식」으로 맡기는 일을 막는 훅을 고친다.\n') };
+    assert.equal(run(quoted).out, null);
+  });
+
+  it('결정어는 사용자 설정을 따른다', () => {
+    const cfg = fs.mkdtempSync(path.join(dir, 'cfg-'));
+    fs.mkdirSync(path.join(cfg, 'subagent-system'));
+    fs.writeFileSync(path.join(cfg, 'subagent-system', 'config.json'), JSON.stringify({ decisionWords: ['대표'] }));
+    const m = mk('대표 확인: 11-08 목록 화면 「괜찮아보여」\n');
+    assert.equal(run(impl(m), { configDir: cfg }).out, null);
+    assert.match(reason(run(impl(mk('사용자 확인: x\n')), { configDir: cfg })), /대표 확인 줄이 없다/);
+  });
+});
+
+describe('뒤에서 돌리는 실무자 이름 막기', () => {
+  const ok = { subagent_type: 'sonnet-medium', description: '문서 작성', prompt: brief(GOAL + DOC) };
+  it('name과 run_in_background: true가 함께 있으면 막고 agentId로 보내라고 알린다', () => {
+    const r = reason(run({ ...ok, name: 'worker-a', run_in_background: true }));
+    assert.match(r, /name을 빼고/);
+    assert.match(r, /agentId로 SendMessage/);
+  });
+  it('짧은 지시문과 haiku 정의여도 막는다', () => {
+    assert.match(reason(run({ subagent_type: 'haiku-low', description: '파일 탐색과 검색', prompt: '찾아라', name: 'w', run_in_background: true })), /name을 빼고/);
+  });
+  it('이름만 있거나(앞에서 돌림), 뒤에서 돌리되 이름이 없거나, 팀원(team_name)이면 막지 않는다', () => {
+    assert.match(reason(run({ ...ok, name: 'worker-a', run_in_background: 'true' })), /name을 빼고/);
+    assert.equal(run({ ...ok, name: 'worker-a', run_in_background: 'false' }).out, null);
+    assert.equal(run({ ...ok, name: 'worker-a' }).out, null);
+    assert.equal(run({ ...ok, name: 'worker-a', run_in_background: false }).out, null);
+    assert.equal(run({ ...ok, run_in_background: true }).out, null);
+    assert.equal(run({ ...ok, name: 'mate', team_name: 't', run_in_background: true }).out, null);
+  });
+});
+
+// work-bundle.js는 회사 규칙 묶음 파일이라 그 묶음이 없는 설치본 시험에서는 건너뛴다.
+const WORK_SCRIPT = path.join(SUB, 'scripts', 'work-bundle.js');
+describe('작업 문서가 결정 문서인 지시의 묶음 줄', { skip: !fs.existsSync(WORK_SCRIPT) }, () => {
+  const WORKDOC = '# sign-up-form\n<!-- work-doc -->\n목표: 가입 단추가 한 번만 눌린다.\n끝난 기준: 시나리오 통과.\n일 종류: 그 밖(시험)\n\n## 결정\n| 결정 이름 | 정한 것 | 왜 | 버린 안 |\n|:--|:--|:--|:--|\n| 가입 단추 | 한 번만 누른다 | 「한 번만 시작」 | 전원 동의: 느림 |\n\n## 걸리는 규칙\n- R1 TIME-12\n\n## 시나리오\n- S1 새로고침하면 잇는다 (걸린 규칙: R1) | 시험: 판정(UI_WORK 「판정」)\n\n## 아직 안 정한 것\n';
+  const RULES = '# 시간\n\n## TIME-12 글 이어 쓰기\n- 값: 새로고침하면 잇는다.\n';
+  // 작업 문서와 규칙 문서가 든 임시 프로젝트를 만들고 묶음 파일을 엮어 경로를 돌려준다.
+  function setup() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-bundle-'));
+    fs.mkdirSync(path.join(root, 'docs', 'plan'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'docs', 'rules'), { recursive: true });
+    const work = path.join(root, 'docs', 'plan', 'sign-up-form.md');
+    fs.writeFileSync(work, WORKDOC);
+    fs.writeFileSync(path.join(root, 'docs', 'rules', 'rules_time.md'), RULES);
+    fs.writeFileSync(path.join(root, 'docs', 'order.md'), '# 작업 방법\n\n## 순서\n1. 규칙을 읽는다.\n');
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude', 'work-docs.json'), JSON.stringify({ kinds: { 시험: [{ file: ['docs/order.md'], sections: ['순서'] }] } }));
+    const r = spawnSync(process.execPath, [WORK_SCRIPT, '--work', work, '--root', root, '--home', path.join(root, 'home'), '--rules', path.join(root, 'docs', 'rules'), '--out', path.join(root, 'out')], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { root, work, bundle: JSON.parse(r.stdout).path };
+  }
+  const ask = (work, bundleLine) => run({ ...medium, prompt: brief(GOAL + `결정 문서: ${work}\n` + (bundleLine ? `묶음: ${bundleLine}\n` : '')) });
+
+  it('작업 문서를 결정 문서로 주고 묶음 줄이 없으면 deny하고 엮는 명령을 알린다', () => {
+    const { work } = setup();
+    const r = reason(ask(work, ''));
+    assert.match(r, /묶음: <경로>/);
+    assert.match(r, /work-bundle\.js --work /);
+  });
+
+  it('맞는 묶음 줄이 있으면 통과한다', () => {
+    const { work, bundle } = setup();
+    assert.equal(ask(work, bundle).out, null);
+  });
+
+  it('작업 문서가 바뀌어 묶음이 낡았으면 deny하고 바뀐 원본과 다시 엮는 명령을 알린다', () => {
+    const { work, bundle } = setup();
+    fs.appendFileSync(work, '- 한 줄 더\n');
+    const r = reason(ask(work, bundle));
+    assert.match(r, /낡았다/);
+    assert.match(r, /sign-up-form/);
+    assert.match(r, /work-bundle\.js --work /);
+  });
+
+  it('걸리는 규칙 원문이 바뀌어도 묶음이 낡았다고 막는다', () => {
+    const { root, work, bundle } = setup();
+    fs.appendFileSync(path.join(root, 'docs', 'rules', 'rules_time.md'), '- 값 하나 더: 8\n');
+    assert.match(reason(ask(work, bundle)), /낡았다/);
+  });
+
+  it('묶음 줄의 파일이 없거나 다른 작업 문서의 묶음이면 deny한다', () => {
+    const a = setup();
+    const b = setup();
+    assert.match(reason(ask(a.work, path.join(a.root, 'nope.md'))), /묶음 파일이 아니거나 없다/);
+    assert.match(reason(ask(a.work, b.bundle)), /의 것인데 결정 문서는/);
+  });
+
+  it('작업 문서 표시가 없는 결정 문서나 파일이 없는 경로는 묶음 줄을 요구하지 않는다', () => {
+    const { root } = setup();
+    const plain = path.join(root, 'docs', 'plan', 'big.md');
+    fs.writeFileSync(plain, '# 큰 결정 문서\n| 가입 단추 | 한 번만 |\n');
+    assert.equal(ask(plain, '').out, null);
+    // 표시를 문서 가운데 예로 보이는 문서(규칙 문서)도 작업 문서가 아니다.
+    const example = path.join(root, 'docs', 'plan', 'rules.md');
+    fs.writeFileSync(example, '# 규칙\n\n본문\n\n```\n<!-- work-doc -->\n```\n'.replace('본문', '가'.repeat(5) + '\n1\n2\n3'));
+    assert.equal(ask(example, '').out, null);
+    assert.equal(ask(path.join(root, 'docs', 'plan', 'nope.md'), '').out, null);
+  });
+
+  it('회사 규칙 묶음이 안 깔리면 이 검사도 쉰다', () => {
+    const { work } = setup();
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-bundle-cfg-'));
+    fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed: { routing: { options: [], parts: {} } } }));
+    assert.equal(run({ ...medium, prompt: brief(GOAL + `결정 문서: ${work}\n`) }, { configDir: cfg }).out, null);
+  });
+});
+
+// 큰 결정 문서(decision-doc 표시)를 절 없이 통째로 가리킨 지시는 묶음 줄이 없으면 막고, 절을 달았으면 알리기만 한다.
+describe('큰 결정 문서를 가리킨 지시의 묶음 줄', { skip: !fs.existsSync(WORK_SCRIPT) }, () => {
+  const BIG = '<!-- decision-doc -->\n# 개편\n\n| 결정 이름 | 정한 것 |\n|:--|:--|\n| 목록 칩 | 14px |\n';
+  function bigDoc(head = BIG) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-big-'));
+    const big = path.join(root, 'BIG.md');
+    fs.writeFileSync(big, head);
+    return { root, big };
+  }
+  const ask = (line, extra = '', opts) => run({ ...medium, prompt: brief(GOAL + line + '\n' + extra) }, opts);
+
+  it('절 없이 통째로 가리키고 묶음 줄이 없으면 막고, 작업 문서 만들기와 엮는 명령과 출구를 알린다', () => {
+    const { big } = bigDoc();
+    const r = reason(ask(`결정 문서: ${big}`));
+    assert.match(r, /큰 결정 문서/);
+    assert.match(r, /work-bundle\.js --work <작업 문서>/);
+    assert.match(r, /작업 문서/);
+    assert.match(r, /묶음: 없음\(까닭\)/);
+    // 다음 줄에 경로가 있는 꼴도 같다.
+    assert.match(reason(run({ ...medium, prompt: brief(GOAL + `결정 문서:\n${big}\n`) })), /큰 결정 문서/);
+  });
+
+  it('절을 달았으면 막지 않고 알리기만 한다(additionalContext)', () => {
+    const { big } = bigDoc();
+    const r = ask(`결정 문서: ${big} 「목록 칩」`);
+    assert.equal(r.out.hookSpecificOutput.permissionDecision, undefined);
+    assert.match(r.out.hookSpecificOutput.additionalContext, /^지시문 점검 알림: .*묶음: <경로>/);
+    assert.equal(ask(`결정 문서: ${big} §3`).out.hookSpecificOutput.permissionDecision, undefined);
+  });
+
+  it('출구 `묶음: 없음(까닭)`이나 묶음 줄이 있으면 통과한다', () => {
+    const { big } = bigDoc();
+    assert.equal(ask(`결정 문서: ${big}`, '묶음: 없음(읽기만 하는 점검)').out, null);
+    assert.equal(ask(`결정 문서: ${big}`, '묶음: 없음()').out.hookSpecificOutput.permissionDecision, 'deny');
+    const a = (() => { const w = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-big2-')); return w; })();
+    assert.equal(ask(`결정 문서: ${big}`, `묶음: ${a}/x.md`).out, null);
+  });
+
+  it('표시가 없는 문서, 머리 밖의 표시, 없는 파일, 상대 경로는 이 검사 밖이다', () => {
+    const { root } = bigDoc();
+    const plain = path.join(root, 'plain.md');
+    fs.writeFileSync(plain, '# 결정\n| 목록 칩 | 14px |\n');
+    assert.equal(ask(`결정 문서: ${plain}`).out, null);
+    const late = path.join(root, 'late.md');
+    fs.writeFileSync(late, '# 1\n2\n3\n4\n5\n6\n<!-- decision-doc -->\n');
+    assert.equal(ask(`결정 문서: ${late}`).out, null);
+    assert.equal(ask(`결정 문서: ${root}/nope.md`).out, null);
+    assert.equal(ask('결정 문서: docs/plan/BIG.md').out, null);
+  });
+
+  it('회사 규칙 묶음이 안 깔리면 이 검사도 쉰다', () => {
+    const { big } = bigDoc();
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-big-cfg-'));
+    fs.mkdirSync(path.join(cfg, 'subagent-system'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'subagent-system', 'bundles.lock.json'), JSON.stringify({ lockVersion: 1, installed: { routing: { options: [], parts: {} } } }));
+    assert.equal(ask(`결정 문서: ${big}`, '', { configDir: cfg }).out, null);
   });
 });

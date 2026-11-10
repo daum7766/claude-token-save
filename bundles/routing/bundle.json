@@ -21,7 +21,8 @@
     "docReviewHashes",
     "repeatsRunDate",
     "commandName",
-    "turnLockHook"
+    "turnLockHook",
+    "progressDirs"
   ],
   "uses": [
     {
@@ -35,6 +36,33 @@
       "without": "지시문 검사의 목표 줄, 결정 문서 줄, 지킬 결정 줄 검사, 묻기 종류의 올릴 것 칸, 질문 수 지표가 쉰다"
     }
   ],
+  "serves": {
+    "portable": [
+      "subagent-system/rates.json"
+    ],
+    "no-conflict": [
+      "skills/retro/**",
+      "subagent-system/hooks/retro-write-allow.js"
+    ],
+    "kit-only-change": [
+      "subagent-system/docs/ROUTING_TABLE.md",
+      "subagent-system/docs/SUBAGENT_BRIEF_CHECKLIST.md"
+    ],
+    "self-improve": [
+      "subagent-system/scripts/subagent-retro.js",
+      "subagent-system/docs/RETRO.md",
+      "subagent-system/docs/AUTO_RETRO.md",
+      "subagent-system/scripts/speed-review.js",
+      "subagent-system/hooks/brief-check.js",
+      "subagent-system/hooks/stall-check.js",
+      "subagent-system/hooks/usage-autolog.js"
+    ],
+    "proactive-fix": [
+      "subagent-system/scripts/docHealth.js",
+      "subagent-system/scripts/work-metrics.js",
+      "subagent-system/hooks/git/pre-commit.d/20-moved-refs.cjs"
+    ]
+  },
   "records": [
     "records/subagent-usage.tsv",
     "records/subagent-cost.tsv",

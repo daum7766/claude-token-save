@@ -157,6 +157,20 @@ describe('git-discard-guard', () => {
   });
 });
 
+describe('git-discard-guard: stash', () => {
+  const stash = (command) => run('git-discard-guard.js', { tool_name: 'Bash', tool_input: { command }, cwd: WT }, cfg());
+
+  it('작업 트리나 보관함을 바꾸는 stash 꼴은 막고 까닭에 대체 방법을 싣는다', () => {
+    const blocked = ['git stash', 'git stash -q', 'git stash -u', 'git stash push', 'git stash push -m x', 'git stash save x', 'git stash pop', 'git stash apply', 'git stash drop', 'git stash clear', 'git stash branch b', 'git -C x stash pop', 'cd x && git stash', 'git status && git stash pop'];
+    for (const c of blocked) assert.equal(decision(stash(c)), 'deny', c);
+    assert.match(stash('git stash').permissionDecisionReason, /다른 세션 변경을 치우거나 꺼낼 수 있다.*임시 커밋\(WIP\)/);
+  });
+
+  it('읽기만 하는 list와 show, 다른 git 명령, 커밋 메시지 안의 stash 글자는 둔다', () => {
+    for (const c of ['git stash list', 'git stash show -p', 'git -C x stash list', 'git status && git stash show', 'git commit -m "stash 설명"', 'git log --grep stash', 'echo stash']) assert.equal(stash(c), null, c);
+  });
+});
+
 describe('supabase-sql-guard', { skip: missingFiles('subagent-system/hooks/supabase-sql-guard.js') }, () => {
   const sql = (query) => run('supabase-sql-guard.js', { tool_name: 'mcp__supabase__execute_sql', tool_input: { query } }, cfg());
 

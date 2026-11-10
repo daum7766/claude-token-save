@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { legacyHashOf } from '../kitMerge.js';
-import { missingFiles, missingBundles } from './fixtures/installedLayout.js';
+import { missingFiles, missingBundles, NOT_KIT_SOURCE } from './fixtures/installedLayout.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KIT_SETUP = path.join(SCRIPTS, 'kit-setup.js');
@@ -1941,3 +1941,45 @@ describe('키트 원본 규칙 파일', () => {
   });
 });
 
+
+describe('kit-setup.js 호칭 후보와 설정 문서 쓰기', { skip: NOT_KIT_SOURCE }, () => {
+  it('name-candidates는 git 사용자 이름에 님을 붙인 후보, 기본 후보 둘, 비워 두기를 이 차례로 내고 같은 값은 한 번만 낸다', () => {
+    const home = tmpDir();
+    const gitconfig = write(home, 'gitconfig', '[user]\n\tname = 테스터\n');
+    const r = jsonOut(run(['name-candidates'], { env: { CLAUDE_CONFIG_DIR: tmpDir(), GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1' } }));
+    const values = r.candidates.map((c) => c.value);
+    assert.equal(values[0], '테스터님');
+    assert.equal(r.candidates[0].source, 'git user.name');
+    assert.deepEqual(values.slice(-3), ['대표님', '팀장님', '']);
+    assert.equal(new Set(values).size, values.length);
+    const other = jsonOut(run(['name-candidates'], { env: { CLAUDE_CONFIG_DIR: tmpDir(), GIT_CONFIG_GLOBAL: write(home, 'gitconfig2', '[user]\n\tname = 대표\n'), GIT_CONFIG_NOSYSTEM: '1' } }));
+    assert.equal(other.candidates.filter((c) => c.value === '대표님').length, 1);
+  });
+
+  it('settings-init은 견본에서 설정 문서를 만들어 호칭, 선택지 받는 꼴, 언어를 쓰고 호칭(님 뗌)을 결정어와 개인 표지에 더하며, 다시 돌리면 준 값만 고친다', () => {
+    const cfg = tmpDir();
+    write(cfg, 'subagent-system/config.json', { profile: 'personal' });
+    const first = jsonOut(run(['settings-init', '--name', '팀장님', '--choice', '본문', '--lang', 'ko'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
+    assert.equal(first.created, true);
+    const doc = fs.readFileSync(path.join(cfg, 'USER_SETTINGS.md'), 'utf8');
+    assert.match(doc, /^- 호칭: 팀장님$/m);
+    assert.match(doc, /^- 선택지 받는 꼴: 본문$/m);
+    assert.match(doc, /^- 답할 언어: ko$/m);
+    assert.match(doc, /^- 사용 방식: 개인용/m);
+    const config = read(path.join(cfg, 'subagent-system', 'config.json'));
+    assert.ok(config.decisionWords.includes('팀장'));
+    assert.ok(config.personalMarkers.includes('팀장'));
+    const second = jsonOut(run(['settings-init', '--choice', '창'], { env: { CLAUDE_CONFIG_DIR: cfg } }));
+    assert.equal(second.created, false);
+    const doc2 = fs.readFileSync(path.join(cfg, 'USER_SETTINGS.md'), 'utf8');
+    assert.match(doc2, /^- 호칭: 팀장님$/m);
+    assert.match(doc2, /^- 선택지 받는 꼴: 질문 창$/m);
+  });
+
+  it('settings-init은 알 수 없는 선택지 받는 꼴과 언어 코드를 거절한다', () => {
+    const cfg = tmpDir();
+    assert.notEqual(run(['settings-init', '--choice', '다른것'], { env: { CLAUDE_CONFIG_DIR: cfg } }).status, 0);
+    assert.notEqual(run(['settings-init', '--lang', '한국어'], { env: { CLAUDE_CONFIG_DIR: cfg } }).status, 0);
+    assert.equal(fs.existsSync(path.join(cfg, 'USER_SETTINGS.md')), false);
+  });
+});

@@ -208,6 +208,8 @@ describe('설치 바닥 빈 폴더 설치', { skip: SKIP }, () => {
     // 묶음 하나만 깐 설치마다 설치본 시험 전체가 실패 0이다. 그 묶음의 파일과 안 깐 묶음의 파일을 읽는 시험은 건너뛰기로 표시돼야 한다.
     const results = await runInstalledSuites([...installs.values()]);
     for (const [bundle, cfg] of installs) assertSuiteClean(`${bundle}만 깐 설치`, results.get(cfg));
+    // 깔린 문서가 가리키는 설정 폴더 경로는 그 설치에 있거나, 같은 줄에 조건이 있거나, 그 묶음의 uses가 가리키는 묶음의 파일이어야 한다.
+    for (const [bundle, cfg] of installs) assert.deepEqual(danglingDocPaths(cfg, bundle, defs), [], `${bundle}만 깐 설치에서 끊기는 가리킴`);
   });
 
   it('U5-3 모든 묶음과 기본 항목을 깔면 옛 설치 목록(caa02fe)의 파일이 모두 놓이고 훅 등록이 정의와 같으며, 설치본 시험 전체가 실패 0이다', { timeout: 600000, skip: partialKit() }, async () => {
@@ -234,6 +236,35 @@ describe('설치 바닥 빈 폴더 설치', { skip: SKIP }, () => {
     assertSuiteClean('모든 묶음', await runInstalledSuite(cfg));
   });
 });
+
+// 깔린 문서(.md)가 `~/.claude/...` 꼴로 가리키는 경로 가운데 설치에 없는데 변명도 없는 것을 `파일:줄 경로`로 모은다(설치본의 경로는 설정 폴더 절대 경로로 바뀌어 있다).
+// 변명은 둘이다. 같은 줄에서 경로 앞에 「깔려 있으면」 「있으면」 「없으면」 같은 조건이 있거나 경로 바로 뒤에 「가 있으면」이 있는 것, 그 경로가 이 묶음의 uses가 가리키는 묶음의 파일인 것.
+// 쓰는 쪽 묶음이 실행 중에 만드는 파일(제안 목록)은 만드는 묶음이 깔렸을 때만 변명 없이 통한다. 까닭: 묶음 하나만 깔면 약하게 기대는 문서가 없는 파일을 읽으라고 해 끊겼다.
+const RUNTIME_CREATED = { 'docs/PROPOSALS.md': 'routing' };
+const CONDITION_BEFORE = /(깔려 있으면|깔렸으면|있으면|없으면|있는 경우|없는 경우)/;
+function danglingDocPaths(cfg, bundle, defs) {
+  const owner = new Map(entriesFor(defs, { bundles: ALL_BUNDLES(), options: optionIds(defs) }).map((e) => [e.key, e.bundle]));
+  const allowed = new Set([bundle, ...(defs.bundles.get(bundle).uses ?? []).map((u) => u.bundle)]);
+  const esc = cfg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?:~|\\$HOME|${esc})/(?:\\.claude/)?((?:subagent-system|rules|skills|agents|hooks|docs|commands)/[A-Za-z0-9_./-]+[A-Za-z0-9_])`, 'g');
+  const out = [];
+  for (const rel of walk(cfg).filter((f) => f.endsWith('.md') && !f.includes('/tests/') && !f.startsWith('subagent-system/records/'))) {
+    get(cfg, rel).split('\n').forEach((line, i) => {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(line))) {
+        const target = m[1];
+        if (/[<*{]/.test(target) || exists(cfg, target)) continue;
+        if (allowed.has(owner.get(target)) || RUNTIME_CREATED[target] === bundle) continue;
+        const before = line.slice(Math.max(0, m.index - 120), m.index);
+        const after = line.slice(m.index + m[0].length, m.index + m[0].length + 14);
+        if (CONDITION_BEFORE.test(before) || /^`?[가이]? 있으면/.test(after)) continue;
+        out.push(`${rel}:${i + 1} ${target}`);
+      }
+    });
+  }
+  return out;
+}
 
 // 깐 기록에 남은 고른 항목을 묶음.항목 꼴로 모은다.
 function lockedOptions(cfg) {

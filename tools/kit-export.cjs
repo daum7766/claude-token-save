@@ -23,7 +23,7 @@ const namesTool = require('./kit-private-names.cjs');
 
 // 묶음 밖에서 공개로 나가는 파일과 폴더(끝이 /면 폴더). 공개 목록은 여기 한곳에만 둔다.
 const PUBLIC_EXTRA = [
-  'README.public.md', // 공개용 README 원본. 내보낼 때 README.md로 바꿔 싣는다(비공개 README는 빠진 묶음을 소개해 링크가 깨진다).
+  'README.md', // 비공개 칸을 빼고 공개판 줄을 풀어 싣는다(publicReadme).
   'LICENSE',
   'subagent-system/APPLY_GUIDE.md',
   'subagent-system/BACKGROUND.md',
@@ -33,7 +33,59 @@ const PUBLIC_EXTRA = [
   '.claude-plugin/',
   '.gitignore',
 ];
-const README_SRC = 'README.public.md';
+const README_SRC = 'README.md';
+const PRIVATE_OPEN = /^\s*<!-- 비공개 -->\s*$/;
+const PRIVATE_CLOSE = /^\s*<!-- \/비공개 -->\s*$/;
+const PUBLIC_LINE = /^\s*<!-- 공개판: (.*) -->\s*$/;
+
+/**
+ * 비공개 README에서 공개판 README를 뽑는다. `<!-- 비공개 -->`와 `<!-- /비공개 -->` 사이 줄은 빼고, `<!-- 공개판: 글 -->` 줄은 글만 남긴다.
+ * 왜: 두 판을 손으로 따로 고치다 한쪽만 바뀌어 어긋났다(같은 문장 묶음 29, 하루 다섯 번 고침). 한 판만 고치고 공개판은 뽑아 만든다.
+ * 전제: 표시는 줄 하나를 통째로 쓴다. 짝이 안 맞거나 겹치거나, 다른 줄에 표시 글자가 남으면 멈춘다(빠진 묶음 소개가 공개판에 새지 않게).
+ */
+function publicReadme(text) {
+  const out = [];
+  let inPrivate = false;
+  text.split('\n').forEach((raw, i) => {
+    const at = `README.md ${i + 1}줄`;
+    const line = raw.normalize('NFC'); // 자모가 갈린 「비공개」도 표시로 알아보게 한다
+    if (PRIVATE_OPEN.test(line)) {
+      if (inPrivate) throw new Error(`${at}: 비공개 표시가 닫히기 전에 다시 열렸습니다`);
+      inPrivate = true;
+    } else if (PRIVATE_CLOSE.test(line)) {
+      if (!inPrivate) throw new Error(`${at}: 열지 않은 비공개 표시를 닫았습니다`);
+      inPrivate = false;
+    } else if (inPrivate) {
+      if (PUBLIC_LINE.test(line)) throw new Error(`${at}: 비공개 칸 안에 공개판 줄이 있습니다`);
+    } else {
+      const m = PUBLIC_LINE.exec(line);
+      if (m) out.push(m[1]);
+      else if (/<!--\s*\/?\s*(비공개|공개판)/.test(line)) throw new Error(`${at}: 표시는 줄 하나를 통째로, 띄어쓰기까지 정해진 꼴로 써야 합니다`);
+      else out.push(raw);
+    }
+  });
+  if (inPrivate) throw new Error('README.md: 비공개 표시가 닫히지 않았습니다');
+  return out.join('\n');
+}
+
+/**
+ * 공개 README에 새어 나간 비공개 몫을 찾는다. 상대 링크가 공개판 파일 목록에 없거나, 뺀 묶음 이름으로 시작하는 소개 줄(`- 이름:`)이 있으면 그 줄을 돌려준다.
+ * 왜: 표시 없이 더한 묶음 소개는 비공개 이름 검사(설치본 조각 이름만 봄)에 걸리지 않아 공개판에 그대로 나간다.
+ * 전제: 링크는 `](경로)` 꼴의 상대 경로만 보고(주소, 메일, `#` 앵커는 뺌), 묶음 이름은 bundle.json의 title이다.
+ */
+function readmeLeaks(readme, list, omittedTitles) {
+  const have = new Set(list);
+  const found = [];
+  readme.split('\n').forEach((line, i) => {
+    for (const m of line.matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = m[1].split('#')[0];
+      if (!target || /^[a-z]+:/i.test(target)) continue;
+      if (!have.has(path.posix.normalize(target))) found.push(`${i + 1}줄: 공개판에 없는 파일을 가리킴 ${target}`);
+    }
+    for (const t of omittedTitles) if (new RegExp(`^\\s*- (\\*\\*)?${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\*\\*)?\\s*[:(]`).test(line)) found.push(`${i + 1}줄: 공개판에서 뺀 묶음 「${t}」 소개`);
+  });
+  return found;
+}
 const DEFAULT_BUNDLES = ['base', 'routing', 'safety']; // 일하는 노하우 묶음은 비공개 저장소 권한으로만 나눈다(11-08 대표)
 const CHANGES_SRC = 'subagent-system/CHANGES.public.md';
 const CHANGES_OUT = 'subagent-system/CHANGES.md';
@@ -48,7 +100,28 @@ const stop = (msg) => {
 const log = (msg) => process.stdout.write(`${msg}\n`);
 
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts });
-const mkTmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `kit-export-${name}-`));
+// 이 실행이 만든 임시 폴더. 끝날 때(멈춤과 오류 포함) 남길 것만 빼고 지운다. --check가 시험용 폴더 7개를 시스템 임시 폴더에 남겼다(바퀴 7 판정).
+const temps = new Set();
+const mkTmp = (name) => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), `kit-export-${name}-`));
+  temps.add(d);
+  return d;
+};
+function cleanTemps(keep = []) {
+  const kept = new Set(keep);
+  let removed = 0;
+  for (const d of temps) {
+    if (kept.has(d)) continue;
+    try {
+      fs.rmSync(d, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      /* 못 지워도 내보내기 결과는 그대로다 */
+    }
+    temps.delete(d);
+  }
+  return removed;
+}
 
 function copyOne(srcRoot, dstRoot, relPath) {
   const from = path.join(srcRoot, ...relPath.split('/'));
@@ -132,7 +205,6 @@ async function buildTree({ kit, out, bundles, tracked }) {
     else files.add(e);
   }
   files.delete('subagent-system/CHANGES.md');
-  files.delete('README.md');
   files.delete('CLAUDE.md');
   // 글롭이 무시된 파일까지 담지 않게 git이 추적하는 파일만 남긴다. 정의가 가리키는 파일이 빠지면 아래 정의 검사가 잡는다.
   const list = [...files].filter((f) => !f.startsWith('extras/') && !f.split('/').some((s) => SKIP_DIRS.has(s)) && (!tracked || tracked.has(f))).sort();
@@ -140,14 +212,20 @@ async function buildTree({ kit, out, bundles, tracked }) {
   fs.mkdirSync(out, { recursive: true });
   if (fs.readdirSync(out).length) stop(`대상 폴더가 비어 있지 않습니다: ${out}`);
   if (!list.includes(README_SRC)) stop(`${README_SRC}가 없거나 git이 추적하지 않습니다`);
+  let readme;
+  try {
+    readme = publicReadme(fs.readFileSync(path.join(kit, README_SRC), 'utf8'));
+  } catch (e) {
+    stop(e.message);
+  }
+  const omitted = allBundles.filter((b) => !bundles.includes(b)).sort();
+  const leaks = readmeLeaks(readme, [...list, CHANGES_OUT], omitted.map((b) => defs.bundles.get(b).title)); // 변경 기록은 CHANGES.public.md로 따로 싣는다
+  if (leaks.length) stop(`공개 README에 비공개 몫이 남았습니다. README.md에서 그 줄을 비공개 칸에 넣습니다:\n${leaks.map((l) => `  ${l}`).join('\n')}`);
   for (const f of list) {
     if (f === README_SRC) continue;
     copyOne(kit, out, f);
   }
-  fs.copyFileSync(path.join(kit, README_SRC), path.join(out, 'README.md'));
-
-  list.splice(list.indexOf(README_SRC), 1, 'README.md');
-  const omitted = allBundles.filter((b) => !bundles.includes(b)).sort();
+  fs.writeFileSync(path.join(out, 'README.md'), readme);
   // 뺀 묶음 조각의 파일을 설치본 키로 펼친 목록. 설치 쪽이 이 키만 고아로 남기고, 그 밖에 키트에서 빠진 파일(base, routing이 지우거나 이름 바꾼 것)은 지운다.
   const keep = new Set();
   for (const p of defs.parts) if (!bundles.includes(p.bundle) && p.origin !== 'local') for (const k of mod.expandFiles(p)) keep.add(k);
@@ -314,6 +392,28 @@ const realOf = (p) => {
   }
 };
 
+// 공개 저장소 폴더에 커밋 검사를 건다. 첫 줄이 「공개판 」이 아닌 커밋을 막아, 다른 세션이 이 폴더를 키트 원본으로 알고 직접 고쳐 개발 커밋이 공개되지 않게 한다(11-08 직접 커밋 3개가 생김).
+const GUARD_MARK = '# kit-export: 공개 저장소 커밋 검사';
+const GUARD_HOOK = `#!/bin/sh
+${GUARD_MARK}
+[ "$KIT_PUBLIC_DIRECT" = 1 ] && exit 0
+head -n 1 "$1" | grep -q '^공개판 ' && exit 0
+echo "공개 저장소는 키트 원본에서 고치고 tools/kit-export.cjs로만 얹습니다. 이 폴더에서 직접 만든 커밋은 막습니다(꼭 필요하면 KIT_PUBLIC_DIRECT=1)." >&2
+exit 1
+`;
+function guardPublicRepo(into) {
+  const rel = git(into, ['rev-parse', '--git-path', 'hooks/commit-msg']).stdout.trim();
+  const file = path.resolve(into, rel);
+  if (fs.existsSync(file) && !fs.readFileSync(file, 'utf8').includes(GUARD_MARK)) {
+    log(`알림: ${file}에 다른 commit-msg 훅이 있어 공개 저장소 커밋 검사를 걸지 않았습니다`);
+    return false;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, GUARD_HOOK, { mode: 0o755 });
+  fs.chmodSync(file, 0o755);
+  return true;
+}
+
 function putInto({ out, into, messageFile, remote, list, kit, publicBase = OLD_COMMIT }) {
   if (!fs.existsSync(path.join(into, '.git'))) stop(`git 저장소가 아닙니다: ${into}`);
   if (!remote) stop('--into에는 --remote(공개 저장소 원격 주소에 들어갈 글)가 필요합니다. 엉뚱한 저장소에 얹지 않게 하려는 것입니다');
@@ -334,6 +434,7 @@ function putInto({ out, into, messageFile, remote, list, kit, publicBase = OLD_C
   const remotes = rem.stdout.trim();
   if (!remotes) stop('원격이 없어 공개 저장소인지 확인할 수 없습니다');
   if (!remotes.includes(remote)) stop(`원격이 ${remote}가 아닙니다:\n${remotes}`);
+  guardPublicRepo(into);
   const tracked = git(into, ['ls-files', '-z']).stdout.split('\0').filter(Boolean);
   const keep = new Set(list);
   const removed = [];
@@ -367,30 +468,44 @@ function putInto({ out, into, messageFile, remote, list, kit, publicBase = OLD_C
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const kit = path.resolve(o.kit ?? path.join(__dirname, '..'));
-  const out = path.resolve(o.out ?? path.join(mkTmp('tree'), 'tree'));
-  const tracked = trackedSet(kit);
-  const { list, omitted } = await buildTree({ kit, out, bundles: o.bundles, tracked });
-  log(`트리: ${out} (파일 ${list.length}개, 뺀 묶음 ${omitted.length}개)`);
-  const { messageFile, version } = writeChanges({ kit, out });
-  list.push(CHANGES_OUT);
-  const finalList = [...new Set(list)].sort();
-  log(`버전 ${version}, 커밋 메시지 파일: ${messageFile}`);
+  const treeTmp = o.out ? null : mkTmp('tree');
+  const out = path.resolve(o.out ?? path.join(treeTmp, 'tree'));
+  let msgDir = null;
+  let isChecked = false;
+  try {
+    const tracked = trackedSet(kit);
+    const { list, omitted } = await buildTree({ kit, out, bundles: o.bundles, tracked });
+    log(`트리: ${out} (파일 ${list.length}개, 뺀 묶음 ${omitted.length}개)`);
+    const { messageFile, version } = writeChanges({ kit, out });
+    msgDir = path.dirname(messageFile);
+    list.push(CHANGES_OUT);
+    const finalList = [...new Set(list)].sort();
+    log(`버전 ${version}, 커밋 메시지 파일: ${messageFile}`);
 
-  // 정의 검사(뺀 묶음을 가리키는 걸침은 오류가 아니어야 한다)
-  const mod = await import(pathToFileURL(path.join(__dirname, '..', 'subagent-system', 'scripts', 'kitBundles.js')).href);
-  const d2 = mod.loadDefinitions({ kitRoot: out, configDir: mkTmp('emptycfg') });
-  const bad = d2.problems.filter((p) => p.level === 'error');
-  if (bad.length) stop(`공개판 묶음 정의 오류:\n${bad.map((p) => `  ${p.msg}`).join('\n')}`);
+    // 정의 검사(뺀 묶음을 가리키는 걸침은 오류가 아니어야 한다)
+    const mod = await import(pathToFileURL(path.join(__dirname, '..', 'subagent-system', 'scripts', 'kitBundles.js')).href);
+    const d2 = mod.loadDefinitions({ kitRoot: out, configDir: mkTmp('emptycfg') });
+    const bad = d2.problems.filter((p) => p.level === 'error');
+    if (bad.length) stop(`공개판 묶음 정의 오류:\n${bad.map((p) => `  ${p.msg}`).join('\n')}`);
 
-  privateNameCheck({ out, messageFile, expectedFiles: finalList.length });
-  if (o.check) {
-    const defPub = path.join(os.homedir(), 'programming', 'claude-token-save');
-    const oldFrom = o.oldFrom ? path.resolve(o.oldFrom) : o.into ? path.resolve(o.into) : fs.existsSync(path.join(defPub, '.git')) ? defPub : null;
-    const r = await check({ out, kit, oldFrom });
-    if (!r.ok) stop('--check 실패(위 줄 확인)');
-    log('--check 통과');
+    privateNameCheck({ out, messageFile, expectedFiles: finalList.length });
+    if (o.check) {
+      const defPub = path.join(os.homedir(), 'programming', 'claude-token-save');
+      const oldFrom = o.oldFrom ? path.resolve(o.oldFrom) : o.into ? path.resolve(o.into) : fs.existsSync(path.join(defPub, '.git')) ? defPub : null;
+      const r = await check({ out, kit, oldFrom });
+      if (!r.ok) stop('--check 실패(위 줄 확인)');
+      log('--check 통과');
+      isChecked = true;
+    }
+    if (o.into) putInto({ out, into: path.resolve(o.into), messageFile, remote: o.remote, list: finalList, kit, publicBase: o.publicBase });
+  } finally {
+    // 결과물(트리, 커밋 메시지 파일)은 사람이 쓰거나 확인할 것이라 남기고, 시험용 임시 폴더만 지운다.
+    // 통과한 --check 뒤에 --into도 없으면 결과물도 쓸모가 없어 함께 지운다.
+    const useless = isChecked && !o.into && !o.out;
+    const keep = useless ? [] : [treeTmp, msgDir].filter(Boolean);
+    const n = cleanTemps(keep);
+    if (n) log(`임시 폴더 ${n}개 지움${keep.length ? `(남김: ${keep.join(', ')})` : ''}`);
   }
-  if (o.into) putInto({ out, into: path.resolve(o.into), messageFile, remote: o.remote, list: finalList, kit, publicBase: o.publicBase });
 }
 
 if (require.main === module) {
@@ -403,4 +518,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { PUBLIC_EXTRA, buildTree, writeChanges, privateNameCheck, putInto, main };
+module.exports = { PUBLIC_EXTRA, publicReadme, readmeLeaks, buildTree, writeChanges, privateNameCheck, putInto, guardPublicRepo, mkTmp, cleanTemps, main };

@@ -20,5 +20,11 @@
     "deleteToTrash"
   ],
   "uses": [],
+  "serves": {
+    "no-conflict": [
+      "subagent-system/hooks/supabase-sql-guard.js",
+      "subagent-system/scripts/trash.js"
+    ]
+  },
   "records": []
 }

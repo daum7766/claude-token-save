@@ -9,7 +9,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { NEW_FILES, loadDefinitions, expandFiles, entriesFor, linksCovered, selectableBundles, optionIds, srcOf } from '../kitBundles.js';
+import { NEW_FILES, PIECE_KEYS, loadDefinitions, expandFiles, entriesFor, linksCovered, selectableBundles, optionIds, srcOf } from '../kitBundles.js';
 import * as shared from '../kitShared.js';
 import { NOT_KIT_SOURCE, missingFiles, missingBundles, partialKit } from './fixtures/installedLayout.js';
 
@@ -294,6 +294,61 @@ describe('U1 묶음 정의', { skip: NOT_KIT_SOURCE }, () => {
     const defs = loadDefinitions({ kitRoot: root });
     assert.doesNotMatch(errorsOf(defs).map((e) => e.msg).join('\n'), /ghost/);
     assert.deepEqual(defs.omitted, ['ghost']);
+  });
+});
+
+describe('키트 목적 조각(serves)', { skip: NOT_KIT_SOURCE }, () => {
+  it('S1 serves에 적은 설치 키가 모두 그 묶음 파일 목록에 실제로 든다', () => {
+    for (const b of real.bundles.values()) {
+      const parts = real.parts.filter((p) => p.bundle === b.name);
+      const patterns = parts.flatMap((p) => p.files);
+      const keys = new Set(parts.flatMap((p) => expandFiles(p)));
+      for (const [piece, list] of Object.entries(b.serves)) {
+        assert.ok(PIECE_KEYS.includes(piece), `${b.name}: 모르는 조각 키 ${piece}`);
+        for (const f of list) assert.ok(keys.has(f) || patterns.includes(f), `${b.name}.serves.${piece}의 ${f}가 묶음 파일에 없음`);
+      }
+    }
+  });
+
+  it('S2 여섯 조각마다 맡는 묶음이 하나 이상이다(전체 키트일 때만)', { skip: WHOLE_KIT }, () => {
+    const empty = PIECE_KEYS.filter((k) => ![...real.bundles.values()].some((b) => b.serves[k]?.length));
+    assert.deepEqual(empty, [], '맡는 묶음이 없는 조각');
+  });
+
+  it('S3 모르는 조각 키는 warn이고 error가 아니며 결과에서 빠진다. 꼴이 틀리면 error', () => {
+    const root = copyKit();
+    const f = path.join(root, 'bundles', 'safety', 'bundle.json');
+    const b = JSON.parse(fs.readFileSync(f, 'utf8'));
+    b.serves = { ...b.serves, ghost: ['subagent-system/scripts/trash.js'] };
+    fs.writeFileSync(f, JSON.stringify(b));
+    const defs = loadDefinitions({ kitRoot: root });
+    assert.deepEqual(errorsOf(defs), []);
+    assert.ok(warnsOf(defs).some((w) => /모르는 조각 키 ghost/.test(w.msg)));
+    assert.equal(defs.bundles.get('safety').serves.ghost, undefined);
+    b.serves = { portable: 'trash.js' };
+    fs.writeFileSync(f, JSON.stringify(b));
+    assert.match(errorsOf(loadDefinitions({ kitRoot: root })).map((e) => e.msg).join('\n'), /serves\.portable/);
+  });
+
+  it('S4 serves가 없는 묶음은 빈 객체로 읽고 오류가 없다', () => {
+    const root = copyKit();
+    const f = path.join(root, 'bundles', 'safety', 'bundle.json');
+    const b = JSON.parse(fs.readFileSync(f, 'utf8'));
+    delete b.serves;
+    fs.writeFileSync(f, JSON.stringify(b));
+    const defs = loadDefinitions({ kitRoot: root });
+    assert.deepEqual(errorsOf(defs), []);
+    assert.deepEqual(defs.bundles.get('safety').serves, {});
+  });
+
+  it('S5 bundles --json에 묶음마다 serves가 나온다', () => {
+    const cfg = tmp('cfg');
+    const r = spawnSync(process.execPath, [path.join(KIT, 'subagent-system', 'scripts', 'kit-setup.js'), 'bundles', '--json', '--kit', KIT], { env: { ...process.env, CLAUDE_CONFIG_DIR: cfg }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout).bundles;
+    const base = out.find((b) => b.name === 'base');
+    assert.deepEqual(base.serves, real.bundles.get('base').serves);
+    assert.ok(Object.keys(base.serves).length > 0);
   });
 });
 

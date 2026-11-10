@@ -672,6 +672,22 @@ describe('subagent-retro.js 회고 방식과 잠금 실행', () => {
     assert.match(last(), /물을 것 3건/);
   });
 
+  it('개인용 --due 마지막 줄에 묻기 줄이 없는 오래된 열린 항목을 밀린 제안으로 띄우고, 회사용과 결과가 붙은 항목은 띄우지 않는다', () => {
+    const e = setup();
+    const last = () => run(['--due'], e).stdout.trim().split('\n').at(-1);
+    // 이 파일은 SUBAGENT_TODAY를 2026-10-13으로 고정한다.
+    const day = (n) => new Date(Date.UTC(2026, 9, 13) - n * 86400000).toISOString().slice(0, 10);
+    fs.writeFileSync(e.proposals, ['## 제안', '', '### 오래된 것', `- 출처: 탐색 ${day(10)}`, '### 어제 것', `- 출처: 탐색 ${day(1)}`, '### 오래됐지만 처리됨', `- 출처: 탐색 ${day(20)}`, '- 결과: 채택', '### 정책', '- 묻기: 정책', `- 출처: 탐색 ${day(30)}`, ''].join('\n'));
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'auto', profile: 'personal' }));
+    assert.match(last(), /밀린 제안 1건, 가장 오래된 것 10일/);
+    assert.match(last(), /물을 것 1건/);
+    const status = run(['--status'], e).stdout;
+    assert.match(status, /밀린 제안 1건, 가장 오래된 것 10일/);
+    assert.match(status, /제안 적용 비율: 25%\(결과 줄이 붙은 1건 \/ 전체 4건\)/);
+    fs.writeFileSync(e.config, JSON.stringify({ retroMode: 'ask', profile: 'company' }));
+    assert.doesNotMatch(last(), /밀린 제안/);
+  });
+
   it('잠금이 잡힌 동안 --due는 물을 것을 붙이지 않고, 잠금이 없으면 붙인다', () => {
     const e = setup();
     fs.writeFileSync(e.proposals, PROPOSALS);
@@ -1688,6 +1704,17 @@ describe('subagent-retro.js 고침 기록 --fix와 --fixes', () => {
       const out = r.stdout.trim().split('\n');
       assert.match(out[0], /^wait \d+$/);
       assert.match(out.at(-1), /그 자리에서 고칠 것 1건$/);
+    });
+
+    it('볼 날수가 지난 열린 실험이 있으면 마지막 줄에 볼 실험 건수가 붙고 장부가 없으면 붙지 않는다', { skip: missingFiles('subagent-system/scripts/work-metrics.js', 'subagent-system/scripts/work-score.js') }, () => {
+      const e = setup();
+      fs.writeFileSync(e.usage, lines(3));
+      assert.ok(!run(['--due'], e).stdout.includes('볼 실험'));
+      const head = ['번호', '시각', '줄', '바뀐 것', '왜', '기대', '볼 날수', '키트 커밋', '결과', '메모'].join('\t');
+      const row = ['1', '2020-01-01T00:00:00.000Z', '시작', '바꿈', '왜', '기대', '3', '', '', ''].join('\t');
+      fs.writeFileSync(path.join(e.dir, 'experiments.tsv'), `${head}\n${row}\n`);
+      const out = run(['--due'], e).stdout.trim().split('\n');
+      assert.match(out.at(-1), /볼 실험 1건$/);
     });
 
     it('처리할 것이 없으면 기존 출력과 같다', () => {

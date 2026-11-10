@@ -994,3 +994,62 @@ test('건너뛰기 알림은 압축이 불리지 않는 사이에 메인이 요�
   expect((await compact()).skip).toBeDefined()
   expect(allToasts.filter(t => t === SKIP_TOAST)).toHaveLength(2)
 })
+
+test('차례를 끝내고 뒤 작업을 기다리는 서브에이전트는 표에 남기고 경과 칸에 대기 분을 쓴다', { timeoutMs: 30_000 }, async ($, on) => {
+  const clock = mock.clock(on)
+  let status: 'running' | 'waiting' | 'completed' = 'running'
+  on('agent.list', () => {
+    return { value: [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status }] }
+  })
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', () => ({ value: {} }) as never)
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
+  on('ui.render', () => null as never)
+  on('model.fork', () => ({ value: { isAnswered: false } }) as never)
+  on('command.register', () => ({ value: {} }) as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.SessionStart', () => ({}) as never)
+  on('turn.step', async function* (_$, e) {
+    await clock.advance(1000)
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-sonnet-5-5') }
+  })
+  const lines = async () => {
+    const hint = await $.ui.mount({
+      plugin: 'agent-meter',
+      surface: 'terminal',
+      component: 'PromptHint',
+      props: { isDraft: false, isWorking: false, hint: 'h' },
+      viewport: { columns: 162, rows: 40 },
+    } as never)
+    return (await hint.findAll({ type: 'Text' })).map(t => t.text)
+  }
+  const agentRows = async () => (await lines()).filter(l => /^\s*문서 검수\s/.test(l))
+
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.classic.SessionStart({ source: 'startup', permission_mode: 'default' } as never)
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1, agentId: 'a1' })) {
+  }
+  await clock.advance(1000)
+  expect(await agentRows()).toHaveLength(1)
+  expect((await agentRows())[0]).not.toMatch(/대기/)
+
+  status = 'waiting'
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', agentId: 'a1', reason: 'answer' })
+  await clock.advance(3 * 60_000)
+  const rows = await agentRows()
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatch(/\s대기3분\s/)
+  await clock.advance(2 * 60 * 60_000)
+  expect((await agentRows())[0]).toMatch(/\s대기2시간\s/)
+
+  // 기다림이 끝나면 표에서 빠진다
+  status = 'completed'
+  await clock.advance(1000)
+  expect(await agentRows()).toHaveLength(0)
+})

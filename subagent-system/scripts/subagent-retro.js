@@ -11,7 +11,7 @@
  *   node scripts/subagent-retro.js --help                             이 사용법을 찍음. `--log --help`, `--check-fable --help`는 그 명령의 자세한 사용법을 찍음
  *   node scripts/subagent-retro.js --report                           표와 칸 조정 후보(기록은 쓰지 않음. 늘 읽히는 줄의 합이 기준 줄 수 이하이면 config.json의 claudeMdKeptLines만 지움)
  *   node scripts/subagent-retro.js --where                            기록 폴더의 절대 경로만 찍음(어느 폴더에서 실행해도 같음)
- *   node scripts/subagent-retro.js --due [--project <절대 경로>]          회고를 물을 때인지 `ask`(묻기. 회사용 기본), `auto`(개인용 기본. 회고할지 묻지 않고 뒤에서 돌리라는 판정), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상. 훅이 적은 줄은 표에서 일 이름을 찾은 것만 그 칸 에이전트로 셈)이면 ask이고 그 칸은 둘째 줄에 찍음. 마지막 줄 덧붙임 목록에 `그 자리에서 고칠 것 N건`(--fixes의 처리할 것. --project를 주면 그 프로젝트와 범위가 전역인 고침만 셈)과 `물을 것 N건`(--project를 주면 제목에 다른 폴더의 절대 경로가 든 항목은 뺌)이 붙을 수 있음(잠금이 잡힌 동안은 물을 것을 붙이지 않음). 물을 것은 PROPOSALS.md(설정 폴더의 docs/)의 `## 제안` 절 항목(`### 제목`)이고, 회사용(profile)은 항목 전부, 개인용은 본문에 `- 묻기: <돈|되돌리기 어려운 일|정책|목표로 못 가르는 트레이드오프|사용자 작업에 걸리는 장치|문지기 풀기>` 줄이 있는 항목만 셈)
+ *   node scripts/subagent-retro.js --due [--project <절대 경로>]          회고를 물을 때인지 `ask`(묻기. 회사용 기본), `auto`(개인용 기본. 회고할지 묻지 않고 뒤에서 돌리라는 판정), `wait <남은 줄 수>`로 찍음(사용 기록 줄 수에 비용 기록에만 있는 서브에이전트를 더해 셈. 회고를 거듭할수록 기준이 30건, 50건, 100건으로 오르고 표가 안정되면 200건. 기록 건수와 상관없이 마지막 회고 뒤 같은 칸이 올리기 후보 조건(올림이 붙은 에이전트 2명 이상, 칸 에이전트의 20% 이상. 훅이 적은 줄은 표에서 일 이름을 찾은 것만 그 칸 에이전트로 셈)이면 ask이고 그 칸은 둘째 줄에 찍음. 마지막 줄 덧붙임 목록에 `그 자리에서 고칠 것 N건`(--fixes의 처리할 것. --project를 주면 그 프로젝트와 범위가 전역인 고침만 셈)과 `볼 실험 N건`(실험 장부 experiments.tsv에서 볼 날수가 지난 열린 실험. work-metrics.js exp due)과 `물을 것 N건`(--project를 주면 제목에 다른 폴더의 절대 경로가 든 항목은 뺌)이 붙을 수 있음. 개인용은 `밀린 제안 N건, 가장 오래된 것 N일`도 붙을 수 있음(제안 항목 가운데 `- 묻기:` 줄과 `- 결과:` 줄이 없고 항목 안의 첫 날짜가 7일 넘은 것. 묻는 것이 아니라 회고가 처리할 것이라 물을 것 셈에는 들지 않음)(잠금이 잡힌 동안은 물을 것을 붙이지 않음). 물을 것은 PROPOSALS.md(설정 폴더의 docs/)의 `## 제안` 절 항목(`### 제목`)이고, 회사용(profile)은 항목 전부, 개인용은 본문에 `- 묻기: <돈|되돌리기 어려운 일|정책|목표로 못 가르는 트레이드오프|사용자 작업에 걸리는 장치|문지기 풀기>` 줄이 있는 항목만 셈)
  *   node scripts/subagent-retro.js --snooze                           회고 방식이 ask일 때만: 사용자가 회고를 미뤘다는 표시 줄을 사용 기록에 덧붙임(그 뒤 기준의 절반만큼, 최대 20줄 쌓일 때까지 --due가 wait. 회고 방식이 auto이면 회고를 묻지 않아 미룰 질문이 없으니 profile과 상관없이 알리고 끝냄. 올림이 쌓인 칸은 올림이 붙은 에이전트가 1명 더 생겨 조건을 다시 채울 때까지 묻지 않음. 그때 걸린 기준만 미루고, 기간 기준이 걸렸을 때만 기간 셈을 오늘부터 다시 함)
  *   node scripts/subagent-retro.js --retro-mode [auto|ask]            회사용(profile company)에서만: 회고 방식(config.json)을 찍거나 바꿈. 인자가 없으면 지금 값만 찍고, 설정 파일이 없거나 깨졌으면 ask. 개인용(profile personal)에서는 바꾸지 않고 그렇다고 알린 뒤 종료 코드 0
  *   node scripts/subagent-retro.js --claude-md-done                   CLAUDE.md 정리 제안을 묻고 마친 뒤 돌림. 늘 읽히는 줄(CLAUDE.md, @로 불러온 파일, paths 없는 rules)의 합이 기준(config.json의 claudeMdLimitLines, 기본 80. --docs의 프로젝트 CLAUDE.md 줄 수 표시도 같은 기준값)을 넘으면 config.json의 claudeMdKeptLines에 그 줄 수를 적고, 이하이거나 CLAUDE.md가 없으면 그 키를 지움(다른 키는 그대로). 설정 파일이 없거나 깨졌으면 만들지 않고 종료 코드 1
@@ -20,7 +20,7 @@
  *   node scripts/subagent-retro.js --claim                            자동 회고를 시작해도 되는지 잠금으로 가림. 잡으면 ok, 다른 회고가 진행 중이면 busy(3시간 넘은 잠금은 버려진 것으로 보고 다시 잡음)
  *   node scripts/subagent-retro.js --release [--failed]               잠금만 풂. --failed를 붙이면 자동 회고가 실패한 것으로 세어 config.json의 retroFailures를 1 올리고, 이어 두 번 실패하면 회고 방식을 ask로 돌림. --mark도 회고 표시를 남기면 잠금을 풀고 횟수를 0으로 돌림
  *   node scripts/subagent-retro.js --asks [--project <절대 경로>]         --due의 「물을 것」이 센 항목의 제목을 한 줄에 하나씩 찍음(없으면 「없음」). 같은 거르기(개인용은 묻기 줄 있는 것, --project를 주면 제목에 다른 폴더 절대 경로가 든 항목 뺌)를 써서, 사용자에게 보일 목록은 PROPOSALS.md를 직접 읽지 않고 이 출력으로 만듦
- *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 바로 고치기(profile이 정한 값, 애매할 때의 문턱은 kit-setup.js settings가 찍음), 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 그 구간 안에 시험 정의로 보낸 건수, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
+ *   node scripts/subagent-retro.js --status                           회고 방식, 회고 시점, 잠금, 물을 것 개수, 밀린 제안(있을 때), 제안 적용 비율(결과 줄이 붙은 항목 수 / 제안 항목 전체), 바로 고치기(profile이 정한 값, 애매할 때의 문턱은 kit-setup.js settings가 찍음), 표의 시험 표시마다 대기(마지막 회고 뒤 그 정의와 일 종류 기록 없음)와 보냄, 그 구간 안에 시험 정의로 보낸 건수, 최저선 아래로 보낸 다시 시험이 있으면 그 상태, 0이 아니면 자동 회고 연속 실패 횟수를 읽기만 하고 찍음
  *   node scripts/subagent-retro.js --slash "<인자>"                   슬래시 커맨드 인자(상태 보기, auto, ask, now, 그 밖은 사용법)와 같은 동작. 개인용(profile personal)에서 ask는 바꾸지 않고 set-profile company 안내만 찍음. 스킬은 인자가 auto, ask, now 중 하나와 정확히 같을 때만 부름. 항상 종료 코드 0
  *   node scripts/subagent-retro.js --kinds                            기록 전체에서 표에 없는 일 이름, 건수, 마지막 날짜만 찍음(새 일 이름을 짓기 전에 봄). config.json의 removedKinds에 든 이름에는 (사용자가 뺐거나 회고가 쪼갠 옛 이름)을, 표에 <이름>[기준] 꼴 칸이 있으면 (회고가 쪼갠 옛 이름)을 붙임
  *   node scripts/subagent-retro.js --remove-kind "<일 이름>"           사용자가 표에서 뺀 일 이름을 config.json의 removedKinds(배열)에 더함. 회고가 그 이름을 표에 다시 넣지 않고 묻게 함. 다른 키는 그대로, 설정 파일이 깨졌거나 체계가 쓰는 여덟 가지 일(회고 정정 분류, 자동 회고, 작업 기록 병목 분석, 문서 내용 검토, 무조건 Opus 영역 판단, 계획이 정한 무조건 Opus 영역 단계 구현, 무조건 Opus 영역 구현, high로도 안 풀려 다시 보내는 일)이면 쓰지 않고 종료 코드 1
@@ -58,7 +58,7 @@ import { locateTranscript } from './subagent-usage.js';
 import { claudeMdVerdict } from './claudeMdTidy.js';
 import { CLAUDE_DIR, RECORDS_DIR, GUIDE_FILE, AGENTS_DIR, CONFIG_FILE, PROJECTS_ROOT, listSessions, readJsonl, sessionCwd, projectRoot, localDate, retentionDays, printTable, appendWithHeader, splitLines } from './claudeProjectPaths.js';
 import { appendHistory, healthHistoryFile, totalGate, totalsHistory } from './docHealth.js';
-import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, pendingTitles, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, mergedLabelRows, isAbsolutePath, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
+import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, pendingTitles, staleProposals, staleProposalsText, proposalApplyRatio, PROPOSAL_STALE_DAYS, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, mergedLabelRows, isAbsolutePath, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
 
 const requireCjs = createRequire(import.meta.url);
 const USAGE_FILE = path.join(RECORDS_DIR, 'subagent-usage.tsv');
@@ -691,7 +691,11 @@ function releaseLock() {
 
 // 무엇을 묻는지는 profile이 정한다: 개인용은 사용자에게 묻는 여섯 종만, 회사용은 제안 목록 항목 전부를 물을 것으로 센다(회고 방식과 상관없음).
 const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-const pendingCount = (project = null) => countPending(readIfExists(PROPOSALS_FILE), { onlyAsk: !askFirstOf(readConfig().profile), project: project ? realOrSelf(project) : null });
+// 키트 원본 폴더의 안은 어느 세션에서든 지금 폴더처럼 센다(pendingTitles alsoHere).
+const kitRoots = () => [readConfig().kitSourcePath].filter((p) => typeof p === 'string' && p.trim()).map(realOrSelf);
+// 밀린 제안은 개인용에서만 따로 센다(회사용은 열린 항목 전부가 이미 물을 것이다). 묻는 것이 아니라 회고가 처리할 것이다.
+const staleCount = (project = null) => (askFirstOf(readConfig().profile) ? { items: [], oldest: 0 } : staleProposals(readIfExists(PROPOSALS_FILE), { project: project ? realOrSelf(project) : null, alsoHere: kitRoots(), now: new Date(todayForDue()) }));
+const pendingCount = (project = null) => countPending(readIfExists(PROPOSALS_FILE), { onlyAsk: !askFirstOf(readConfig().profile), project: project ? realOrSelf(project) : null, alsoHere: kitRoots() });
 
 // 여러 세션이 동시에 auto를 보고 회고를 두 번 띄우지 않게 잠금 파일을 배타적으로(wx) 만든다.
 // 오래된 잠금을 지우고 다시 만드는 사이에 다른 세션이 끼면 그쪽이 이기고 이쪽은 busy가 된다.
@@ -824,6 +828,15 @@ function fixCount(project) {
     return 0;
   }
   const n = Number(r.stdout.trim());
+  return Number.isInteger(n) ? n : 0;
+}
+
+// 볼 실험 건수(실험 장부의 시작 날짜 + 볼 날수가 지난 열린 실험). 장부가 없거나 셈이 실패하면 0이다.
+function expDueCount() {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'work-metrics.js');
+  if (!fs.existsSync(script) || !fs.existsSync(path.join(RECORDS_DIR, 'experiments.tsv'))) return 0;
+  const r = spawnSync(process.execPath, [script, 'exp', 'due', '--count'], { encoding: 'utf8' });
+  const n = r.status === 0 ? Number(r.stdout.trim()) : 0;
   return Number.isInteger(n) ? n : 0;
 }
 
@@ -1123,22 +1136,23 @@ function dueState(project = null) {
   const d = retroDue(parsed, { costMap: readCost(), trialsPending: table.trials.length > 0, retentionDays: retentionDays(), now: todayForDue() });
   const lock = lockState(lockMtime());
   const mode = readConfig().retroMode;
-  return { d, lock, mode, pending: pendingCount(project), parsed, table };
+  return { d, lock, mode, pending: pendingCount(project), stale: staleCount(project), parsed, table };
 }
 
 function dueLines(project = null) {
-  const { d, lock, mode, pending } = dueState(project);
+  const { d, lock, mode, pending, stale } = dueState(project);
   const head = dueHead(d, { mode, lockLive: lock === 'live' });
   const lines = [head];
   if (d.upCells.length) lines.push(d.upCells.map(upLabel).join(', '));
   const toFix = fixCount(project);
-  const extra = [lock === 'live' ? '회고 진행 중' : null, pending && lock !== 'live' ? `물을 것 ${pending}건` : null, toFix ? `그 자리에서 고칠 것 ${toFix}건` : null].filter(Boolean);
+  const expDue = expDueCount();
+  const extra = [lock === 'live' ? '회고 진행 중' : null, pending && lock !== 'live' ? `물을 것 ${pending}건` : null, toFix ? `그 자리에서 고칠 것 ${toFix}건` : null, expDue ? `볼 실험 ${expDue}건` : null, stale.items.length && lock !== 'live' ? staleProposalsText(stale) : null].filter(Boolean);
   lines.push(`(사용 기록 ${d.usageCount}줄에 비용 기록에만 있는 ${d.count - d.usageCount}건을 더해 ${d.count}건으로 셌습니다. ${d.label}${d.byPeriod ? `. ${periodReason(d, todayForDue())}` : ''})${extra.length ? ' ' + extra.join(', ') : ''}`);
   return { head, lines, pending };
 }
 
 function printAsks(project) {
-  const titles = pendingTitles(readIfExists(PROPOSALS_FILE), { onlyAsk: !askFirstOf(readConfig().profile), project: project ? realOrSelf(project) : null });
+  const titles = pendingTitles(readIfExists(PROPOSALS_FILE), { onlyAsk: !askFirstOf(readConfig().profile), project: project ? realOrSelf(project) : null, alsoHere: kitRoots() });
   console.log(titles.length ? titles.join('\n') : '없음');
 }
 
@@ -1164,6 +1178,10 @@ function printStatus() {
   console.log(`올림이 쌓인 칸: ${d.upCells.length ? d.upCells.map(upLabel).join(', ') : '없음'}`);
   console.log(`회고 잠금: ${lockText}`);
   console.log(`물을 것(${isPersonal() ? '사용자에게 묻는 여섯 종만' : '제안 목록 전부'}): ${pending}건`);
+  const stale = dueState().stale;
+  if (stale.items.length) console.log(`${staleProposalsText(stale)}(${PROPOSAL_STALE_DAYS}일 넘은 것, 회고가 그 자리에서 고칠 것으로 처리)`);
+  const ratio = proposalApplyRatio(readIfExists(PROPOSALS_FILE));
+  console.log(`제안 적용 비율: ${ratio.percent}%(결과 줄이 붙은 ${ratio.done}건 / 전체 ${ratio.total}건)`);
   const askFirst = askFirstOf(readConfig().profile);
   console.log(`바로 고치기: ${askFirst ? '끔' : '켬'} (profile이 정함)`);
   const { parsed, table } = dueState();

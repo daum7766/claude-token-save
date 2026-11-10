@@ -2,6 +2,8 @@
 // 태그 읽기(사용 기록 메모의 모자람, 개선 표시), 비슷한 태그 찾기, 고침 기록 읽기, agentId 읽기가 든다.
 // 정의 description과 라우팅 표를 읽는 함수도 든다. 설치 바닥(kitDrift.js)이 라우팅 스크립트 없이 설치 값 자리를 다루려는 것이다.
 
+import os from 'node:os';
+import path from 'node:path';
 import { splitLines } from './claudeProjectPaths.js';
 
 export const isAbsolutePath = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
@@ -34,6 +36,22 @@ export function parseFixes(text) {
   });
 }
 
+
+// 고침 줄의 뿌리나 고친 곳 글 맨 앞의 파일 경로(확장자가 있는 것). 파일이 아닌 값(「선택지 1#자리」)은 null이다.
+const FIX_FILE = /^(\S+?\.[A-Za-z0-9]+)(?:#|\s|$)/;
+export const fixFileOf = (raw) => {
+  const m = FIX_FILE.exec(raw ?? '');
+  return m ? m[1].replace(/\\/g, '/') : null;
+};
+// 그 경로가 놓였을 만한 실제 경로들. `~/.claude/`는 설치 폴더(kitDir가 있으면 키트 원본의 같은 자리도), `~/`는 홈, 절대 경로는 그대로, 상대 경로는 프로젝트 루트와 설치 폴더(와 키트 원본)에서 찾는다.
+// 까닭: 범위를 잘못 적은 프로젝트 줄이 설치 폴더 파일을 가리키는 일이 있고, 키트 원본 기준 경로를 설치 쪽에서 적은 줄도 있어서다.
+export function fixFileCandidates(file, project, { claudeDir, home = os.homedir(), projectOf = (p) => p, kitDir = '' } = {}) {
+  const extra = (rest) => (kitDir ? [path.join(kitDir, rest)] : []);
+  if (file.startsWith('~/.claude/')) return [path.join(claudeDir, file.slice('~/.claude/'.length)), ...extra(file.slice('~/.claude/'.length))];
+  if (file.startsWith('~/')) return [path.join(home, file.slice(2))];
+  if (isAbsolutePath(file)) return [file];
+  return [...new Set([projectOf(project), project, claudeDir, ...(kitDir ? [kitDir] : [])])].map((r) => path.join(r, file));
+}
 
 function editDistance(a, b) {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);

@@ -3,8 +3,10 @@
 
 /**
  * PreToolUse(Bash) 훅. 커밋하지 않은 변경이 있는 파일을 git checkout <파일>, git checkout -- <파일>, git restore <파일>로 되돌리려 하면 막는다.
+ * 또 작업 트리나 보관함을 바꾸는 git stash(맨 stash, push, save, pop, apply, drop, clear, branch, 옵션만 준 꼴)도 막는다. 읽기만 하는 list와 show는 둔다.
  * --staged만 쓴 restore는 작업 트리를 건드리지 않아 둔다.
  * 왜: 시험용으로 붙인 한 줄을 떼려고 파일을 되돌리면, 그 파일에 다른 실무자가 해 둔 미커밋 고침까지 함께 사라지고 다시 찾을 기록이 없다. 문장 규칙으로는 막지 못했다.
+ *   stash는 모든 워크트리와 세션이 함께 쓰는 보관함 하나라, 문장으로 금지해 둔 정의에서도 실무자가 stash와 pop을 돌려 남의 변경을 치우거나 엉뚱한 보관분을 꺼낼 뻔했다.
  * 전제: 명령은 셸 꼴 그대로 들어오고, 대상 파일은 명령 안의 cd나 세션 cwd 기준 상대 경로다. 해석에 실패하면 통과한다(훅 오류로 일을 막지 않게).
  *   낱말 나누기는 guardShared.cjs가 처음 쓰인 파이썬 판(shlex.split)과 같게 한다.
  */
@@ -14,7 +16,8 @@ const fs = require('node:fs');
 const sh = require('./guardShared.cjs');
 const { callName } = require('../scripts/userSettings.cjs');
 
-const GIT_VERB = new RegExp(`${sh.word('git')}[^;&|\\n]*${sh.word('checkout|restore')}`, 'u');
+const GIT_VERB = new RegExp(`${sh.word('git')}[^;&|\\n]*${sh.word('checkout|restore|stash')}`, 'u');
+const STASH_READ = ['list', 'show'];
 
 function changed(repo, p) {
   try {
@@ -48,6 +51,10 @@ function main(data) {
     while (rest.length >= 2 && rest[0] === '-C') {
       repo = sh.join(cwd, rest[1]);
       rest = rest.slice(2);
+    }
+    if (rest[0] === 'stash' && !STASH_READ.includes(rest[1])) {
+      return 'git stash는 모든 워크트리와 세션이 함께 쓰는 보관함이라 다른 세션 변경을 치우거나 꺼낼 수 있다. '
+        + `잠시 치울 것은 임시 커밋(WIP)이나 파일 사본으로 한다. 꼭 필요하면 ${callName()}에게 묻는다.`;
     }
     if (!rest.length || !['checkout', 'restore'].includes(rest[0])) continue;
     const [verb, ...args] = rest;

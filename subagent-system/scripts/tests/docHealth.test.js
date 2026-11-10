@@ -106,6 +106,22 @@ describe('다 쓴 기록 후보', () => {
     assert.deepEqual(finishedPaths(e.health()), ['docs/plan/work/a-progress.md']);
   });
 
+  it('열린 칸이 있는 다른 진행 기록이 경로로 가리키는 작업 기록은 후보가 아니고, 열린 칸이 없는 기록이 가리키면 후보다', () => {
+    const e = makeEnv();
+    e.write('docs/plan/work/round2-judge.md', '# 판정\n- [x] 끝\n');
+    e.write('docs/plan/work/round3-judge.md', '# 판정\n- [x] 끝\n');
+    e.write('docs/plan/work/main-progress.md', '# 진행\n- [x] 바퀴 2 판정: docs/plan/work/round2-judge.md\n- [ ] 바퀴 3 판정\n');
+    e.commit();
+    const open = e.health();
+    assert.deepEqual(finishedPaths(open), ['docs/plan/work/round3-judge.md']);
+    const held = open.repos[0].workItems.find((w) => w.path === 'docs/plan/work/round2-judge.md');
+    assert.deepEqual(held.pointedByOpen, ['docs/plan/work/main-progress.md']);
+    // 가리키는 진행 기록의 칸이 모두 닫히면 같은 판정 원문도 후보로 돌아온다.
+    e.write('docs/plan/work/main-progress.md', '# 진행\n- [x] 바퀴 2 판정: docs/plan/work/round2-judge.md\n- [x] 바퀴 3 판정\n');
+    e.commit();
+    assert.deepEqual(finishedPaths(e.health()).toSorted(), ['docs/plan/work/main-progress.md', 'docs/plan/work/round2-judge.md', 'docs/plan/work/round3-judge.md']);
+  });
+
   it('이름에 이어진 브랜치가 머지되지 않았으면 후보가 아니고 머지됐으면 후보다', () => {
     const e = makeEnv();
     e.write('docs/plan/work/feat-progress.md', '# 진행\n- [x] 끝\n');
@@ -214,6 +230,74 @@ describe('쌓인 백업', () => {
   });
 });
 
+describe('밀린 제안', () => {
+  it('제안 목록에서 결과 줄과 묻기 줄이 없고 7일 넘은 열린 항목을 밀린 제안으로 세고 끊긴 경로로는 세지 않는다', () => {
+    const e = makeEnv();
+    e.write('docs/PROPOSALS.md', '## 제안\n\n### 오래된 것\n- 출처: 탐색 2020-01-01 `docs/nope.md`\n### 처리됨\n- 출처: 탐색 2020-01-01\n- 결과: 채택\n### 묻기\n- 묻기: 정책\n- 출처: 2020-01-01\n### 새것\n- 출처: 탐색 2999-01-01\n');
+    e.commit();
+    const r = e.health().repos[0];
+    assert.deepEqual(r.staleProps.map((x) => x.title), ['오래된 것']);
+    assert.deepEqual(r.broken, []);
+  });
+});
+
+describe('고침 기록의 없는 파일', () => {
+  const fixRow = (over) => {
+    const v = { at: '2026-10-20T00:00:00.000Z', project: '', scope: '프로젝트', signal: '정정', label: '태그', where: 'docs/a.md#절', how: '문장', memo: 'm', root: '', ...over };
+    return [v.at, v.project, v.scope, v.signal, v.label, v.where, v.how, '0', v.memo, v.root].join('\t');
+  };
+
+  it('뿌리와 고친 곳이 지금 없는 파일을 가리키는 줄을 파일별로 세고, 있는 파일, 파일이 아닌 값, 장치 없음 뿌리는 세지 않는다', () => {
+    const e = makeEnv();
+    e.write('docs/here.md', 'x\n');
+    fs.mkdirSync(e.records, { recursive: true });
+    fs.mkdirSync(path.join(e.claude, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(e.claude, 'rules/kit.md'), 'x');
+    const head = ['시각', '프로젝트', '범위', '신호', '이름표', '고친 곳', '방식', '기준점', '메모', '뿌리'].join('\t');
+    const p = e.repo;
+    fs.writeFileSync(path.join(e.records, 'fixes.tsv'), [
+      head,
+      fixRow({ project: p, where: 'docs/here.md#절' }),
+      fixRow({ project: p, where: 'docs/gone.md#절' }),
+      fixRow({ project: p, where: 'docs/gone.md 검증 5', root: 'docs/gone.md' }),
+      fixRow({ project: p, where: '선택지 1#자리', root: '장치 없음: 갈래' }),
+      fixRow({ project: p, where: 'rules/kit.md#절' }),
+      fixRow({ project: p, where: '~/.claude/rules/kit.md#절', root: '~/.claude/rules/old.md' }),
+    ].join('\n') + '\n');
+    const before = fs.readFileSync(path.join(e.records, 'fixes.tsv'), 'utf8');
+    const j = e.health();
+    assert.deepEqual(j.staleFixes.files.map((x) => [x.file, x.roots, x.wheres]), [['docs/gone.md', 1, 2], ['~/.claude/rules/old.md', 1, 0]]);
+    assert.equal(j.staleFixes.lines, 4);
+    assert.equal(j.counts['고침 기록의 없는 파일'], 2);
+    assert.equal(fs.readFileSync(path.join(e.records, 'fixes.tsv'), 'utf8'), before, '기록은 고치지 않는다');
+  });
+
+  it('git 기록에서 옛 경로가 옮겨졌거나 지워진 것으로 나오면 없는 파일에서 빼고 옮겨진 것과 지운 것으로 따로 센다', async () => {
+    const { staleFixTargets } = await import(new URL('../docHealth.js', import.meta.url).href);
+    const f = (where, root = '') => ({ project: '/p', where, root });
+    const table = { 'docs/old.md': { kind: 'moved', to: 'docs/new.md', hash: 'abc1234def' }, 'docs/dead.md': { kind: 'deleted', to: null, hash: 'fed4321abc' } };
+    const r = staleFixTargets([f('docs/old.md#a'), f('docs/old.md#b', 'docs/old.md'), f('docs/dead.md#a'), f('docs/lost.md#a')], { claudeDir: '/nonexistent-claude', exists: () => false, moved: (file) => table[file] ?? null });
+    assert.deepEqual(r.files.map((x) => x.file), ['docs/lost.md']);
+    assert.equal(r.lines, 1);
+    assert.deepEqual(r.moved.map((x) => [x.file, x.to, x.roots, x.wheres]), [['docs/old.md', 'docs/new.md', 1, 2]]);
+    assert.equal(r.movedLines, 3);
+    assert.deepEqual(r.gone.map((x) => [x.file, x.hash]), [['docs/dead.md', 'fed4321abc']]);
+  });
+
+  it('kitDir가 있으면 상대 경로와 설치 폴더 경로를 키트 원본에서도 찾는다', async () => {
+    const { staleFixTargets } = await import(new URL('../docHealth.js', import.meta.url).href);
+    const here = (p) => p === '/kit/subagent-system/rules/kit-x.md';
+    const rows = [{ project: '/p', where: 'subagent-system/rules/kit-x.md#절', root: '' }, { project: '/p', where: '~/.claude/subagent-system/rules/kit-x.md#절', root: '' }];
+    assert.equal(staleFixTargets(rows, { claudeDir: '/c', exists: here }).lines, 2);
+    assert.equal(staleFixTargets(rows, { claudeDir: '/c', exists: here, kitDir: '/kit' }).lines, 0);
+  });
+
+  it('고침 기록이 없으면 0이다', () => {
+    const j = makeEnv().health();
+    assert.deepEqual(j.staleFixes, { files: [], lines: 0, moved: [], movedLines: 0, gone: [], goneLines: 0 });
+  });
+});
+
 describe('끊긴 경로', () => {
   it('정본 문서가 가리키는 파일이 없으면 잡히고 있는 파일이나 docs/를 뗀 경로는 잡히지 않는다', () => {
     const e = makeEnv();
@@ -230,6 +314,15 @@ describe('끊긴 경로', () => {
     e.write('docs/a.md', '이름만 `nope.md`, 모르는 기준 `scripts/nope.js`, 맨 위 폴더 `docs/gone.md`\n');
     e.commit();
     assert.deepEqual(e.health().repos[0].broken.map((b) => b.ref), ['docs/gone.md']);
+  });
+
+  it('경로 뒤 「절」이 그 문서에 없으면 끊긴 절 참조로 잡고, 있거나 이름만 적은 문서면 잡지 않는다', () => {
+    const e = makeEnv();
+    e.write('docs/a.md', '`docs/b.md` 「있는 절」, `docs/b.md`의 「목록 머리」, `docs/b.md` 「옮긴 절」, `CLAUDE.md` 「없는 절」\n');
+    e.write('docs/b.md', '# b\n## 있는 절\n- 목록 머리: 값\n');
+    e.write('CLAUDE.md', '# c\n');
+    e.commit();
+    assert.deepEqual(e.health().repos[0].broken.map((b) => b.ref), ['docs/b.md 「옮긴 절」']);
   });
 
   it('작업 기록이 가리키는 없는 경로는 끊긴 경로로 세지 않는다', () => {
@@ -357,6 +450,9 @@ describe('합계 한 줄', () => {
 describe('문서 속 낱말 읽기', () => {
   it('백틱 안 경로와 줄 번호 꼬리를 읽고 주소와 선택지 낱말은 경로로 읽지 않는다', () => {
     assert.deepEqual(pathTokens('`docs/a.md#절` 과 https://x.com/a/b 와 있음/없음'), ['docs/a.md']);
+    // https://를 뗀 웹 주소는 백틱 안이든 밖이든 경로로 보지 않는다
+    assert.deepEqual(pathTokens('저장소(github.com/me/conf), x.com/a/status/1, `www.example.org/a/b.md`, `docs/x.com.md`'), ['docs/x.com.md']);
+    assert.deepEqual(pathTokens('`docs/web/site.md` 와 scripts/tools/a.js'), ['docs/web/site.md', 'scripts/tools/a.js']);
   });
 
   it('아직 안 정한 것 절은 없음 한 줄이면 빈 것으로 읽는다', () => {

@@ -24,5 +24,28 @@
     "privateNames"
   ],
   "uses": [],
+  "serves": {
+    "portable": [
+      "subagent-system/scripts/kit-setup.js",
+      "subagent-system/scripts/kitBundles.js"
+    ],
+    "no-conflict": [
+      "subagent-system/scripts/kitHooks.js",
+      "subagent-system/hooks/git/git-dispatch.cjs"
+    ],
+    "kit-only-change": [
+      "subagent-system/scripts/kitMerge.js",
+      "subagent-system/scripts/kitDrift.js",
+      "subagent-system/scripts/userSettings.cjs",
+      "subagent-system/hooks/git/pre-commit.d/10-kit-drift.cjs",
+      "subagent-system/hooks/git/commit-msg.d/10-kit-note.cjs"
+    ],
+    "self-improve": [
+      "subagent-system/hooks/ask-log.js"
+    ],
+    "proactive-fix": [
+      "subagent-system/scripts/claudeMdTidy.js"
+    ]
+  },
   "records": []
 }

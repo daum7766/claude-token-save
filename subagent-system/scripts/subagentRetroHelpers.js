@@ -1622,25 +1622,30 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // 제안 목록(PROPOSALS.md)의 `## 제안` 절에서 항목 수를 센다. 항목은 `### ` 제목 하나씩이고, 본문에 `- 묻기: <여섯 종 중 하나>` 줄이 있으면 사용자에게 물을 것이다.
 // onlyAsk가 false(회사용)면 모든 항목을, true(개인용)면 묻기 줄이 있는 항목만 센다. `- 결과: 채택|기각` 줄이 붙은 항목은 이미 답한 것이라 두 방식 모두 세지 않는다.
 // project(정규화한 절대 경로)를 주면 제목에 다른 폴더의 절대 경로가 든 항목(다른 프로젝트 문서 검토)은 세지 않는다. 그 프로젝트 세션에서 묻게 하려는 것이다.
+// alsoHere(절대 경로 목록)에 든 폴더는 지금 세션 폴더처럼 센다. 키트 원본(kitSourcePath)은 따로 도는 세션이 없어, 빼면 그 안이 주인 없이 쌓였다(2026-11-08).
 export function countPending(text, opts = {}) {
   return pendingTitles(text, opts).length;
 }
 
-// countPending이 세는 항목의 제목(`### ` 뒤)을 순서대로 돌려준다. --asks가 찍어, 메인이 제안 목록 파일을 직접 읽어 프로젝트 거르기를 건너뛰지 않게 한다.
-export function pendingTitles(text, { onlyAsk = false, project = null, kinds = null } = {}) {
+// 제안 목록의 `## 제안` 절 항목을 읽는다. 항목은 `### ` 제목 하나씩이고, 본문의 묻기 줄, 결과 줄, 날짜를 함께 모은다.
+// project를 주면 제목에 다른 폴더의 절대 경로가 든 항목은 other로 표시한다(그 프로젝트 세션에서 다루게 하려는 것이다).
+function proposalItems(text, { project = null, kinds = null, alsoHere = [] } = {}) {
   const askRe = new RegExp(`^\\s*[-*]\\s*묻기:\\s*(${(kinds ?? askKinds()).map(escapeRe).join('|')})`);
   let inProposals = false;
-  const titles = [];
+  const items = [];
   let item = null;
   const elsewhere = (title) => {
     if (!project) return false;
     const m = title.match(/(?:^|\s)(\/[^\s]+)/);
     if (!m) return false;
-    const root = project.replace(/\/+$/, '');
-    return !(m[1] === root || m[1].startsWith(root + '/'));
+    const under = (r0) => {
+      const root = r0.replace(/\/+$/, '');
+      return m[1] === root || m[1].startsWith(root + '/');
+    };
+    return ![project, ...alsoHere].some(under);
   };
   const close = () => {
-    if (item && !item.done && !item.other && (!onlyAsk || item.ask)) titles.push(item.title);
+    if (item) items.push(item);
     item = null;
   };
   for (const line of splitLines(text ?? '')) {
@@ -1649,12 +1654,58 @@ export function pendingTitles(text, { onlyAsk = false, project = null, kinds = n
       inProposals = /^## 제안\s*$/.test(line);
     } else if (inProposals && /^### \S/.test(line)) {
       close();
-      item = { ask: false, done: false, other: elsewhere(line.slice(4)), title: line.slice(4).trim() };
-    } else if (item && askRe.test(line)) item.ask = true;
-    else if (item && /^\s*[-*]\s*결과:\s*(채택|기각)/.test(line)) item.done = true;
+      item = { ask: false, done: false, hasResult: false, other: elsewhere(line.slice(4)), title: line.slice(4).trim(), body: [] };
+    } else if (item) {
+      item.body.push(line);
+      if (askRe.test(line)) item.ask = true;
+      else if (/^\s*[-*]\s*결과:\s*(채택|기각)/.test(line)) item.done = true;
+      if (/^\s*[-*]\s*결과:/.test(line)) item.hasResult = true;
+    }
   }
   close();
-  return titles;
+  return items;
+}
+
+// countPending이 세는 항목의 제목(`### ` 뒤)을 순서대로 돌려준다. --asks가 찍어, 메인이 제안 목록 파일을 직접 읽어 프로젝트 거르기를 건너뛰지 않게 한다.
+export function pendingTitles(text, { onlyAsk = false, ...rest } = {}) {
+  return proposalItems(text, rest).filter((i) => !i.done && !i.other && (!onlyAsk || i.ask)).map((i) => i.title);
+}
+
+// 밀린 제안: 결과 줄이 없고 묻기 줄도 없는 열린 항목 가운데 나이가 days일 이상인 것. 개인용에서 처리할 주인이 없어 쌓이던 것을 회고가 꺼내려는 것이다.
+// 나이는 항목 안에서 처음 나오는 날짜(2026-11-08 꼴, 해가 없는 11-08 꼴은 now의 해로 보되 앞날이면 지난해)로 센다. 날짜가 없는 항목은 나이를 몰라 세지 않는다.
+// 영문자, 숫자, 밑줄, `#`, `/` 바로 뒤의 숫자 짝은 날짜로 보지 않는다. 문서 절 가리킴(`ads#2-10`)을 2월 10일로 읽어 하루 전에 쓴 제안을 273일 밀린 것으로 띄웠다(2026-11-10).
+export const PROPOSAL_STALE_DAYS = 7;
+const DATE_IN_ITEM = /(?<![\w.#/-])(?:(\d{4})-)?(0?[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\d-])/g;
+export function itemDate(body, now = new Date()) {
+  let best = null;
+  for (const m of body.join('\n').matchAll(DATE_IN_ITEM)) {
+    let y = m[1] ? Number(m[1]) : now.getUTCFullYear();
+    let t = Date.UTC(y, Number(m[2]) - 1, Number(m[3]));
+    if (!m[1] && t > now.getTime() + DAY_MS_P) t = Date.UTC(y - 1, Number(m[2]) - 1, Number(m[3]));
+    if (best === null || t < best) best = t;
+  }
+  return best;
+}
+const DAY_MS_P = 86400000;
+export function staleProposals(text, { now = new Date(), days = PROPOSAL_STALE_DAYS, project = null, kinds = null, alsoHere = [] } = {}) {
+  const out = [];
+  for (const i of proposalItems(text, { project, kinds, alsoHere })) {
+    if (i.hasResult || i.ask || i.other) continue;
+    const at = itemDate(i.body, now);
+    if (at === null) continue;
+    const age = Math.floor((now.getTime() - at) / DAY_MS_P);
+    if (age >= days) out.push({ title: i.title, days: age });
+  }
+  out.sort((a, b) => b.days - a.days);
+  return { items: out, oldest: out[0]?.days ?? 0 };
+}
+export const staleProposalsText = (r) => `밀린 제안 ${r.items.length}건, 가장 오래된 것 ${r.oldest}일`;
+
+// 제안 적용 비율: 결과 줄(채택, 기각 등)이 붙은 항목 수와 전체 항목 수. self-improve 지표 「제안 적용 비율」이 가리킨다.
+export function proposalApplyRatio(text) {
+  const all = proposalItems(text, { kinds: [] });
+  const done = all.filter((i) => i.hasResult).length;
+  return { done, total: all.length, percent: all.length ? Math.round((done / all.length) * 100) : 0 };
 }
 
 // --due의 첫 줄. 잠금이 살아 있으면 다른 세션이 회고 중이라 묻지도 띄우지도 않으므로 wait다.

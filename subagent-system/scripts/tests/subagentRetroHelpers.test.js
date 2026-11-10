@@ -55,6 +55,9 @@ import {
   configTextWithFailures,
   countPending,
   pendingTitles,
+  staleProposals,
+  staleProposalsText,
+  proposalApplyRatio,
   ASK_KINDS,
   askKinds,
   FABLE_VERDICT_NOTES,
@@ -1128,6 +1131,48 @@ describe('회고 방식 설정', () => {
   });
 });
 
+describe('밀린 제안과 제안 적용 비율', () => {
+  const NOW = new Date('2026-11-08T12:00:00Z');
+  const text = [
+    '## 제안', '',
+    '### 오래된 것', '- 출처: 탐색 2026-10-30',
+    '### 해 없는 날짜', '- 왜: 11-03 병목 분석',
+    '### 아직 이른 것', '- 출처: 탐색 2026-11-05',
+    '### 처리됨', '- 출처: 탐색 2026-10-01', '- 결과: 기각',
+    '### 물을 것', '- 묻기: 정책', '- 출처: 탐색 2026-10-01',
+    '### 날짜 없음', '- 얻는 것: x',
+    '### /other/proj 문서', '- 출처: 탐색 2026-10-01',
+    '## 반대', '### 다른 절', '- 출처: 2026-10-01', '',
+  ].join('\n');
+
+  it('결과 줄과 묻기 줄이 없는 열린 항목 가운데 7일 넘은 것만 나이순으로 세고, 날짜 없는 항목은 세지 않는다', () => {
+    const r = staleProposals(text, { now: NOW, project: '/p' });
+    assert.deepEqual(r.items.map((i) => [i.title, i.days]), [['오래된 것', 9]]);
+    assert.equal(r.oldest, 9);
+    assert.equal(staleProposalsText(r), '밀린 제안 1건, 가장 오래된 것 9일');
+  });
+
+  it('절 가리킴(ads#2-10)과 경로, 이름에 붙은 숫자 짝은 날짜로 읽지 않는다', () => {
+    const r = staleProposals('## 제안\n### a\n- 제안: 「VerticalAd」 절은 ads#2-10을 가리킨다. PLAY-31, docs/1-2 참고\n- 출처: 회고 2026-11-10\n', { now: NOW });
+    assert.deepEqual(r.items, []);
+  });
+
+  it('해가 없는 날짜는 올해로 보되 앞날이면 지난해로 본다', () => {
+    const r = staleProposals('## 제안\n### a\n- 왜: 10-20 일\n### b\n- 왜: 12-20 일\n', { now: NOW });
+    assert.deepEqual(r.items.map((i) => [i.title, i.days]), [['b', 323], ['a', 19]]);
+  });
+
+  it('제안 적용 비율은 결과 줄이 붙은 항목 수를 전체로 나눈다', () => {
+    assert.deepEqual(proposalApplyRatio(text), { done: 1, total: 7, percent: 14 });
+    assert.deepEqual(proposalApplyRatio(''), { done: 0, total: 0, percent: 0 });
+  });
+
+  it('countPending의 물을 것 세기는 그대로다', () => {
+    assert.equal(countPending(text, { onlyAsk: true }), 1);
+    assert.equal(countPending(text), 6);
+  });
+});
+
 describe('회고 잠금과 물을 것 세기', () => {
   it('물을 것은 `## 제안` 절 안의 `### ` 제목 줄만 세고, 다른 절의 항목과 제목 없는 줄과 줄머리가 아닌 ###는 세지 않는다', () => {
     assert.equal(countPending(undefined), 0);
@@ -1142,6 +1187,8 @@ describe('회고 잠금과 물을 것 세기', () => {
     assert.equal(countPending(text, { onlyAsk: true, project: '/home/a/proj' }), 2);
     assert.equal(countPending(text, { onlyAsk: true, project: '/home/a/proj/' }), 2);
     assert.deepEqual(pendingTitles(text, { onlyAsk: true, project: '/home/a/proj' }), ['문서 검토: /home/a/proj/CLAUDE.md', '경로 없음']);
+    // 키트 원본처럼 따로 도는 세션이 없는 폴더는 alsoHere로 지금 폴더처럼 센다
+    assert.equal(countPending(text, { onlyAsk: true, project: '/home/a/proj', alsoHere: ['/home/a/other'] }), 3);
   });
 
   it('개인용 물을 것은 여섯 종 묻기 줄이 있는 항목만 세고 다음 항목의 묻기 줄을 앞 항목에 넣지 않는다', () => {
@@ -1943,13 +1990,51 @@ describe('judgeFixes 판정', { skip: NO_FIXLOG }, () => {
     assert.equal(after.items[0].next, '스크립트 또는 훅');
   });
 
-  it('재발은 정정 기록이면 고친 시각 뒤 서로 다른 세션 둘이어야 한다', () => {
-    const one = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s1', '2026-10-22T00:00:00Z')] });
-    assert.deepEqual(classes(one), []);
+  it('재발은 정정 기록이면 고친 시각 뒤 같은 이름표 정정이 둘이면 같은 세션이어도 센다', () => {
+    const none = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z')] });
+    assert.deepEqual(classes(none), []);
     const old = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-19T00:00:00Z'), cor('s2', '2026-10-19T01:00:00Z')] });
     assert.deepEqual(classes(old), []);
+    const same = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s1', '2026-10-22T00:00:00Z')] });
+    assert.deepEqual(classes(same), ['재발 태그']);
+    assert.equal(same.items[0].parts.find((p) => p.name === '정정').n, 2);
     const two = run({ fixes: [fix()], corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s2', '2026-10-22T00:00:00Z')] });
     assert.deepEqual(classes(two), ['재발 태그']);
+  });
+
+  it('같은 뿌리의 다른 이름표 유지 줄은 앞 고침의 효과 측정을 닫지 않고, 그 이름표의 유지 앞 정정은 앞 고침의 재발로 세지 않는다', () => {
+    const R = '장치 없음: 한 뿌리';
+    const fixes = [fix({ label: '가', how: '스크립트', signal: '개선', root: R }), fix({ at: '2026-10-25T00:00:00.000Z', label: '나', signal: '재발', how: '유지', root: R, memo: '이번은 한 사건' })];
+    const closed = run({ fixes, corrections: [cor('s1', '2026-10-22T00:00:00Z', { label: '나' }), cor('s2', '2026-10-23T00:00:00Z', { label: '나' })] });
+    assert.deepEqual(classes(closed), [], '나의 유지가 이미 닫은 정정으로 가의 재발이 새로 생기면 안 된다');
+    assert.equal(closed.table[0].tag, '가(뿌리 장치 없음: 한 뿌리)', '묶음은 닫는 줄의 이름표가 아니라 효과를 재는 고침의 이름표로 뜬다');
+    assert.equal(closed.table[0].last.how, '스크립트');
+    const open = run({ fixes, corrections: [cor('s1', '2026-10-26T00:00:00Z', { label: '가' }), cor('s2', '2026-10-27T00:00:00Z', { label: '나' })] });
+    assert.deepEqual(classes(open), ['재발 가(뿌리 장치 없음: 한 뿌리)'], '가의 고침 뒤, 나의 유지 뒤 정정 둘은 재발이다');
+  });
+
+  it('유지로 닫은 뒤 정정이 둘 쌓이면 재발로 다시 띄우고 하나면 띄우지 않는다', () => {
+    const fixes = [fix(), fix({ at: '2026-10-22T00:00:00.000Z', signal: '재발', how: '유지', memo: '이번은 한 사건' })];
+    const one = run({ fixes, corrections: [cor('s1', '2026-10-23T00:00:00Z')] });
+    assert.deepEqual(classes(one), []);
+    const before = run({ fixes, corrections: [cor('s1', '2026-10-21T00:00:00Z'), cor('s1', '2026-10-21T05:00:00Z')] });
+    assert.deepEqual(classes(before), []);
+    const two = run({ fixes, corrections: [cor('s1', '2026-10-23T00:00:00Z'), cor('s1', '2026-10-24T00:00:00Z')] });
+    assert.deepEqual(classes(two), ['재발 태그']);
+    assert.equal(two.items[0].next, '스크립트 또는 훅');
+  });
+
+  it('다음 방식은 써 본 방식 전체로 고르고 다 쓰고도 재발하면 올리기다', () => {
+    const corrections = [cor('s1', '2026-10-30T00:00:00Z'), cor('s1', '2026-10-31T00:00:00Z')];
+    const nextOf = (fixes) => run({ fixes, corrections }).items[0].next;
+    const at = (day) => `2026-10-${day}T00:00:00.000Z`;
+    assert.equal(nextOf([fix({ how: '체크리스트' }), fix({ at: at(21), how: '문장' })]), '스크립트 또는 훅');
+    // 훅을 써 본 뒤 문장으로 닫았으면 훅을 다시 권하지 않고 바깥 자료 조사로 간다.
+    assert.equal(nextOf([fix({ how: '훅' }), fix({ at: at(21), how: '문장' })]), '바깥 자료 조사');
+    assert.equal(nextOf([fix({ how: '스크립트' }), fix({ at: at(21), how: '문장', memo: '바깥 자료 조사(관행 비교): 규칙 더함' })]), '올리기');
+    assert.equal(nextOf([fix({ how: '훅' }), fix({ at: at(21), how: '문장', memo: '[바깥 자료 조사] 규칙 더함' })]), '올리기');
+    // 계획으로 적은 말(괄호 없이 「바깥 자료 조사」)은 써 본 것으로 세지 않는다.
+    assert.equal(nextOf([fix({ how: '훅', memo: '다음 재발이면 바깥 자료 조사' })]), '바깥 자료 조사');
   });
 
   it('뿌리를 단 고침이 옛 줄보다 늦으면 옛 이름표 묶음은 세지 않고 뿌리 묶음으로만 판정한다', () => {
@@ -1959,7 +2044,8 @@ describe('judgeFixes 판정', { skip: NO_FIXLOG }, () => {
     const closed = [...old, fix({ at: '2026-10-23T00:00:00.000Z', signal: '재발', how: '유지', root: '장치 없음: 갈래' })];
     assert.deepEqual(classes(run({ fixes: closed, corrections })), []);
     const later = [fix({ at: '2026-10-19T00:00:00.000Z', root: '장치 없음: 갈래' }), ...old];
-    assert.deepEqual(classes(run({ fixes: later, corrections })), ['재발 태그(뿌리 장치 없음: 갈래)', '재발 태그']);
+    // 정정은 이름표만 있어 한 묶음에만 센다: 그 앞에 가장 늦게 고친 뿌리 없는 옛 줄 묶음이다(두 묶음에 겹쳐 세던 것을 11-09에 고침).
+    assert.deepEqual(classes(run({ fixes: later, corrections })), ['재발 태그']);
   });
 
   it('물음, 유지, 되돌림으로 닫은 뒤에는 그 기록 뒤의 줄로 다시 판정한다', () => {

@@ -2130,11 +2130,14 @@ function diffCommand(rawArgs) {
 }
 
 // 원본 HEAD를 변환해 키트가 놓는 파일만 설치본에 덮고 .kit-base를 새로 쓴다. 설치 값 자리(체크리스트 절, 정의 description)는 설치본 것을 지킨다.
-// config, retroMode, VERSION, 라우팅 표, rates.json, 선택 항목 고르기는 건드리지 않는다. 로컬 조각 파일은 쓰지 않는다. 깐 상태 기록의 훅 사본과 settings.json의 훅 등록은 원본 HEAD의 정의에 맞춘다.
+// config, retroMode, 라우팅 표, rates.json, 선택 항목 고르기는 건드리지 않는다. 로컬 조각 파일은 쓰지 않는다. 깐 상태 기록의 훅 사본과 settings.json의 훅 등록은 원본 HEAD의 정의에 맞춘다.
+// VERSION은 원본 HEAD의 VERSION으로 맞춘다(마지막에 쓴다). 까닭: 상태 가르기가 이 파일로 업데이트 필요를 판정해서, sync로만 받는 설치본은 내용이 최신이어도 늘 「업데이트 필요」로 나온다.
 function syncCommand(rawArgs) {
   const opts = parseOptions(rawArgs);
   if (opts.positional.length) throw new Error(`모르는 인자: ${opts.positional.join(' ')}`);
   const ctx = makeHeadContext(opts, { requireSourcePath: true });
+  const kitVersion = ctx.src.read('subagent-system/VERSION').trim();
+  if (!KIT_VERSION_RE.test(kitVersion)) throw new Error(`원본 HEAD의 VERSION 꼴이 아닙니다: ${kitVersion}`);
   const all = headEntries(ctx);
   const entries = all.filter((e) => e.kind === 'merge' || e.kind === 'code');
   const report = { mode: 'sync', dryRun: ctx.dry, configDir: ctx.cfg, kit: ctx.kit, kitHead: ctx.src.head, files: [], counts: {}, execRestored: [], orphansRemoved: [], orphansKept: [] };
@@ -2187,6 +2190,8 @@ function syncCommand(rawArgs) {
     const backup = commitSettings(ctx, plan, 'sync');
     report.settings = { hooks: labelsOf(plan.changes), ...(backup ? { backup } : {}) };
   }
+  report.version = { from: ctx.installedVersion, to: kitVersion };
+  writeFile(ctx, path.join(ctx.sub, 'VERSION'), `${kitVersion}\n`);
   // 설치본에서만 고친 키트 파일은 다른 세션의 고침일 수 있어 덮은 것을 조용히 넘기지 않는다. 고침은 키트 원본에 올려야 남는다.
   const local = report.files.filter((f) => f.localEdit);
   if (local.length) console.error(`설치본에서만 고친 키트 파일 ${local.length}개를 원본으로 덮었다: ${local.map((f) => f.key).join(', ')}. 그 고침이 필요하면 키트 원본에 올린 뒤 다시 sync한다(백업이 없으면 설치본 git 기록에서 되찾는다).`);
@@ -2333,6 +2338,7 @@ function bundlesCommand(rawArgs) {
       installed: b.name === 'base' ? true : lock ? Boolean(entry) : null,
       options: b.options.map((o) => ({ id: `${b.name}.${o.id}`, title: o.title, default: o.default, installed: lock ? (entry?.options ?? []).includes(`${b.name}.${o.id}`) : null })),
       parts: parts.map((p) => ({ part: p.part, origin: p.origin, installed: lock ? Boolean(entry?.parts?.[p.part]) || b.name === 'base' : null, files: expandFiles(p).length })),
+      serves: b.serves,
       uses: [...b.uses, ...parts.flatMap((p) => p.uses)].map((u) => ({ bundle: u.bundle, link: u.link, without: u.without, omitted: (defs.omitted ?? []).includes(u.bundle) })),
       installDoc: docOf(b.name),
       localInstallDocs: parts.filter((p) => p.origin === 'local').map((p) => path.join(cfg, 'subagent-system', 'local-bundles', b.name, `${p.part}.install.md`)).filter((f) => fs.existsSync(f)),

@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WRAPPER = path.resolve(HERE, '..', '..', 'hooks', 'kit-hook.cjs');
@@ -163,5 +164,78 @@ describe('kit-hook.cjs 기록', () => {
     fs.writeFileSync(blocker, 'x');
     const r = run(node('exit-code.js', 2), { rec: path.join(blocker, 'sub') });
     assert.equal(r.status, 2);
+  });
+});
+
+describe('kit-hook.cjs 대화에 넣은 글자 수', () => {
+  const outTsv = (rec) => (fs.existsSync(path.join(rec, 'hook-output.tsv')) ? fs.readFileSync(path.join(rec, 'hook-output.tsv'), 'utf8') : '');
+
+  it('W20 문구 필드의 글자 수를 hook-output.tsv에 적고 출력은 그대로 넘긴다', () => {
+    const r = run(node('context-json.js'), { name: 'ctx' });
+    assert.equal(r.status, 0);
+    assert.match(r.out.toString(), /가나다라마/);
+    assert.match(outTsv(r.rec), /^\S+\tctx\t8\n$/);
+  });
+
+  it('W21 아무것도 안 내거나 `{}`만 내면 적지 않는다', () => {
+    assert.equal(outTsv(run(node('silent.js')).rec), '');
+    assert.equal(outTsv(run(node('echo-stdin.js'), { input: '{}' }).rec), '');
+  });
+
+  it('W22 JSON이 아닌 출력은 전체 길이를 적고, 종료 2면 표준 에러 길이를 더한다', () => {
+    assert.match(outTsv(run(node('echo-stdin.js'), { input: 'hello' }).rec), /\t5\n$/);
+    const r = run(node('stderr-e.js'));
+    assert.equal(outTsv(r.rec), '');
+  });
+});
+
+describe('kit-hook.cjs 막음 기록', () => {
+  const rows = (rec) => (fs.existsSync(path.join(rec, 'hook-blocks.tsv')) ? fs.readFileSync(path.join(rec, 'hook-blocks.tsv'), 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t')) : []);
+  const stopIn = JSON.stringify({ hook_event_name: 'Stop', session_id: 'sess1' });
+  const toolIn = JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'sess2', tool_name: 'Bash', tool_input: { command: 'ls' } });
+
+  it('W30 막지 않는 출력(없음, 빈 JSON, 맥락 넣기)은 적지 않는다', () => {
+    assert.deepEqual(rows(run(node('silent.js'), { input: toolIn }).rec), []);
+    assert.deepEqual(rows(run(node('echo-stdin.js'), { input: '{}' }).rec), []);
+    assert.deepEqual(rows(run(node('context-json.js'), { input: toolIn }).rec), []);
+  });
+
+  it('W31 permissionDecision이 deny이면 훅 이름, 세션, 도구, 입력 줄을 적고 출력은 그대로 넘긴다', () => {
+    const r = run(node('block-json.js'), { input: toolIn, name: 'rm-guard' });
+    assert.equal(r.out.toString(), '{"hookSpecificOutput":{"permissionDecision":"deny"}}');
+    const [row, ...rest] = rows(r.rec);
+    assert.equal(rest.length, 0);
+    assert.match(row[0], /^\d{4}-\d\d-\d\dT/);
+    assert.deepEqual(row.slice(1), ['sess2', 'rm-guard', 'Bash', 'Bash:{"command":"ls"}']);
+  });
+
+  it('W32 종료 코드 2도 막음으로 적고, 종료 0이나 1은 적지 않는다', () => {
+    assert.equal(rows(run(node('exit-code.js', 2), { input: stopIn, name: 'x-guard' }).rec).length, 1);
+    assert.equal(rows(run(node('exit-code.js', 0), { input: stopIn }).rec).length, 0);
+    assert.equal(rows(run(node('exit-code.js', 1), { input: stopIn }).rec).length, 0);
+  });
+
+  it('W33 훅이 알린 판정 이름마다 한 줄을 적고, 탭 뒤 글은 입력 칸이 된다', () => {
+    const stop = run(node('block-named.js', WRAPPER, 'stop'), { input: stopIn, name: 'stall-check' });
+    assert.equal(JSON.parse(stop.out).decision, 'block');
+    assert.equal(stop.out.toString().includes('blockNames'), false);
+    assert.deepEqual(rows(stop.rec).map((r) => r.slice(1)), [['sess1', '멈춤 검사 이어 하기', 'Stop', ''], ['sess1', '멈춤 검사 열린 칸 대조', 'Stop', '']]);
+    const deny = run(node('block-named.js', WRAPPER, 'deny'), { input: toolIn, name: 'answer-check' });
+    assert.deepEqual(rows(deny.rec).map((r) => r.slice(1)), [['sess2', '논의 중', 'Bash', 'Edit:/a/b.md']]);
+  });
+
+  it('W34 이름을 안 알린 막음은 사유의 쌍점 앞 짧은 말, 없으면 훅 이름으로 적고, 표준 입력이 없어도 적는다', () => {
+    const { guessName } = createRequire(import.meta.url)(WRAPPER);
+    assert.equal(guessName('되고침 신호: 파일이 많다', 'churn-check'), '되고침 신호');
+    assert.equal(guessName('이 명령은 막혀 있어 사용할 수 없다.', 'rm-guard'), 'rm-guard');
+    assert.equal(guessName('', 'rm-guard'), 'rm-guard');
+    const r = run(node('exit-code.js', 2), { input: '', name: 'rm-guard' });
+    assert.deepEqual(rows(r.rec).map((x) => [x[1], x[2]]), [['none', 'rm-guard']]);
+  });
+
+  it('W35 감싸개 밖에서 훅이 이름을 알려도 아무것도 적히지 않는다', () => {
+    const r = spawnSync('node', [CHILD('block-named.js'), WRAPPER, 'stop'], { encoding: 'utf8', env: { ...process.env, KIT_HOOK_BLOCKS_FILE: '' } });
+    assert.equal(r.status, 0);
+    assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 });

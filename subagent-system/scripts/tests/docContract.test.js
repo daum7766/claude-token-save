@@ -65,8 +65,8 @@ const ALIAS_SCRIPT = { '<kit-setup>': 'kit-setup.js' };
 const spansOf = (text) => [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
 const rel = (f) => path.relative(REPO, f);
 
-// 바깥 도구가 받는 플래그(키트 스크립트에 없다). 문서에 새로 쓰면 여기에 더한다.
-const OUTSIDE_FLAGS = new Set(['--help', '--expose-internals', '--test', '--test-reporter', '--settings', '--json', '--local', '--marketplace', '--values-stdin', '--continue', '--config', '--debug', '--get', '--unset']);
+// 바깥 도구가 받는 플래그(키트 스크립트에 없다). 문서에 새로 쓰면 여기에 더한다. `--new`와 `--only`는 저장소 `tools/kit-replay-diff.cjs`의 것이다(tools/는 이 시험이 읽는 scripts/와 hooks/ 밖이다).
+const OUTSIDE_FLAGS = new Set(['--new', '--only', '--help', '--expose-internals', '--test', '--test-reporter', '--settings', '--json', '--local', '--marketplace', '--values-stdin', '--continue', '--config', '--debug', '--get', '--unset']);
 // 바깥 도구(git, claude, 브라우저 자동화)와 프로젝트 쪽 스크립트(스킬 견본을 복사해 둔 것, 캡처 스크립트)의 플래그를 설명하는 문서라, 키트 스크립트 이름이 함께 없는 플래그는 보지 않는다.
 const EXTERNAL_DOC = (f) => /skills\/(git-work|screenshot-attach|before-after-report|mobile-check)\//.test(f.split(path.sep).join('/')) || ['BACKGROUND.md', 'BROWSER_CHECK.md'].includes(path.basename(f));
 
@@ -74,7 +74,8 @@ describe('TESTING 「문서 계약 시험」: 키트 문서가 가리키는 스�
   it('백틱 안의 --플래그는 키트 스크립트나 훅에 있고, 스크립트 이름이 함께 있으면 그 스크립트에 있다', () => {
     const missing = [];
     for (const f of DOCS) {
-      for (const span of spansOf(read(f))) {
+      // 「깔려 있으면」 꼴로 가리키는 줄은 그 묶음이 원본에 없을 수 있어 플래그 존재를 보지 않는다(아래 이름.js 시험과 같다).
+      for (const span of spansOf(read(f).split('\n').filter((l) => !l.includes('깔려 있으면')).join('\n'))) {
         const flags = [...span.matchAll(/(?<![\w-])(--[a-z][a-z0-9-]*)/g)].map((m) => m[1]);
         if (!flags.length) continue;
         const named = [...span.matchAll(/([\w-]+\.js)\b/g)].map((m) => m[1]).filter((n) => scriptText.has(n));

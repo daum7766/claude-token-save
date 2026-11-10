@@ -208,9 +208,10 @@ describe('kit-setup.js sync', { skip: SKIP }, () => {
     assert.match(r.stderr, /kitSourcePath/);
   });
 
-  it('원본 HEAD로 키트 파일을 덮고 기준본을 새로 쓰며 설치 값 자리와 config, VERSION은 지킨다', () => {
+  it('원본 HEAD로 키트 파일을 덮고 기준본을 새로 쓰며 설치 값 자리와 config는 지키고 VERSION은 원본 HEAD 것으로 맞춘다', () => {
     const { kit, cfg } = setup();
     put(kit, 'subagent-system/docs/RETRO.md', '# 회고\n\n새 내용 ~/.claude/y\n');
+    put(kit, 'subagent-system/VERSION', '2026.11.2\n');
     put(kit, CHECKLIST, '# 체크리스트\n\n| 지킬 것 | 이유 |\n|:---|:---|\n| 목표 줄 | 방향 |\n| 키트 새 줄 | 이유 |\n');
     put(kit, 'subagent-system/agents/opus-high.md', DEF('opus-high', `키트 새 첫 문장. 설계 검토. (${GUIDE_PATH})`));
     commitAll(kit, 'kit moves');
@@ -229,7 +230,8 @@ describe('kit-setup.js sync', { skip: SKIP }, () => {
     assert.match(def, /description: 키트 새 첫 문장\. 내 일 이름\./);
     assert.equal(get(cfg, 'subagent-system/.kit-base/subagent-system/docs/RETRO.md'), `# 회고\n\n새 내용 ${cfg}/y\n`);
     assert.equal(get(cfg, 'subagent-system/config.json'), configBefore);
-    assert.equal(get(cfg, 'subagent-system/VERSION'), '2026.11.1\n');
+    assert.equal(get(cfg, 'subagent-system/VERSION'), '2026.11.2\n');
+    assert.deepEqual(r.version, { from: '2026.11.1', to: '2026.11.2' });
     assert.ok(r.counts.overwritten >= 3);
     assert.deepEqual(r.files.filter((f) => f.localEdit).map((f) => f.key), ['subagent-system/docs/SUBAGENT_SITUATIONS.md']);
     const after = diff(cfg);
@@ -281,9 +283,11 @@ describe('kit-setup.js sync', { skip: SKIP }, () => {
   it('--dry-run은 아무것도 쓰지 않는다', () => {
     const { kit, cfg } = setup();
     put(kit, 'subagent-system/docs/RETRO.md', '# 회고\n\n새 내용\n');
+    put(kit, 'subagent-system/VERSION', '2026.11.2\n');
     commitAll(kit, 'kit moves');
     const r = ok(kitRun(cfg, ['sync', '--dry-run']));
     assert.equal(r.dryRun, true);
+    assert.equal(get(cfg, 'subagent-system/VERSION'), '2026.11.1\n');
     assert.equal(r.counts.overwritten, 1);
     assert.equal(get(cfg, 'subagent-system/docs/RETRO.md'), '# 회고\n\n내용\n');
     assert.equal(get(cfg, 'subagent-system/.kit-base/subagent-system/docs/RETRO.md'), '# 회고\n\n내용\n');

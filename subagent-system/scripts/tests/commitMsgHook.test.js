@@ -157,29 +157,29 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP || NO_WHY
     assert.equal(commit().status, 0);
 
     // 결정 문서가 없으면 결정 표기를 넣어도 통과한다
-    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n');
+    write('plan.md', '# 기획\n- 알림 최대 3개(2026-10-31 사용자)\n');
     git(repo, ['add', '.']);
     assert.equal(commit().status, 0);
 
     // 표시를 글 속에서 설명만 하는 안내 문서는 결정 문서가 아니다
     write('guide.md', '# 안내\n- 결정 문서 머리에 `<!-- decision-doc -->` 표시를 둔다.\n');
-    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 둘(2026-10-31 사용자 지시)\n');
+    write('plan.md', '# 기획\n- 알림 최대 3개(2026-10-31 사용자)\n- 둘(2026-10-31 사용자 지시)\n');
     git(repo, ['add', '.']);
     assert.equal(commit().status, 0);
 
     // 결정 문서 안의 결정 표기는 통과한다
-    write('overhaul.md', '<!-- decision-doc -->\n# 결정\n| 광고 | 최대 3개(2026-10-31 사용자) |\n');
+    write('overhaul.md', '<!-- decision-doc -->\n# 결정\n| 알림 | 최대 3개(2026-10-31 사용자) |\n');
     git(repo, ['add', '.']);
     assert.equal(commit().status, 0);
 
     // 열린 결정 문서가 있는데 다른 문서에 넣으면 막힌다. 날짜만 있거나 결정어만 있는 괄호는 표기가 아니다
-    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 뺀 것(2026-11-01 사용자 지시, 이유)\n');
+    write('plan.md', '# 기획\n- 알림 최대 3개(2026-10-31 사용자)\n- 뺀 것(2026-11-01 사용자 지시, 이유)\n');
     git(repo, ['add', '.']);
     const bad = commit();
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /결정 문서\(overhaul\.md\)/);
     assert.match(bad.stderr, /plan\.md: - 뺀 것/);
-    write('plan.md', '# 기획\n- 광고 최대 3개(2026-10-31 사용자)\n- 측정(2026-11-01)과 정리(사용자 몫)\n');
+    write('plan.md', '# 기획\n- 알림 최대 3개(2026-10-31 사용자)\n- 측정(2026-11-01)과 정리(사용자 몫)\n');
     git(repo, ['add', '.']);
     assert.equal(commit().status, 0);
 
@@ -187,6 +187,48 @@ describe('커밋 메시지 근거 검사 훅 commit-msg', { skip: SKIP || NO_WHY
     write('plan.md', '# 기획\n- 뺀 것(2026-11-01 사용자 지시)\n');
     git(repo, ['add', '.']);
     assert.equal(commit('\n대조: overhaul.md 뺀 것 행').status, 0);
+  });
+
+  it('작업 문서(work-doc 표시)는 결정 문서가 열려 있어도 결정 표기를 새로 넣는 커밋이 통과하고, 표시가 없는 문서는 막힌다', { skip: spawnSync('git', ['--version']).status !== 0 }, () => {
+    const git = (cwd, args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+    });
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'commit-msg-workdoc-'));
+    const write = (f, text) => fs.writeFileSync(path.join(repo, f), text);
+    const commit = () => git(repo, ['commit', '-m', '제목', '-m', '왜: 까닭\n전제: 믿은 사실']);
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['config', '--local', 'core.hooksPath', path.dirname(ISOLATED)]);
+    write('overhaul.md', '<!-- decision-doc -->\n# 결정\n');
+    write('task.md', '# 작업\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 표시가 없으면 열린 결정 문서 때문에 막힌다
+    write('task.md', '# 작업\n- 뺀 것(2026-11-10 사용자 지시)\n');
+    git(repo, ['add', '.']);
+    assert.notEqual(commit().status, 0);
+
+    // work-doc 표시가 한 줄을 다 차지하면 통과한다
+    write('task.md', '# 작업\n<!-- work-doc -->\n- 뺀 것(2026-11-10 사용자 지시)\n');
+    git(repo, ['add', '.']);
+    assert.equal(commit().status, 0);
+
+    // 표시를 글 속에서 설명만 하는 문서는 작업 문서가 아니라 막힌다
+    write('guide.md', '# 안내\n머리에 `<!-- work-doc -->` 표시를 둔다.\n- 뺀 것(2026-11-10 사용자 지시)\n');
+    git(repo, ['add', '.']);
+    assert.notEqual(commit().status, 0);
+  });
+
+  it('checkDecision은 exempt에 든 작업 문서의 결정 표기를 걸지 않는다', () => {
+    const { checkDecision } = require(WHY);
+    const added = [['task.md', '- 뺀 것(2026-11-10 사용자 지시)'], ['plan.md', '- 뺀 것(2026-11-10 사용자 지시)']];
+    assert.match(checkDecision('제목', ['d.md'], added, ['사용자']), /task\.md/);
+    const r = checkDecision('제목', ['d.md'], added, ['사용자'], [], ['task.md']);
+    assert.doesNotMatch(r, /task\.md/);
+    assert.match(r, /plan\.md/);
+    assert.equal(checkDecision('제목', ['d.md'], [added[0]], ['사용자'], [], ['task.md']), null);
   });
 
   it('결정 문서에 1,000자가 넘는 표 행을 넣으면 막고, 다른 문서나 표가 아닌 줄은 길어도 통과한다', () => {

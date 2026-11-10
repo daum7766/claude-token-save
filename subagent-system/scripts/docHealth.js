@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { staleProposals, staleProposalsText } from './subagentRetroHelpers.js';
+import { fixFileOf, fixFileCandidates } from './kitShared.js';
 
 export const THRESHOLD = { bytes: 24000, evidenceRatio: 0.3, quotes: 50, longRow: 1000, longRowCount: 1 };
 
@@ -14,6 +16,7 @@ const SKIP_DIR = /(?:^|\/)(?:node_modules|\.git|vendor|plugins|\.kit-base|worktr
 const RECORD_DIR = /(?:^|\/)(?:archive|records|_temp|fixtures)\//;
 const WORK_DIR = /(?:^|\/)plan\/work\//;
 const CHANGELOG = /(?:^|\/)(?:CHANGES|CHANGELOG)[^/]*\.md$/i;
+const PROPOSALS = /(?:^|\/)PROPOSALS[^/]*\.md$/;
 const TEXT_EXT = /\.(?:md|js|cjs|mjs|json|tsv|sh|ts|tsx|yml|yaml|toml|css|html)$/;
 
 const git = (repo, args) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -74,6 +77,8 @@ function cleanToken(raw) {
   let t = raw.trim().replace(/[#:]\d*[\w-]*$/, (s) => (/^[#:]/.test(s) ? '' : s)).replace(/[.,;)\]]+$/, '');
   t = t.replace(/#.*$/, '');
   if (!t || /[\s*<>{}$|"'=()[\]\\]/.test(t) || /^https?:|^[a-z]+:\/\//i.test(t) || t.includes('...') || t.includes('…')) return null;
+  // 「github.com/이름」, 「x.com/이름/status/번호」처럼 앞의 https://를 뗀 웹 주소는 파일 경로가 아니다. git이 무시하는 경로로 읽혀 「정본이 git 밖을 가리킴」의 다섯에 하나가 이 꼴이었다(11-08).
+  if (/^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|ai|co|kr|jp|me|app|so|gg|tv)\//i.test(t)) return null;
   if (!/\//.test(t) && !(/^[\w.-]+$/.test(t) && TEXT_EXT.test(t) && /\.(?:md|json|tsv)$/.test(t))) return null;
   if (/^\d+\/\d+/.test(t) || /^[.]+$/.test(t)) return null;
   // 단위나 선택지처럼 보이는 낱말(a/b, 있음/없음)은 확장자가 없는 한 두 마디짜리 짧은 낱말을 뺀다.
@@ -139,6 +144,25 @@ function resolveDocRef(repo, fromRel, token, bases) {
     if (fs.existsSync(p)) return p;
   }
   return null;
+}
+
+// 문서 경로 바로 뒤 「절」이 그 문서에 없으면 끊긴 절 참조다. 키트가 절을 옮기거나 이름을 바꾸면 사용자 문서가 없는 절을 가리킨 채 남았다.
+// 폴더가 든 경로만 본다(「사용자 CLAUDE.md」처럼 이름만 적은 것은 어느 문서인지 모른다). 절 이름이 머리줄 말고 목록이나 표 칸에 있는 문서도 있어, 그 글이 문서 어디에도 없을 때만 센다.
+const docTextCache = new Map();
+function missingSections(repo, fromRel, token, line) {
+  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const refs = [...line.matchAll(new RegExp(`${esc}\`?(?:의)?[ \t]*「([^」\n]+)」`, 'g'))].map((m) => m[1].trim());
+  if (!refs.length) return [];
+  const target = resolveDocRef(repo, fromRel, token);
+  if (!target) return [];
+  if (!docTextCache.has(target)) {
+    let text = '';
+    try { text = fs.readFileSync(target, 'utf8'); } catch { /* 못 읽으면 대 보지 않음 */ }
+    docTextCache.set(target, text);
+  }
+  const text = docTextCache.get(target);
+  if (!text) return [];
+  return refs.filter((r) => !text.includes(r.replace(/^#+\s*/, '')));
 }
 
 // 후보의 경로를 정본이 가리키는 줄 수. 저장소 기준 경로, docs/를 뗀 경로, ~ 경로, 절대 경로를 모두 같은 경로로 본다.
@@ -234,6 +258,17 @@ export function analyzeRepo(repo, { days = 3, now = Date.now(), projectsRoot = '
     }
     return null;
   };
+  // 열린 칸이 있는 작업 기록이 경로로 가리키는 다른 작업 기록. 다 쓴 것으로 정리하면 그 진행 기록의 가리킴이 끊긴다(판정 원문이 바퀴마다 견주는 자료인데 정본이 가리키는 줄만 세서 다 쓴 것으로 띄웠다, 바퀴 2~7 판정).
+  const openPointers = new Map();
+  for (const w of work) {
+    if (!/^\s*[-*]\s*\[ \]/m.test(texts.get(w))) continue;
+    for (const t of pathTokens(texts.get(w))) {
+      const p = resolveDocRef(repo, w, t);
+      if (!p || !p.startsWith(repo)) continue;
+      const rel = path.relative(repo, p);
+      if (rel !== w) openPointers.set(rel, [...(openPointers.get(rel) ?? []), w]);
+    }
+  }
   for (const f of work) {
     const text = texts.get(f);
     const open = (text.match(/^\s*[-*]\s*\[ \]/gm) ?? []).length;
@@ -244,9 +279,9 @@ export function analyzeRepo(repo, { days = 3, now = Date.now(), projectsRoot = '
     const br = branchState(repo, name);
     const age = ageOf(repo, f, now);
     const waiting = /기다림:/.test(text);
-    const item = { kind: '작업 기록', path: f, refs: refs.count, refFiles: refs.where, session: marker, openBoxes: open, undecided: dec ? (dec.empty ? `${dec.rel} 비었음` : `${dec.rel} ${dec.lines}줄 남음`) : open === 0 ? '결정 문서 절 못 찾음' : '-', blockedByUndecided: !!dec && !dec.empty, branch: br, ageDays: ageDays(age.at, now), ageSource: age.source, waiting };
+    const item = { kind: '작업 기록', path: f, refs: refs.count, refFiles: refs.where, pointedByOpen: [...new Set(openPointers.get(f) ?? [])], session: marker, openBoxes: open, undecided: dec ? (dec.empty ? `${dec.rel} 비었음` : `${dec.rel} ${dec.lines}줄 남음`) : open === 0 ? '결정 문서 절 못 찾음' : '-', blockedByUndecided: !!dec && !dec.empty, branch: br, ageDays: ageDays(age.at, now), ageSource: age.source, waiting };
     workItems.push(item);
-    const ok = item.refs === 0 && marker.state !== '쓰는 중' && open === 0 && !item.blockedByUndecided && br.state !== '머지 안 됨';
+    const ok = item.refs === 0 && marker.state !== '쓰는 중' && open === 0 && !item.blockedByUndecided && br.state !== '머지 안 됨' && item.pointedByOpen.length === 0;
     if (ok) finished.push(item);
     if (open > 0 && item.ageDays > days && !waiting) stalled.push(item);
   }
@@ -299,7 +334,15 @@ export function analyzeRepo(repo, { days = 3, now = Date.now(), projectsRoot = '
   const topDirs = new Set(listFiles(repo).filter((f) => f.includes('/')).map((f) => f.split('/')[0]));
   const rooted = (t) => t.startsWith('~/') || (t.startsWith('/') && t.startsWith(repo + '/')) || (!t.startsWith('/') && t.includes('/') && topDirs.has(t.replace(/^\.\//, '').split('/')[0]));
   const pending = [];
+  const staleProps = [];
   for (const c of canonical) {
+    // 제안 목록은 DOC_WRITING 「문서 종류」가 기록물로 정한 문서라, 지난 회고 메모에 남은 옛 경로를 끊김으로 세지 않는다.
+    // 대신 결과 줄이 없고 묻기 줄도 없는 열린 항목은 나이로 세어 밀린 제안으로 띄운다(개인용에서 처리할 주인이 없어 쌓이던 것).
+    if (PROPOSALS.test(c.rel)) {
+      const r = staleProposals(c.text, { now: new Date(now) });
+      for (const i of r.items) staleProps.push({ doc: c.rel, title: i.title, days: i.days });
+      continue;
+    }
     let inFence = false;
     c.lines.forEach((l, i) => {
       if (/^\s*```/.test(l)) { inFence = !inFence; return; }
@@ -311,6 +354,7 @@ export function analyzeRepo(repo, { days = 3, now = Date.now(), projectsRoot = '
         // 확장자가 있는 백틱 경로 가운데 기준이 분명한 것(~/, 저장소 안 절대 경로, 저장소 맨 위 폴더로 시작하는 경로)만 끊김으로 본다.
         // 파일 이름만 적은 것과 기준 폴더를 모르는 상대 경로(스킬 폴더 기준의 scripts/ 등)는 맞는지 가를 수 없어 세지 않는다. 첫 실측에서 끊김의 2/3가 이 꼴의 오탐이었다.
         if (!hit && backticked && /\.[A-Za-z]{1,5}$/.test(t) && rooted(t)) broken.push({ doc: c.rel, line: i + 1, ref: t });
+        if (hit && !bare && t.endsWith('.md')) for (const sec of missingSections(repo, c.rel, t, l)) broken.push({ doc: c.rel, line: i + 1, ref: `${t} 「${sec}」` });
         if (!t.endsWith('/') && t.includes('/')) {
           const abs = t.startsWith('~/') ? path.join(os.homedir(), t.slice(2)) : t;
           const rels = path.isAbsolute(abs) ? (abs.startsWith(repo + '/') ? [path.relative(repo, abs)] : []) : [t, `docs/${t}`];
@@ -329,7 +373,7 @@ export function analyzeRepo(repo, { days = 3, now = Date.now(), projectsRoot = '
   const metrics = { [`문서 줄 수 ${repo}`]: lineTotal, ...Object.fromEntries(Object.entries(extraMetrics).map(([k, v]) => [`${k} ${repo}`, v])) };
 
   const backups = stackedBackups(repo);
-  return { repo, workItems, finished, stalled, bloated, broken, outside, backups, metrics };
+  return { repo, workItems, finished, stalled, bloated, broken, outside, backups, staleProps, metrics };
 }
 
 export function compareMetrics(metrics, historyFile) {
@@ -414,6 +458,33 @@ export function analyzeMemory(dir, { repos = [], now = Date.now(), since = 0 } =
   return out;
 }
 
+// 고침 기록(fixes.tsv)의 뿌리와 고친 곳이 지금 없는 파일을 가리키는 줄을 파일별로 묶는다. 기록은 고치지 않고 읽기만 한다.
+// 까닭: 파일을 옮기거나 지운 뒤 고침 기록이 옛 경로를 가리키면 뿌리 묶음과 효과 표가 이어지지 않는데 지금까지 아무도 세지 않았다(2026-11-08 바퀴 3 판정).
+// 전제: 상대 경로는 그 프로젝트 루트와 설치 폴더(~/.claude) 어디에도 없을 때만 없다고 본다(범위를 잘못 적은 프로젝트 줄이 설치 폴더 파일을 가리키는 일이 있어서). 뿌리가 「장치 없음: …」이거나 고친 곳이 확장자 있는 파일 경로가 아니면(예: 「선택지 1#자리」) 파일이 아니라고 보고 건너뛴다.
+export function staleFixTargets(fixes, { claudeDir, home = os.homedir(), exists = fs.existsSync, projectOf = (p) => p, kitDir = '', moved = () => null } = {}) {
+  const found = new Map();
+  const note = (f, raw, kind) => {
+    const file = fixFileOf(raw);
+    if (!file) return;
+    if (fixFileCandidates(file, f.project, { claudeDir, home, projectOf, kitDir }).some((c) => exists(c))) return;
+    // 옮겨진 파일(커밋 기록에서 옛 경로가 새 경로로 이어짐)은 효과 표가 새 경로로 읽으니 없는 파일이 아니라 옮겨진 것으로 센다. 지운 파일은 「지운 자리」로 따로 센다.
+    const where = moved(file);
+    const status = where ? where.kind : 'missing';
+    const e = found.get(file) ?? { file, roots: 0, wheres: 0, status, to: where?.to ?? null, hash: where?.hash ?? null };
+    e[kind]++;
+    found.set(file, e);
+  };
+  for (const f of fixes) {
+    if (f.root && !f.root.startsWith('장치 없음')) note(f, f.root, 'roots');
+    note(f, f.where, 'wheres');
+  }
+  const sorted = [...found.values()].sort((a, b) => b.roots + b.wheres - (a.roots + a.wheres) || a.file.localeCompare(b.file));
+  const by = (status) => sorted.filter((x) => x.status === status);
+  const missing = by('missing');
+  const sum = (list) => list.reduce((n, x) => n + x.roots + x.wheres, 0);
+  return { files: missing, lines: sum(missing), moved: by('moved'), movedLines: sum(by('moved')), gone: by('deleted'), goneLines: sum(by('deleted')) };
+}
+
 export function countsOf(result) {
   const sum = (f) => result.repos.reduce((a, r) => a + f(r), 0);
   const mem = (f) => result.memories.reduce((a, m) => a + f(m), 0);
@@ -423,7 +494,10 @@ export function countsOf(result) {
     '부푼 문서': sum((r) => r.bloated.length),
     '끊긴 경로': sum((r) => r.broken.length),
     '정본이 git 밖을 가리킴': sum((r) => r.outside.length),
+    '밀린 제안': sum((r) => (r.staleProps ?? []).length),
     '쌓인 백업': sum((r) => (r.backups ?? []).reduce((n, g) => n + g.older.length, 0)),
+    '고침 기록의 없는 파일': (result.staleFixes?.files ?? []).length,
+    '고침 기록 없는 장치 고침': (result.deviceCommits?.fix ?? []).length,
     '재기만 하는 지표': result.rose.length,
     '메모리 끊긴 경로': mem((m) => m.broken.length),
     '메모리 규칙 자리 표시 없음': mem((m) => m.noRuleMark.length),
@@ -439,12 +513,17 @@ export function formatHealth(result, { days }) {
   const { counts, total } = countsOf(result);
   for (const r of result.repos) {
     out.push(`\n== ${r.repo}`);
-    out.push(`다 쓴 기록 후보 ${r.finished.length}개 (작업 기록 ${r.workItems.length}개 가운데. 조건: 정본이 가리키는 줄 0, 쓰는 중 아님, 열린 칸 0과 미정 절 비음, 이어진 브랜치가 머지 안 된 것 아님)`);
+    out.push(`다 쓴 기록 후보 ${r.finished.length}개 (작업 기록 ${r.workItems.length}개 가운데. 조건: 정본이 가리키는 줄 0, 열린 칸이 있는 다른 작업 기록이 가리키지 않음, 쓰는 중 아님, 열린 칸 0과 미정 절 비음, 이어진 브랜치가 머지 안 된 것 아님)`);
     for (const w of r.finished) out.push(`  - ${w.path}: 정본이 가리키는 줄 ${w.refs}, 세션 ${w.session.state}, 열린 칸 ${w.openBoxes ?? '-'}, 미정 절 ${w.undecided}, ${w.branch.branch} ${w.branch.state}, 나이 ${w.ageDays}일(${w.ageSource})`);
+    const held = r.workItems.filter((w) => w.pointedByOpen?.length && w.refs === 0 && w.openBoxes === 0);
+    if (held.length) out.push(`  열린 진행 기록이 가리켜 뺀 것 ${held.length}개: ${held.slice(0, 6).map((w) => path.basename(w.path)).join(', ')}${held.length > 6 ? ' …' : ''}`);
     out.push(`멈춘 진행 기록 ${r.stalled.length}개 (열린 칸이 있고 ${days}일 넘게 안 바뀜, 「기다림:」 줄 있으면 뺌)`);
     for (const w of r.stalled) out.push(`  - ${w.path}: 열린 칸 ${w.openBoxes}, ${w.ageDays}일 전(${w.ageSource}), 세션 ${w.session.state}`);
     out.push(`부푼 문서 ${r.bloated.length}개`);
     for (const b of r.bloated) out.push(`  - ${b.path}: ${b.why.join(', ')} (바이트 ${b.bytes}, 근거 절 ${(b.evidenceRatio * 100).toFixed(0)}%, 「」 ${b.quotes}, 긴 표 행 ${b.longRows})`);
+    const sp = r.staleProps ?? [];
+    out.push(`${staleProposalsText({ items: sp, oldest: Math.max(0, ...sp.map((x) => x.days)) })} (제안 목록에서 결과 줄과 묻기 줄이 없는 열린 항목, 회고가 그 자리에서 처리할 것)`);
+    for (const x of sp.slice(0, 15)) out.push(`  - ${x.doc}: ${x.title} (${x.days}일)`);
     const bk = r.backups ?? [];
     out.push(`쌓인 백업 ${bk.reduce((n, g) => n + g.older.length, 0)}개 (같은 꼴 이름에서 가장 새것 하나만 남길 후보)`);
     for (const g of bk) out.push(`  - ${g.pattern}: ${g.older.length + 1}개, 남길 것 ${g.keep}`);
@@ -455,6 +534,21 @@ export function formatHealth(result, { days }) {
     for (const b of r.outside.slice(0, 15)) out.push(`  - ${b.doc}:${b.line} \`${b.ref}\``);
     if (r.outside.length > 15) out.push(`  ... 외 ${r.outside.length - 15}개 (--json으로 전부)`);
   }
+  const sf = result.staleFixes ?? { files: [], lines: 0, moved: [], movedLines: 0, gone: [], goneLines: 0 };
+  out.push('\n== 고침 기록');
+  out.push(`지금 없는 파일을 뿌리나 고친 곳으로 가리키고 git 기록에서도 옮긴 곳을 못 찾은 고침 기록 ${sf.lines}줄, 파일 ${sf.files.length}개 (읽기만 하고 고치지 않음)`);
+  for (const x of sf.files.slice(0, 15)) out.push(`  - ${x.file}: 뿌리 ${x.roots}줄, 고친 곳 ${x.wheres}줄`);
+  if (sf.files.length > 15) out.push(`  ... 외 ${sf.files.length - 15}개 (--json으로 전부)`);
+  out.push(`  옮겨진 파일 ${(sf.moved ?? []).length}개, ${sf.movedLines ?? 0}줄 (효과 표와 처리할 것이 새 경로로 접어 읽음, 줄은 그대로)`);
+  for (const x of (sf.moved ?? []).slice(0, 8)) out.push(`    - ${x.file} -> ${x.to} (${String(x.hash).slice(0, 7)})`);
+  out.push(`  지운 파일 ${(sf.gone ?? []).length}개, ${sf.goneLines ?? 0}줄 (처리할 것에 「지운 자리」로 붙음. 회고가 대신 막는 장치를 보고 유지나 무관으로 닫음)`);
+  for (const x of (sf.gone ?? []).slice(0, 8)) out.push(`    - ${x.file} (${String(x.hash).slice(0, 7)}에서 지움)`);
+  const dc = result.deviceCommits ?? { fix: [], featHook: [], rootless: [] };
+  out.push(`고침 기록이 가리키지 않는 장치 고침 커밋 ${dc.fix.length}개 (최근 ${result.deviceDays ?? 3}일 가운데 해시 안내가 깔린 뒤 커밋만, 고친 장치 파일마다 메모에 커밋 해시가 있고 고친 곳이나 뿌리가 그 파일인 줄이 있어야 가리킨 것으로 봄. 처리는 fix-log.js judge의 처리할 것)`);
+  for (const c of dc.fix.slice(0, 10)) out.push(`  - ${c.short} ${c.subject.slice(0, 60)} (${c.files.slice(0, 3).map((f) => f.split('/').pop()).join(', ')}${c.files.length > 3 ? ' 외' : ''})`);
+  if (dc.fix.length > 10) out.push(`  ... 외 ${dc.fix.length - 10}개 (--json으로 전부)`);
+  if (dc.rootless?.length) out.push(`  뿌리 없는 고침 줄로만 닫힌 커밋 ${dc.rootless.length}개 (재발을 잴 수 없음, 처리할 것 건수에는 넣지 않음): ${dc.rootless.slice(0, 8).map((c) => c.short).join(', ')}`);
+  out.push(`  확인 후보 ${dc.featHook.length}개 (feat 접두어지만 막는 훅을 고친 커밋이라 놓친 경우를 고쳤으면 기록. 처리할 것 건수에는 넣지 않음)${dc.featHook.length ? `: ${dc.featHook.slice(0, 8).map((c) => c.short).join(', ')}` : ''}`);
   out.push('\n== 재기만 하는 지표');
   out.push(`앞 기록보다 늘어난 지표 ${result.rose.length}개`);
   for (const x of result.rose) out.push(`  - ${x.key}: ${x.before} -> ${x.value} (${x.since} 기록 대비)`);

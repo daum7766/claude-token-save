@@ -518,6 +518,20 @@ async function isWarmingMain($: EngineInterface): Promise<boolean> {
   return isAgentRunning
 }
 
+// 기다린 시간: 한 시간 안은 분, 넘으면 시간
+function waitText(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / 60_000)
+  return m < 60 ? `대기${m}분` : `대기${Math.floor(m / 60)}시간`
+}
+
+// 차례를 끝낸 서브에이전트 가운데 자기가 띄운 뒤 작업을 기다리는 것의 id.
+// 차례를 끝낸 서브에이전트가 없으면 목록을 읽지 않는다(표를 그릴 때마다 부르므로)
+async function waitingAgents($: EngineInterface, all: Record<string, Loop>): Promise<ReadonlySet<string>> {
+  if (!Object.values(all).some(l => l.id !== MAIN && !l.isRunning)) return new Set()
+  const list = await $.agent.list().catch(() => [])
+  return new Set(list.filter(a => a.status === 'waiting').map(a => a.id))
+}
+
 // context.window는 모델 원래 창이라 settings의 autoCompactWindow로 낮춘 기준이 반영되지 않는다.
 // 낮춘 압축 창과 임계값은 breakdown에만 있어서 읽을 수 있는 기준 가운데 가장 작은 값에 견준다.
 // 대화 크기나 breakdown을 읽지 못하면 기준을 알 수 없으므로 거짓으로 돌려 압축을 막지 않는다
@@ -655,12 +669,13 @@ type Color = 'red' | 'yellow' | 'green'
 type Cell = { text: string; color?: Color }
 type Column = { head: string; width: number; isWideOnly?: boolean; isToken?: boolean; cell: (loop: Loop) => Cell }
 
-function buildTable(s: Session, all: Record<string, Loop>, at: number, width: number, showTokens: boolean, isOneMillionOff: boolean) {
+function buildTable(s: Session, all: Record<string, Loop>, at: number, width: number, showTokens: boolean, isOneMillionOff: boolean, waiting: ReadonlySet<string> = new Set()) {
   // 메인 줄은 첫 요청 전에도 세션 모델로 늘 보인다
   const main: Loop = all[MAIN] ?? { ...blank(MAIN, at), model: s.model, effort: s.effort }
   const running = Object.values(all)
     // 끝난 서브에이전트는 표에서 뺀다. 이어서 일하면 다시 나온다.
-    .filter(l => l.id !== MAIN && l.isRunning)
+    // 차례를 끝내고 자기가 띄운 뒤 작업을 기다리는 서브에이전트(waiting)는 남겨, 멈춘 것이 아니라 기다리는 중임을 보인다.
+    .filter(l => l.id !== MAIN && (l.isRunning || waiting.has(l.id)))
     .sort((a, b) => a.startedAt - b.startedAt)
   const agents = running.slice(-SHOWN_AGENTS)
   const loopsShown = [main, ...agents]
@@ -677,7 +692,12 @@ function buildTable(s: Session, all: Record<string, Loop>, at: number, width: nu
         return { text: percent(v), color: pctColor(v) }
       },
     },
-    { head: '경과', width: 7, cell: l => ({ text: elapsed(l, at) }) },
+    {
+      head: '경과',
+      // 「대기59분」, 「대기9시간」이 들어가는 폭
+      width: 9,
+      cell: l => (!l.isRunning && waiting.has(l.id) ? { text: waitText(at - l.lastAt), color: 'yellow' } : { text: elapsed(l, at) }),
+    },
     {
       head: '캐시',
       width: 5,
@@ -722,7 +742,7 @@ function buildTable(s: Session, all: Record<string, Loop>, at: number, width: nu
         return { ...cell, text: fit(cell.text, c.width, 'center') }
       }),
     ]
-    return { loop, cells: cellsOf }
+    return { loop, cells: cellsOf, isWaiting: !loop.isRunning && waiting.has(loop.id) }
   })
 
   return { header, rows, hiddenCount: running.length - agents.length }
@@ -941,7 +961,8 @@ export const register: Register = (on, options) => {
     const at = (await read($, now)) || (await nowMs($))
     const s = await read($, session)
     const width = (e.viewport?.columns ?? 160) - 2
-    const t = buildTable(s, await read($, loops), at, width, await isTokensShown($), await isOneMillionDisabled($))
+    const all = await read($, loops)
+    const t = buildTable(s, all, at, width, await isTokensShown($), await isOneMillionDisabled($), await waitingAgents($, all))
     const offset = pillOffset(await read($, permissionMode))
 
     return (
@@ -957,11 +978,12 @@ export const register: Register = (on, options) => {
             {t.header}
           </Text>
           {t.rows.map(r => {
+            // 기다리는 줄도 흐리게 두되 「대기 N분」 칸의 색은 살린다
             const isDim = !r.loop.isRunning && r.loop.id !== MAIN
             return (
               <Text key={r.loop.id} dimColor={isDim} wrap="truncate-end">
                 {r.cells.map((c, i) => (
-                  <Text key={String(i)} color={isDim ? undefined : c.color}>
+                  <Text key={String(i)} color={isDim && !(r.isWaiting && c.color) ? undefined : c.color}>
                     {i === 0 ? c.text : ` ${c.text}`}
                   </Text>
                 ))}
