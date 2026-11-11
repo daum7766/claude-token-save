@@ -1,14 +1,5 @@
 #!/bin/sh
-# git pre-commit 훅. 키트 검사 조각(pre-commit.d)을 node로 이어 부르고, 저장소에 .githooks/pre-commit이 있으면 이어서 돌려 실패하면 커밋을 막는다.
+# git pre-commit 훅. 키트 검사 조각(pre-commit.d)과 저장소 훅을 이어 부르는 일은 chain.sh가 한다(그 머리말에 저장소 설정과 env 방식의 차이가 있다).
 # 왜: 저장소마다 커밋 전 검사를 둘 자리가 core.hooksPath 때문에 없었고, 검사 출력을 보지 않고 커밋하는 일이 생겼다. 키트 쪽 검사(고정 파일이 원본과 다른지)도 조각(10-kit-drift)으로 갈라 묶음과 함께 깔고 뺀다.
-# 전제: 저장소별 검사는 그 저장소의 .githooks/pre-commit(실행 권한)이 정하고 없으면 아무것도 하지 않는다. node가 없으면 키트 검사만 건너뛰고(표준 에러 한 줄) 저장소 자체 훅은 돈다.
 #  한 번 건너뛰려면 KIT_DRIFT_SKIP=1을 붙여 커밋한다(고정 파일 검사만). 조각을 못 불러오거나 던지면 커밋을 막는다(git-dispatch.cjs).
-dir=$(cd "$(dirname "$0")" && pwd)
-if command -v node >/dev/null 2>&1; then
-  node "$dir/git-dispatch.cjs" pre-commit "$@" || exit 1
-else
-  echo "kit git 훅: node가 없어 키트 검사를 건너뜁니다" >&2
-fi
-top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-[ -x "$top/.githooks/pre-commit" ] && exec "$top/.githooks/pre-commit" "$@"
-exit 0
+exec sh "$(dirname "$0")/chain.sh" pre-commit "$@"

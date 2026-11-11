@@ -48,6 +48,7 @@
  *   --merge-git-ask <settings.json> <git-permissions.json> <config.json> check|merge   permissions.ask에 키트 항목을 더함(개인용은 personal 목록)
  *   --remove-agent-meter <settings.json> <agent-meter 폴더>      env에서 agent-meter 경로와 keep-alive 키를 뺌
  *   --move-agent-meter <agent-meter 폴더>                        폴더를 같은 위치의 agent-meter-backup-<날짜-시각>으로 옮김
+ *   --git-env <settings.json> on|off|status                      env의 GIT_CONFIG_ 세 키로 이 설정 폴더 세션의 git 훅 폴더를 hooks/git으로 돌림(on), 뺌(off), 상태와 허용 목록(git-hook-repos.txt)을 보임(status)
  *   --backup-file <파일> <이름>                                  <파일>.bak-<이름>-<날짜-시각>으로 복사(git이 지키면 만들지 않음, 앞 백업은 휴지통)
  *   --check-json <파일…>                                         JSON으로 읽히는지 봄
  */
@@ -455,6 +456,51 @@ function removeAgentMeter(file, dir) {
   const b = makeBackup(f, 'agent-meter', stamp());
   console.log(b ? `백업: ${b}` : '백업 없음: git이 되돌릴 길');
   saveSettings(st);
+}
+
+// env 방식 git 훅(hooks/git/chain.sh 머리말). settings.json env의 GIT_CONFIG_ 키가 이 셋뿐이고 이 설정 폴더의 hooks/git을 가리키면 이 키트가 넣은 것이다.
+// 왜: 저장소 설정의 core.hooksPath는 그 저장소의 모든 커밋에 걸리지만, settings.json env는 이 설정 폴더로 뜬 세션의 git에만 걸린다.
+const gitEnvHooksPath = (cfgDir) => slash(path.join(cfgDir, 'subagent-system', 'hooks', 'git'));
+const gitEnvKeys = (env) => (isObject(env) ? Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG_')) : []);
+function gitEnvState(env, hooksPath) {
+  const keys = gitEnvKeys(env);
+  if (!keys.length) return 'off';
+  const ours = keys.length === 3 && env.GIT_CONFIG_COUNT === '1' && env.GIT_CONFIG_KEY_0 === 'core.hooksPath'
+    && typeof env.GIT_CONFIG_VALUE_0 === 'string' && comparablePath(env.GIT_CONFIG_VALUE_0) === comparablePath(hooksPath);
+  return ours ? 'on' : 'other';
+}
+function dropGitEnv(s) {
+  for (const k of gitEnvKeys(s.env)) delete s.env[k];
+  if (isObject(s.env) && !Object.keys(s.env).length) delete s.env;
+}
+const gitHookReposOf = (file) => (readText(file) ?? '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+// --git-env <settings.json> on|off|status. on은 세 키를 더하고, off는 이 키트가 넣은 세 키만 뺀다. 고치기 전 옆에 백업한다.
+// env에 이 키트가 넣지 않은 GIT_CONFIG_ 값이 있으면 on은 고치지 않고 멈춘다(사용자 값을 덮지 않으려는 것이다).
+function gitEnvCommand(file, action) {
+  if (!['on', 'off', 'status'].includes(action)) throw new Error('사용법: --git-env <settings.json> on|off|status');
+  const st = openSettings(file);
+  const cfgDir = path.dirname(path.resolve(file));
+  const hooksPath = gitEnvHooksPath(cfgDir);
+  const reposFile = path.join(cfgDir, 'subagent-system', 'git-hook-repos.txt');
+  const state = gitEnvState(st.s.env, hooksPath);
+  const out = { action, state, hooksPath, reposFile, repos: gitHookReposOf(reposFile), changed: false };
+  if (action === 'on' && state === 'other') {
+    throw new Error(`settings.json env에 이 키트가 넣지 않은 GIT_CONFIG_ 값(${gitEnvKeys(st.s.env).join(', ')})이 있어 고치지 않았습니다. 그 값을 정리한 뒤 다시 돌립니다`);
+  }
+  if (action === 'on' && state === 'off') {
+    st.s.env = { ...(isObject(st.s.env) ? st.s.env : {}), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: hooksPath };
+    out.changed = true;
+  } else if (action === 'off' && state === 'on') {
+    dropGitEnv(st.s);
+    out.changed = true;
+  }
+  if (out.changed) {
+    out.backup = st.ex ? makeBackup(st.f, 'git-env', stamp()) : null;
+    saveSettings(st);
+    out.state = action;
+  }
+  console.log(JSON.stringify(out, null, 2));
 }
 
 function moveAgentMeter(dir) {
@@ -1419,7 +1465,8 @@ function migrateRetroPending(ctx) {
   return { file, created: existing === null && blocks.length > 0, moved: blocks.length, skippedSameTitle: skipped, backup };
 }
 
-// commit-msg 훅은 쓸 저장소마다 사용자가 core.hooksPath를 걸어야 켜진다. 전역으로는 걸지 않고 방법만 알린다.
+// commit-msg 훅은 사용자가 걸어야 켜진다. 전역으로는 걸지 않고 두 방법만 알린다.
+// env 방식(--git-env on과 허용 목록 reposFile)은 이 설정 폴더 세션의 git에만 걸리고, 저장소 설정 방식(command)은 그 저장소의 모든 커밋에 걸린다.
 function commitMsgNotes(ctx, config, report, keys) {
   // 검사 조각이 하나도 안 깔리는 설치(공개판 새로 깔기 등)에는 훅을 걸 까닭이 없어 안내하지 않는다.
   if (!keys.some((k) => /^subagent-system\/hooks\/git\/commit-msg\.d\/[^/]+\.c?js$/.test(k))) return;
@@ -1428,8 +1475,9 @@ function commitMsgNotes(ctx, config, report, keys) {
     return;
   }
   const hooksPath = slash(path.join(ctx.sub, 'hooks', 'git'));
-  report.commitMsgHook = { hooksPath, command: `git -C <저장소 폴더> config --local core.hooksPath "${hooksPath}"` };
-  report.notes.push('commit-msg 훅은 쓸 저장소마다 사용자가 commitMsgHook.command를 돌려야 켜집니다. 전역으로는 걸지 않았습니다. 이 설정을 걸면 그 저장소의 .git/hooks 훅과 이미 걸린 core.hooksPath(husky 등)는 돌지 않으니 걸기 전에 확인합니다');
+  const reposFile = slash(path.join(ctx.sub, 'git-hook-repos.txt'));
+  report.commitMsgHook = { hooksPath, command: `git -C <저장소 폴더> config --local core.hooksPath "${hooksPath}"`, reposFile };
+  report.notes.push('commit-msg 훅은 사용자가 걸어야 켜집니다. 전역으로는 걸지 않았습니다. env 방식은 --git-env <settings.json> on으로 이 설정 폴더 세션의 git에만 걸고, 검사할 저장소를 commitMsgHook.reposFile에 적습니다. 저장소 설정 방식은 저장소마다 commitMsgHook.command를 돌리며, 그 저장소의 모든 커밋에 걸리고 .git/hooks 훅과 이미 걸린 core.hooksPath(husky 등)는 돌지 않으니 걸기 전에 확인합니다');
 }
 
 
@@ -1659,10 +1707,16 @@ function uninstall(rawArgs) {
     report.localHooksRemoved = localDropped;
     report.notes.push(`로컬 조각 장치 등록도 뺌: ${localDropped.join(', ')}. 장치 파일은 남기고, 다시 걸려면 kit-setup.js install로 깔 때 local-bundles 정의에서 다시 맞춰집니다`);
   }
-  if (dropped.length) {
+  // env 방식 git 훅(--git-env on)의 세 키도 뺀다. 이 키트가 넣은 꼴일 때만 뺀다.
+  const nextSettings = st ? (dropped.length ? hookResult.settings : st.s) : null;
+  if (nextSettings && gitEnvState(nextSettings.env, gitEnvHooksPath(ctx.cfg)) === 'on') {
+    dropGitEnv(nextSettings);
+    report.gitEnvRemoved = true;
+  }
+  if (dropped.length || report.gitEnvRemoved) {
     report.settingsBackup = backupBeside(ctx, st.f, 'uninstall');
     if (!ctx.dry) {
-      st.s = hookResult.settings;
+      st.s = nextSettings;
       saveSettings(st);
     }
   }
@@ -1707,7 +1761,7 @@ function uninstall(rawArgs) {
     if (!ctx.dry) fs.rmSync(versionFile);
     report.removed.push('subagent-system/VERSION');
   }
-  for (const f of ['config.json', `docs/${MIGRATED_RULES_FILE}`, 'docs/ROUTING_TABLE.md', 'kept-values.json']) {
+  for (const f of ['config.json', `docs/${MIGRATED_RULES_FILE}`, 'docs/ROUTING_TABLE.md', 'kept-values.json', 'git-hook-repos.txt']) {
     const file = path.join(ctx.sub, ...f.split('/'));
     if (fs.existsSync(file)) away(file);
   }
@@ -2638,6 +2692,7 @@ const COMMANDS = {
   '--merge-git-ask': [4, (a) => mergeGitAsk(a[0], a[1], a[2], a[3])],
   '--remove-agent-meter': [2, (a) => removeAgentMeter(a[0], a[1])],
   '--move-agent-meter': [1, (a) => moveAgentMeter(a[0])],
+  '--git-env': [2, (a) => gitEnvCommand(a[0], a[1])],
   '--backup-file': [2, (a) => backupFile(a[0], a[1])],
   '--check-json': [1, (a) => checkJson(a)],
 };

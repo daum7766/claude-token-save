@@ -1,13 +1,4 @@
 #!/bin/sh
-# git commit-msg 훅. 키트 검사 조각(commit-msg.d)을 node로 이어 부르고, 저장소에 .githooks/commit-msg가 있으면 이어서 돌린다.
-# 왜: 묶음마다 검사가 따로 깔리고 빠지게 하려는 것이다(조각은 git-dispatch.cjs가 부름). 저장소 자체 훅을 이 sh가 이어 부르는 까닭은 shebang 스크립트를 Windows에서 node가 바로 띄우지 못해서다. git이 훅을 자기 sh로 돌리므로 마지막 자리를 sh에 두면 Git Bash가 처리한다.
-# 전제: node가 없으면 키트 검사만 건너뛰고(표준 에러 한 줄) 저장소 자체 훅은 돈다. PATH가 좁은 GUI git 도구에서 커밋이 막히지 않게 하려는 것이다. 조각을 못 불러오거나 던지면 커밋을 막는다(git-dispatch.cjs).
-dir=$(cd "$(dirname "$0")" && pwd)
-if command -v node >/dev/null 2>&1; then
-  node "$dir/git-dispatch.cjs" commit-msg "$@" || exit 1
-else
-  echo "kit git 훅: node가 없어 키트 검사를 건너뜁니다" >&2
-fi
-top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-[ -x "$top/.githooks/commit-msg" ] && exec "$top/.githooks/commit-msg" "$@"
-exit 0
+# git commit-msg 훅. 키트 검사 조각(commit-msg.d)과 저장소 훅을 이어 부르는 일은 chain.sh가 한다(그 머리말에 저장소 설정과 env 방식의 차이가 있다).
+# 왜: 묶음마다 검사가 따로 깔리고 빠지게 하려는 것이다(조각은 git-dispatch.cjs가 부름). 이어 부르기를 sh에 두는 까닭은 shebang 스크립트를 Windows에서 node가 바로 띄우지 못해서다. git이 훅을 자기 sh로 돌리므로 Git Bash가 처리한다.
+exec sh "$(dirname "$0")/chain.sh" commit-msg "$@"

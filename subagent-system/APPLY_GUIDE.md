@@ -14,7 +14,7 @@
 - 요청에 따라 읽을 범위가 다르다. 처음 설치는 「전제 확인」부터 「설치 뒤 보고」까지, 묶음을 더하거나 빼는 일은 「묶음 더하기와 빼기」, 업데이트는 「전제 확인」과 「업데이트」, 제거는 「제거」다. 「개인용과 회사용」은 어느 요청에서나 필요할 때 찾아 읽는다.
 - 이 문서는 `node "<키트>/subagent-system/scripts/kit-setup.js"`를 `<kit-setup>`으로 줄여 적고, `<키트>`는 이 문서 옆 `subagent-system/`이 든 폴더다. 설치본 스크립트가 없거나 옛 버전이어도 돌도록 키트의 것으로 돌린다.
 - 하위 명령은 `install`, `add`, `remove`, `update`, `uninstall`, `set-profile`, `diff`, `sync`, `bundles`, `settings`, `settings-init`, `name-candidates`이고 낱개 플래그는 `<kit-setup> --help`가 보여 준다. 훅 장치를 잠시 끄고 켜는 `hook-off`와 `hook-on`, 설치본 경로로 키트 몫인지 로컬 몫인지 가르는 `source-of`도 있다.
-- 이 문서가 쓰는 낱개 플래그는 `--config-set`, `--config-unset`, `--add-config-lines`, `--backup-file`, `--check-json`, `--remove-agent-meter`, `--move-agent-meter`다.
+- 이 문서가 쓰는 낱개 플래그는 `--config-set`, `--config-unset`, `--add-config-lines`, `--backup-file`, `--check-json`, `--remove-agent-meter`, `--move-agent-meter`, `--git-env`다.
 - 결과는 JSON으로 나온다. `--dry-run`을 붙이면 아무것도 쓰지 않고 같은 결과를 보여 준다. 오류는 메시지와 종료 코드 1이고 파일은 바뀌지 않았으니 사용자에게 보이고 멈춘다.
 - 설정 폴더는 `~/.claude`이고 `CLAUDE_CONFIG_DIR`이 있으면 그 폴더다. kit-setup은 설치하는 문서 안의 경로도 그 폴더로 바꿔 놓는다. Claude가 직접 읽고 쓰는 파일은 경로를 바꿔 읽는다.
 - 백업은 kit-setup이 고치는 파일 옆에 `<파일>.bak-<이름>-<날짜-시각>`으로 하나만 남긴다. 지우지 않고 지울지는 사용자가 정한다.
@@ -103,10 +103,15 @@ Q1 앞에 한 메시지로 알린다. 이 컴퓨터의 `~/.claude`에 바닥(설
 
 ### commit-msg 연결
 
-바닥이 `commit-msg`와 `pre-commit` 이어 부르는 장치(`subagent-system/hooks/git/`)를 늘 깐다. 이 장치는 묶음이 더한 검사 조각을 차례로 부르고 이어서 저장소 자체의 `.githooks/<훅>`을 부른다. 조각을 못 불러오거나 던지면 커밋을 막고, node가 없으면 키트 검사만 건너뛰고 저장소 자체 훅은 돈다.
+바닥이 git 훅을 이어 부르는 장치(`subagent-system/hooks/git/`)를 늘 깐다. 이 장치는 묶음이 더한 검사 조각(`commit-msg`, `pre-commit`)을 차례로 부르고 이어서 저장소 자체의 `.githooks/<훅>`을 부른다. 조각을 못 불러오거나 던지면 커밋을 막고, node가 없으면 키트 검사만 건너뛰고 저장소 자체 훅은 돈다. 거는 방법은 둘이고 전역으로는 걸지 않는다. 두 방법을 보이고 사용자가 고르게 한다.
 
-- 저장소마다 `git -C <저장소 폴더> config --local core.hooksPath "$HOME/.claude/subagent-system/hooks/git"`를 걸어야 켜진다. 전역으로는 걸지 않는다. `commitCheck`가 막기일 때 결과의 `commitMsgHook.command`가 이 명령이다. `commitCheck`가 `off`인 설치는 결과에 이 명령이 없으니 위 명령을 사용자가 고른 저장소용으로 안내한다.
-- 걸기 전에 그 저장소의 `git -C <저장소> config --get core.hooksPath`와 `.git/hooks`의 `.sample` 아닌 파일을 본다. 있으면 「걸면 그 훅들이 돌지 않는다」를 보이고 걸지 묻고, 이미 `core.hooksPath`가 있는 저장소에는 걸지 않기를 권한다. 제거 때 `--unset`으로 풀어도 옛 값은 돌아오지 않기 때문이다. 개인용과 회사용 모두 같다.
+- **env 방식(추천).** 이 설정 폴더로 뜬 Claude Code 세션의 git에만 걸린다. 터미널과 다른 설정 폴더(프로필)의 커밋, 저장소 설정(`.git/config`)은 바뀌지 않는다.
+  - `<kit-setup> --git-env "$HOME/.claude/settings.json" on`이 `settings.json`의 `env`에 `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`(`core.hooksPath`), `GIT_CONFIG_VALUE_0`(이 장치 폴더)을 더한다. 고치기 전 옆에 백업이 남는다. 더할 JSON 조각을 먼저 보이고 묻는다. `env`에 이 키트가 넣지 않은 `GIT_CONFIG_` 값이 있으면 고치지 않고 멈추니 그 값을 보이고 어떻게 할지 묻는다.
+  - 키트 검사는 허용 목록 `subagent-system/git-hook-repos.txt`(결과의 `commitMsgHook.reposFile`)에 든 저장소에서만 돈다. 사용자가 고른 저장소마다 `git -C <저장소> rev-parse --show-toplevel >> "$HOME/.claude/subagent-system/git-hook-repos.txt"`로 더한다. 그 저장소의 worktree도 허용 목록 안으로 본다.
+  - 어느 저장소든 저장소 원래 훅(저장소, 전역, 시스템 설정의 `core.hooksPath`, 없으면 `.git/hooks`)은 키트 검사 뒤에 그대로 돈다. 그래서 husky처럼 `core.hooksPath`를 쓰는 저장소도 걸 수 있다. 이어 부르지 않는 훅은 `reference-transaction`, `fsmonitor-watchman`과 서버 쪽 훅이고, 이 훅을 쓰는 저장소는 이 세션 안에서만 그 훅이 돌지 않는다.
+  - 상태와 허용 목록은 `--git-env <settings.json> status`, 끄는 것은 `off`다. 새 세션부터 적용된다.
+- **저장소 설정 방식.** 저장소마다 `git -C <저장소 폴더> config --local core.hooksPath "$HOME/.claude/subagent-system/hooks/git"`를 건다. 그 저장소의 모든 커밋(다른 프로필, 터미널)에 걸린다. `commitCheck`가 막기일 때 결과의 `commitMsgHook.command`가 이 명령이다. `commitCheck`가 `off`인 설치는 결과에 이 명령이 없으니 위 명령을 사용자가 고른 저장소용으로 안내한다.
+  - 걸기 전에 그 저장소의 `git -C <저장소> config --get core.hooksPath`와 `.git/hooks`의 `.sample` 아닌 파일을 본다. 있으면 「걸면 그 훅들이 돌지 않는다」를 보이고 걸지 묻고, 이미 `core.hooksPath`가 있는 저장소에는 걸지 않기를 권한다. 제거 때 `--unset`으로 풀어도 옛 값은 돌아오지 않기 때문이다. 개인용과 회사용 모두 같다.
 
 ### CLAUDE.md 정리
 
@@ -228,7 +233,8 @@ node "$HOME/.claude/subagent-system/scripts/claudeMdTidy.js" --model <지금 세
    - 사용자 `CLAUDE.md`의 옛 키트 구역과 「구역:」 줄은 「CLAUDE.md 정리」처럼 줄을 보이고 지울지 묻는다. 표시가 없으면 줄을 마음대로 고르지 않고 사용자가 고른 줄만 지운다.
    - 정의나 스킬이 설치 전 사용자 파일을 덮은 적이 있으면 `agents/*.md.bak-install-…`가 남아 있다. 되돌릴지 파일마다 묻는다.
    - 설정 폴더의 승인 창 기록 `permission-asks.jsonl`과 사용자 설정 문서 `USER_SETTINGS.md`는 kit-setup이 지우지 않는다(`notes`에 나온다). 지울지는 사용자가 정한다.
-   - commit-msg 연결을 건 저장소가 있는지 묻고, 있으면 저장소마다 `git -C <저장소> config --local --unset core.hooksPath`를 돌릴지 묻는다. 걸어 둔 채면 훅 파일이 지워져 그 저장소의 커밋 훅이 아무것도 돌지 않는다.
+   - env 방식의 세 키는 `uninstall`이 뺀다(`gitEnvRemoved`). 허용 목록 `git-hook-repos.txt`는 사용자 데이터라 `.bak-uninstall-…`로 남는다.
+   - 저장소 설정 방식으로 commit-msg 연결을 건 저장소가 있는지 묻고, 있으면 저장소마다 `git -C <저장소> config --local --unset core.hooksPath`를 돌릴지 묻는다. 걸어 둔 채면 훅 파일이 지워져 그 저장소의 커밋 훅이 아무것도 돌지 않는다.
 4. 열린 세션이 지운 정의를 들고 있을 수 있어 Claude Code를 다시 열고 새 세션에서 정의 목록에 키트 정의가 안 보이는지 확인하게 한다.
 
 ### 제거 뒤 보고
