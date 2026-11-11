@@ -67,6 +67,7 @@
 - IN-53 add는 이미 있는 파일을 건너뛰고 고친 내용을 지키며 건너뛴 파일을 알린다(APPLY_GUIDE 업데이트 7)
 - IN-54 brief-check는 늘 놓이고 PreToolUse에 걸리며(옛 설치본도 update가 채움, 옛 `--hooks brief-check`는 무시하고 알림) commit-msg는 고른 때만 놓이고, add는 겹치지 않게 더하고 uninstall은 키트 훅만 지운다(APPLY_GUIDE Q5)
 - IN-55 commit-msg는 commitCheck가 block일 때만 저장소마다 core.hooksPath를 거는 명령을 알리고 전역으로는 걸지 않는다(APPLY_GUIDE Q5)
+- IN-67 env 방식(`--git-env on`)으로 건 git 훅은 허용 목록(`git-hook-repos.txt`)에 든 저장소와 그 worktree에서만 키트 검사를 부르고, 어느 저장소든 원래 훅(저장소, 전역 설정의 core.hooksPath, 없으면 .git/hooks)을 인자와 표준 입력째 이어 부르며, env가 없는 git과 저장소 설정은 바꾸지 않는다. on은 이 키트가 넣지 않은 GIT_CONFIG_ 값이 있으면 멈추고, off와 uninstall은 이 키트가 넣은 세 키만 뺀다(APPLY_GUIDE commit-msg 연결)
 - IN-56 지시문 검사 훅은 목표 줄과 결정 문서가 없는 600자 이상의 비 haiku 지시를 막고 표보다 높은 정의에 높임을 요구하며, 커밋 검사 훅은 왜와 전제 줄이 없으면 막고 commitCheck가 off이면 통과한다(APPLY_GUIDE Q5)
 - IN-56b 커밋 검사 훅은 `<!-- decision-doc -->` 표시가 든 결정 문서가 색인에 있으면 다른 마크다운에 날짜와 결정어(`decisionWords`, 기본 `사용자`)가 함께 든 괄호를 새로 넣는 커밋을 막고, 결정 문서 안이거나 메시지에 `대조:` 줄이 있으면 통과한다
 - IN-57 지시문 검사 훅은 표의 일 이름에서 시험, 최저, 고정 표시와 괄호 부연만 떼고 `일[기준]` 꼴 두 칸을 다른 일로 읽어, 쉬운 쪽 일을 표보다 높은 정의로 보내면 높임을 요구한다(ROUTING_PRESETS 표 형식)
