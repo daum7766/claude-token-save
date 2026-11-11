@@ -56,7 +56,7 @@ declare module 'claude-code' {
       transcript: string
       permissionMode: string
       /** 만료 직전 연장이나 알림을 마친 메인 캐시의 마지막 요청 시각 */
-      warnedAt: number
+      warmTriedAt: number
     }
   }
 }

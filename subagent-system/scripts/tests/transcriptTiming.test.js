@@ -60,6 +60,14 @@ describe('analyzeTranscript', () => {
     assert.equal(a.calls[0].wait, 389);
   });
 
+  it('Claude Code 승인 창에 사용자가 답한 호출은 시작부터 결과까지를 사용자 기다림으로 센다', () => {
+    const answered = { ...resultRow(290, 't1'), permissionDecision: { decision: 'accept', source: 'user_temporary' } };
+    const file = write([start, useRow(10, 't1', 'Bash', { command: 'git push' }), answered, { type: 'assistant', timestamp: at(300), uuid: 'z', message: { id: 'mz', content: [{ type: 'text', text: 'done' }] } }]);
+    const a = analyzeTranscript(file);
+    assert.equal(a.tool, 0);
+    assert.equal(a.userWait, 280);
+  });
+
   it('상한 안에서 끝난 Bash는 기다림 없이 전부 도구 시간이다', () => {
     const file = write([start, useRow(10, 't1', 'Bash', { command: 'sleep 30' }), resultRow(40, 't1'), { type: 'assistant', timestamp: at(50), uuid: 'z', message: { id: 'mz', content: [{ type: 'text', text: 'done' }] } }]);
     const a = analyzeTranscript(file);

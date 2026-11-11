@@ -77,6 +77,8 @@ export function slimRow(d) {
     isMeta: d.isMeta,
     origin: d.origin?.kind ? { kind: d.origin.kind } : undefined,
     toolUseResult: typeof agentId === 'string' ? { agentId } : undefined,
+    // Claude Code 자체 승인 창에 사용자가 답한 도구 결과 줄(user_temporary, user_permanent, user_reject, user_abort)
+    isUserAnswered: String(d.permissionDecision?.source ?? '').startsWith('user_') || undefined,
     message: { id: d.message?.id, content },
   };
 }
@@ -170,7 +172,10 @@ export function analyzeTranscript(file) {
       lastUser = t;
       if (Array.isArray(c)) {
         for (const x of c) {
-          if (x.type === 'tool_result' && uses.has(x.tool_use_id) && uses.get(x.tool_use_id).end === undefined) uses.get(x.tool_use_id).end = t;
+          if (x.type === 'tool_result' && uses.has(x.tool_use_id) && uses.get(x.tool_use_id).end === undefined) {
+            uses.get(x.tool_use_id).end = t;
+            if (r.isUserAnswered) uses.get(x.tool_use_id).isUserAnswered = true;
+          }
         }
       }
     } else {
@@ -185,6 +190,8 @@ export function analyzeTranscript(file) {
     let toolEnd = u.end;
     const askAt = asks.get(u.id);
     if (askAt !== undefined && askAt >= u.start && askAt <= u.end) toolEnd = askAt;
+    // 승인 창이 뜬 시각은 남지 않아, 사용자가 답한 호출은 시작부터 결과까지를 기다림으로 본다. 승인 뒤 도는 시간은 대개 짧다
+    else if (u.isUserAnswered) toolEnd = u.start;
     // 확인 창 표시가 안 남은 경우에도 상한을 넘는 몫은 기다림으로 본다. Agent는 오래 걸리는 것이 정상이라 상한을 두지 않는다.
     if (u.name !== 'Agent') toolEnd = Math.min(toolEnd, u.start + WAIT_CAP_SEC);
     u.toolEnd = toolEnd;

@@ -18,15 +18,13 @@ const isHidden = atom({ plugin: 'agent-meter', key: 'isHidden' } as const, false
 const tokensRevision = atom({ plugin: 'agent-meter', key: 'tokensRevision' } as const, 0)
 const transcript = atom({ plugin: 'agent-meter', key: 'transcript' } as const, '')
 const permissionMode = atom({ plugin: 'agent-meter', key: 'permissionMode' } as const, '')
-const warnedAt = atom({ plugin: 'agent-meter', key: 'warnedAt' } as const, 0)
+const warmTriedAt = atom({ plugin: 'agent-meter', key: 'warmTriedAt' } as const, 0)
 
 const MAIN = 'main'
 const SHOWN_AGENTS = 6
 const TTL_MS: Record<Ttl, number> = { '5m': 5 * 60_000, '1h': 60 * 60_000 }
-// 5분 캐시에 1시간 캐시와 같은 5분, 3분을 쓰면 응답 직후부터 알림이 뜨고 연장이 2분마다 나가서 TTL의 1/5로 줄인다
-const WARN_BEFORE_MS: Record<Ttl, number> = { '5m': 60_000, '1h': 5 * 60_000 }
+// 5분 캐시에 1시간 캐시와 같은 3분을 쓰면 연장이 2분마다 나가서 TTL의 1/5로 줄인다
 const WARM_BEFORE_MS: Record<Ttl, number> = { '5m': 60_000, '1h': 3 * 60_000 }
-const TTL_LABEL: Record<Ttl, string> = { '5m': '5분', '1h': '1시간' }
 const SESSION_REFRESH_TICKS = 5
 // 1시간 캐시 터미널 세션의 유휴 압축은 마지막 응답 약 54분 뒤에 나온다. 그보다 앞서 막아야 한다
 const IDLE_COMPACT_GUARD_MS = 50 * 60_000
@@ -630,36 +628,27 @@ async function isFarFromCompactLimit($: EngineInterface): Promise<boolean> {
   return context.tokens < Math.min(...limits) * COMPACT_LIMIT_MARGIN
 }
 
+// 연장은 늦출 수 있는 데까지 미룬다. 그 사이 서브에이전트가 끝나 메인이 요청하면 연장할 필요가 없다.
+// 연장과 만료 직전 알림은 띄우지 않는다. 연장 비용은 메인 줄 비용에 더해진다
 async function keepMainWarm($: EngineInterface, at: number): Promise<void> {
   const main = (await read($, loops))[MAIN]
   if (!main || main.steps === 0) return
   const left = main.lastAt + TTL_MS[main.ttl] - at
-  if (left <= 0 || left > WARN_BEFORE_MS[main.ttl]) return
-  if ((await read($, warnedAt)) === main.lastAt) return
-  const isWarming = await isWarmingMain($)
-  // 연장은 늦출 수 있는 데까지 미룬다. 그 사이 서브에이전트가 끝나 메인이 요청하면 연장할 필요가 없다.
-  // 알림은 사람이 돌아올 틈을 두려고 더 일찍 낸다.
-  if (isWarming && left > WARM_BEFORE_MS[main.ttl]) return
-  await update($, warnedAt, () => main.lastAt)
-  let isStoppedNow = false
-  if (isWarming) {
-    const warmed = await warmMain($, main).catch(() => null)
-    if (warmed?.isWarmed) {
-      failedWarms = 0
-      $.ui.toast(`메인 캐시를 ${TTL_LABEL[main.ttl]} 연장했습니다 ${money(warmed.cost)}`)
-      return
-    }
-    // 응답은 왔는데 캐시를 못 읽었으면 연장이 통하지 않는 환경이라 바로 멈추고, 응답이 없으면 연달아 되풀이될 때만 멈춘다
-    failedWarms = warmed ? MAX_FAILED_WARMS : failedWarms + 1
-    if (failedWarms >= MAX_FAILED_WARMS) {
-      isKeepAliveStopped = true
-      isStoppedNow = true
-    }
+  if (left <= 0 || left > WARM_BEFORE_MS[main.ttl]) return
+  if ((await read($, warmTriedAt)) === main.lastAt) return
+  // 요청 하나에 한 번만 판정해, 서브에이전트가 없을 때 남은 몇 분 동안 눈금마다 에이전트 목록을 읽지 않게 한다
+  await update($, warmTriedAt, () => main.lastAt)
+  if (!(await isWarmingMain($))) return
+  const warmed = await warmMain($, main).catch(() => null)
+  if (warmed?.isWarmed) {
+    failedWarms = 0
+    return
   }
-  const minutes = Math.ceil(left / 60_000)
-  const text = `메인 캐시가 ${minutes}분 뒤 만료됩니다. 만료되면 다시 쓰는 데 ${money(recacheCost(main))}`
-  $.ui.toast(isStoppedNow ? `${text}. ${KEEP_ALIVE_STOPPED_NOTE}` : text)
-  await $.ui.notify(text, { title: '캐시 만료 직전' }).catch(() => undefined)
+  // 응답은 왔는데 캐시를 못 읽었으면 연장이 통하지 않는 환경이라 바로 멈추고, 응답이 없으면 연달아 되풀이될 때만 멈춘다
+  failedWarms = warmed ? MAX_FAILED_WARMS : failedWarms + 1
+  if (failedWarms < MAX_FAILED_WARMS) return
+  isKeepAliveStopped = true
+  $.ui.toast(KEEP_ALIVE_STOPPED_NOTE)
 }
 
 // 화면 칸 수: 한글과 전각 문자는 두 칸

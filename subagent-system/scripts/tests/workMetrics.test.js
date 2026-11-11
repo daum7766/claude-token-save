@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadRates, toCounts, cost } from '../subagent-usage.js';
-import { hookCensus, alwaysReadChars, outputByHook, conversationWaste, countDecisionLines, summarizeLint, summarizePairs, judge, fileItems, tooLowEstimate } from '../work-metrics.js';
+import { hookCensus, alwaysReadChars, outputByHook, conversationWaste, countDecisionLines, summarizeLint, summarizePairs, judge, fileItems, tooLowEstimate, highestOpus, routingSavings } from '../work-metrics.js';
 
 const SCRIPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(SCRIPTS, 'work-metrics.js');
@@ -753,5 +753,34 @@ describe('장치 층 ⑤', () => {
     assert.equal(label('UTC', '2026-11-09T12:00:00Z'), '2026-11-10');
     // 구간 시작이 --since보다 늦지 않으면(기록이 그 안에서 시작) 앞당기지 않는다.
     assert.equal(label('Asia/Seoul', '2026-11-10T16:00:00Z'), '2026-11-10T16:00:00Z');
+  });
+});
+
+describe('savings', () => {
+  const rates = {
+    'claude-opus-5-5': { input: 4, write5m: 5, write1h: 8, cacheRead: 0.2, output: 20 },
+    'claude-opus-4-7': { input: 5, write5m: 6, write1h: 10, cacheRead: 0.5, output: 25 },
+    'claude-haiku-5-5': { input: 0.1, write5m: 0.125, write1h: 0.2, cacheRead: 0.01, output: 0.5 },
+  };
+  const row = (day, model, [i, w, r, o]) => [day, '/p', 's', 'a', 'd', model, 'low', '설명', i, w, r, o, '1', '1', '0'].map(String);
+
+  it('기준 모델은 요율표에서 판이 가장 높은 Opus다', () => {
+    assert.equal(highestOpus(Object.keys(rates)), 'claude-opus-5-5');
+    assert.equal(highestOpus(['claude-haiku-5-5']), null);
+  });
+
+  it('같은 토큰을 기준 모델로 셈한 비용과 견줘 절약 비율을 내고, 요율표에 없는 모델과 기간 밖 줄은 뺀다', () => {
+    const rows = [
+      row('2026-10-01', 'claude-haiku-5-5', [0, 0, 0, 1_000_000]),
+      row('2026-11-01', 'claude-haiku-5-5', [0, 0, 0, 1_000_000]),
+      row('2026-11-02', 'claude-opus-5-5', [0, 0, 0, 1_000_000]),
+      row('2026-11-03', 'claude-unknown-1', [0, 0, 0, 1_000_000]),
+    ];
+    const r = routingSavings(rows, rates, 'claude-opus-5-5', '2026-11-01');
+    assert.equal(r.count, 2);
+    assert.equal(r.unknown, 1);
+    // 실제 0.5 + 20, 기준 20 + 20
+    assert.ok(Math.abs(r.ratio - (1 - 20.5 / 40)) < 1e-9);
+    assert.deepEqual([r.from, r.to], ['2026-11-01', '2026-11-02']);
   });
 });

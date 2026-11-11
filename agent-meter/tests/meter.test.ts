@@ -121,9 +121,8 @@ test('입력창 아래 힌트 줄과 함께 메인 줄을 늘 그리고, 요청 
   }
 
   await clock.advance(57 * 60_000)
-  // 서브에이전트가 도는 중이라 알림 대신 메인 캐시를 연장한다: 113000*0.2 + 10*4 + 5*20 = $0.02
-  expect(toasts).toEqual(['메인 캐시를 1시간 연장했습니다 $0.02'])
-  // 만료 3분 전 눈금에 연장해서 지금 59분대가 남는다
+  // 서브에이전트가 도는 중이라 알림 없이 메인 캐시를 연장한다. 만료 3분 전 눈금에 연장해서 지금 59분대가 남는다
+  expect(toasts).toEqual([])
   await has(/^\s*main\s+opus 5\.5\s+medium\s+38%\s+57:\d\d\s+59:\d\d\s/)
   await has(/^\s*문서 검수.*\s만료\s+\$0\.28\s/)
 
@@ -193,12 +192,6 @@ test('resume한 세션은 기록 파일에서 메인 줄을 되살린다', { tim
     value: { exitCode: 0, stdout: e.argv[0] === 'jq' ? jqOut : 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.status', () => ({ value: undefined }))
-  const toasts: string[] = []
-  on('ui.toast', (_$, e) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
   on('ui.render', () => null as never)
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -219,10 +212,6 @@ test('resume한 세션은 기록 파일에서 메인 줄을 되살린다', { tim
   expect(
     lines.filter(l => /^\s*main\s+opus 5\.5\s+xhigh\s+38%\s+11:03\s+49:59\s+\$0\.90\s+0회\s+2\.0k\s+4\.0k\s+200\.0k\s+20\.0k\s+\$0\.29\s*$/.test(l)),
   ).toHaveLength(1)
-
-  // 도는 서브에이전트가 없으면 자리를 비웠을 수 있어 연장하지 않고 알리기만 한다
-  await clock.set(Date.parse('2026-10-11T00:57:00Z'))
-  expect(toasts).toEqual(['메인 캐시가 5분 뒤 만료됩니다. 만료되면 다시 쓰는 데 $0.90'])
 })
 
 test('첫 대화 전에는 설정의 기본 권한 모드만큼 표를 왼쪽으로 당긴다', { timeoutMs: 30_000 }, async ($, on) => {
@@ -355,7 +344,7 @@ for (const [name, options, isWarmed] of [
   ['켜 두면', { keep_alive: true }, true],
   ['정하지 않아 기본값이면', {}, true],
 ] as const) {
-  test(`서브에이전트가 도는 중 keep_alive를 ${name} ${isWarmed ? '메인 캐시를 연장한다' : '연장 요청 없이 알림만 낸다'}`, { timeoutMs: 30_000, options }, async ($, on) => {
+  test(`서브에이전트가 도는 중 keep_alive를 ${name} ${isWarmed ? '메인 캐시를 연장한다' : '연장하지 않는다'} (어느 쪽도 알림은 없다)`, { timeoutMs: 30_000, options }, async ($, on) => {
     const clock = mock.clock(on)
     const toasts: string[] = []
     let forks = 0
@@ -393,8 +382,7 @@ for (const [name, options, isWarmed] of [
     await clock.advance(57 * 60_000)
 
     expect(forks).toBe(isWarmed ? 1 : 0)
-    if (isWarmed) expect(toasts).toEqual(['메인 캐시를 1시간 연장했습니다 $0.02'])
-    else expect(toasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
+    expect(toasts).toEqual([])
   })
 }
 
@@ -451,24 +439,27 @@ test('5분 캐시 메인은 응답 직후 2분이 지나도 알림도 연장도 
   expect(state.forks).toBe(0)
 })
 
-test('5분 캐시 메인은 만료 1분 전에 연장하고 문구에 5분을 쓴다', { timeoutMs: 30_000 }, async ($, on) => {
-  const { clock, toasts, state } = await startFiveMinuteMain($, on, { isAgentRunning: true })
-  await clock.advance(4 * 60_000)
-  expect(state.forks).toBe(1)
-  expect(toasts).toEqual(['메인 캐시를 5분 연장했습니다 $0.02'])
-})
-
-test('5분 캐시 메인은 서브에이전트가 없으면 만료 1분 전에 연장 없이 알린다', { timeoutMs: 30_000 }, async ($, on) => {
-  const { clock, toasts, state } = await startFiveMinuteMain($, on, { isAgentRunning: false })
+test('5분 캐시 메인은 만료 1분 전에 연장하고 연장 비용을 메인 비용에 더한다', { timeoutMs: 30_000 }, async ($, on) => {
+  const { clock, toasts, state, mainRow } = await startFiveMinuteMain($, on, { isAgentRunning: true })
   await clock.advance(3 * 60_000)
-  expect(toasts).toEqual([])
-  await clock.advance(60_000)
   expect(state.forks).toBe(0)
-  expect(toasts).toHaveLength(1)
-  expect(toasts[0]).toMatch(/^메인 캐시가 1분 뒤 만료됩니다/)
+  const before = Number(/\$(\d+\.\d\d)\s*$/.exec(await mainRow())?.[1])
+  await clock.advance(60_000)
+  expect(state.forks).toBe(1)
+  expect(toasts).toEqual([])
+  // 113000*0.2 + 10*4 + 5*20 = $0.02
+  const after = Number(/\$(\d+\.\d\d)\s*$/.exec(await mainRow())?.[1])
+  expect(after - before).toBeGreaterThan(0.005)
+  expect(after - before).toBeLessThan(0.035)
 })
 
-test('연장 요청이 캐시를 읽지 못하면 그 요청의 비용을 메인 비용에 더하고 연장 대신 만료 알림을 낸다', { timeoutMs: 30_000 }, async ($, on) => {
+test('5분 캐시 메인은 서브에이전트가 없으면 만료 직전에도 연장하지 않는다', { timeoutMs: 30_000 }, async ($, on) => {
+  const { clock, state } = await startFiveMinuteMain($, on, { isAgentRunning: false })
+  await clock.advance(4 * 60_000)
+  expect(state.forks).toBe(0)
+})
+
+test('연장 요청이 캐시를 읽지 못하면 그 요청의 비용을 메인 비용에 더한다', { timeoutMs: 30_000 }, async ($, on) => {
   const { clock, toasts, state, mainRow } = await startFiveMinuteMain($, on, {
     isAgentRunning: true,
     forkUsage: { cache_read_input_tokens: 0, cache_creation_input_tokens: 113_000 },
@@ -476,8 +467,6 @@ test('연장 요청이 캐시를 읽지 못하면 그 요청의 비용을 메인
   const before = Number(/\$(\d+\.\d\d)\s*$/.exec(await mainRow())?.[1])
   await clock.advance(4 * 60_000)
   expect(state.forks).toBe(1)
-  expect(toasts.filter(t => t.includes('연장했습니다'))).toEqual([])
-  expect(toasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
   // 113000토큰 캐시 쓰기는 $0.5 이상이다
   const after = Number(/\$(\d+\.\d\d)\s*$/.exec(await mainRow())?.[1])
   expect(after - before).toBeGreaterThan(0.5)
@@ -831,7 +820,6 @@ test('keep_alive가 꺼져 있으면 실행 중인 에이전트 목록을 읽지
   expect(state.agentListCalls).toBe(0)
   expect(state.forks).toBe(0)
   expect(allToasts.filter(t => t.includes(SKIP_TOAST))).toEqual([])
-  expect(allToasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
 })
 
 test('연장 요청이 응답은 왔는데 캐시를 읽지 못하면 그 세션에서는 연장과 유휴 압축 건너뛰기를 멈추고 한 번만 알린다', { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
@@ -841,7 +829,6 @@ test('연장 요청이 응답은 왔는데 캐시를 읽지 못하면 그 세션
   expect((await compact()).skip).toBeUndefined()
   const stopped = allToasts.filter(t => t.includes('keep-alive를 끕니다'))
   expect(stopped).toHaveLength(1)
-  expect(stopped[0]).toMatch(/^메인 캐시가 \d+분 뒤 만료됩니다/)
   expect(stopped[0]).toContain('/config')
   expect(allToasts.filter(t => t.includes(SKIP_TOAST))).toEqual([])
 })
@@ -852,11 +839,10 @@ async function mainRequest($: Parameters<Parameters<typeof test>[2]>[0]) {
 }
 
 for (const fork of ['throw', 'null'] as const) {
-  test(`연장 요청이 ${fork === 'throw' ? '오류를 던져도' : '응답 없이 끝나도'} 한 번으로는 멈추지 않고 만료 알림만 내며, 연달아 되풀이되면 멈추고 한 번만 알린다`, { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
+  test(`연장 요청이 ${fork === 'throw' ? '오류를 던져도' : '응답 없이 끝나도'} 한 번으로는 멈추지 않고 알림도 없으며, 연달아 되풀이되면 멈추고 한 번만 알린다`, { timeoutMs: 30_000, options: { keep_alive: true } }, async ($, on) => {
     const { state, allToasts, clock } = await compactAfterIdle($, on, { idleMinutes: 57, fork })
     expect(state.forks).toBe(1)
-    expect(allToasts.filter(t => t.includes('keep-alive를 끕니다'))).toEqual([])
-    expect(allToasts.filter(t => /^메인 캐시가 \d+분 뒤 만료됩니다/.test(t))).toHaveLength(1)
+    expect(allToasts.filter(t => t !== SKIP_TOAST)).toEqual([])
     await mainRequest($)
     await clock.advance(57 * 60_000)
     expect(state.forks).toBe(2)
@@ -875,7 +861,6 @@ test('연장이 한 번 실패한 뒤 성공하면 실패 횟수를 세던 것�
   await mainRequest($)
   await clock.advance(57 * 60_000)
   expect(state.forks).toBe(2)
-  expect(allToasts.some(t => t.startsWith('메인 캐시를 1시간 연장했습니다'))).toBe(true)
   state.forkResult = 'null'
   await mainRequest($)
   await clock.advance(57 * 60_000)

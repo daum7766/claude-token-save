@@ -33,6 +33,7 @@ import {
   printTable,
   appendWithHeader,
   splitLines,
+  baseModel,
 } from './claudeProjectPaths.js';
 import { loadRates, toCounts, cost, lastLinePerRequest } from './subagent-usage.js';
 import { jsonlRows, analyzeTranscript } from './transcriptTiming.js';
@@ -64,6 +65,7 @@ const USAGE = [
   '  health [--repo <저장소>]... [--memory <메모리 폴더>]... [--days 3] [--json] [--record]  (문서 상태 점검: 다 쓴 작업 기록 후보, 멈춘 진행 기록, 부푼 문서, 끊긴 경로, 재기만 하는 지표, 메모리의 후보와 증거. 후보일 뿐 판정은 사람이 한다. 쓰는 것은 없고, 처음 보는 지표의 값과 --record를 줬을 때의 지표 값만 기록 폴더의 health-history.tsv에 남긴다)',
   '  score [--since <ISO 또는 YYYY-MM-DD>] [--until <ISO>] [--project <폴더>] [--json]  (한 구간의 사람 말, 메인과 실무자 되돌림과 갈래, 재지시, 대표 지적, 메인 토큰. --since 기본은 7일 전. 일 종류는 config.json의 scoreKinds 정규식, 없으면 사용 기록의 일 종류 이름)',
   '  exp add --what "<바꾼 것>" --why "<왜>" --expect "<기대: 어느 숫자가 어떻게>" [--days 3] [--kit <커밋>] [--at <시각>]  (실험 장부 experiments.tsv에 시작 줄을 덧붙임)',
+  '  savings [--since YYYY-MM-DD] [--base <모델 ID>] [--json]  (서브에이전트 비용 기록의 같은 토큰을 모두 기준 모델로 보냈다면 든 비용과 견준 절약 비율. 기준 기본은 요율표에서 가장 높은 Opus. 낮은 모델이 토큰을 더 쓴 몫과 품질 차이는 들지 않는 어림)',
   '  devices [--days 30] [--kit <키트 원본>] [--no-transcripts] [--json]  (장치 전체 셈: 훅과 훅 안 판정, 커밋 훅, 스킬, 정의, 부품마다 막음(기록, 대화 기록), 헛막음 후보, 막힌 뒤 다른 입력으로 낸 수, 알림, 승인 창, 고친 횟수(고침 기록/커밋), 마지막 쓰인 날과 실마리. 목록은 등록과 파일에서 뽑는다. 판정은 RETRO 「규칙 점검」과 「막는 장치 효과 보기」로 사람이 한다)',
   '  exp list  |  exp due [--count] [--now <ISO>]  (볼 때가 된 실험마다 시작 전 같은 길이 구간과 시작 뒤 구간의 score를 나란히 찍음. --count는 건수만)  |  exp close --id <번호> --result 남김|되돌림|더봄 --memo "<숫자 요지>"',
   '  실험 판정 기준: 기대한 숫자가 나아지고 다른 숫자(특히 대표 지적, 토큰)가 나빠지지 않으면 남김, 나빠지면 되돌림(바꾼 것을 걷음), 표본이 작으면(전후 구간 사람 말이 20 아래) 더봄(--days만큼 더 본 뒤 다시 due에 뜸).',
@@ -1239,6 +1241,58 @@ async function waste(flags) {
 
 // 장치 전체 셈. 목록은 등록(settings.json, 깐 상태 기록)과 파일(설정 폴더, 키트 원본)에서 뽑아 장치가 늘거나 줄어도 고치지 않는다.
 // 왜: 막는 장치 효과(waste ①)는 막은 장치만, unused는 스킬과 정의만 봐서, 쓰이지 않는 훅과 커밋 훅, 헛막음이 많은 판정을 한 표로 볼 수 없었다(11-10).
+// 요율표 키 가운데 가장 높은 Opus. 메인 대화에 흔히 쓰는 모델이라 「모두 메인 모델로 보냈다면」의 기준으로 쓴다.
+export function highestOpus(rateKeys) {
+  let best = null;
+  for (const k of rateKeys) {
+    const m = /^claude-opus-(\d+)-(\d+)$/.exec(k);
+    if (m && (!best || +m[1] > best[1] || (+m[1] === best[1] && +m[2] > best[2]))) best = [k, +m[1], +m[2]];
+  }
+  return best?.[0] ?? null;
+}
+
+// 비용 기록 줄(날짜, 프로젝트, 세션, agentId, 정의, 모델, effort, 설명, 입력, 캐시 쓰기, 캐시 읽기, 출력, ...)의 같은 토큰을
+// 실제 모델 요율과 기준 모델 요율로 함께 셈한다. 캐시 쓰기는 기록에서 5분과 1시간이 갈리지 않아 양쪽 모두 5분 요율로 셈한다.
+export function routingSavings(rows, rates, base, since = '') {
+  const out = { count: 0, unknown: 0, actual: 0, baseline: 0, from: null, to: null, byModel: {} };
+  for (const c of rows) {
+    if (since && c[0] < since) continue;
+    const [input, write, read, output] = c.slice(8, 12).map((v) => Number(v) || 0);
+    const counts = { model: c[5], input, write5m: write, write1h: 0, read, output };
+    const a = cost(counts, rates);
+    const b = cost({ ...counts, model: base }, rates);
+    if (a === null || b === null) {
+      out.unknown += 1;
+      continue;
+    }
+    out.count += 1;
+    out.actual += a;
+    out.baseline += b;
+    out.from = out.from && out.from < c[0] ? out.from : c[0];
+    out.to = out.to && out.to > c[0] ? out.to : c[0];
+    const m = baseModel(c[5]);
+    out.byModel[m] = (out.byModel[m] ?? 0) + 1;
+  }
+  out.ratio = out.baseline > 0 ? 1 - out.actual / out.baseline : null;
+  return out;
+}
+
+function savingsCmd(flags) {
+  const { rates, error } = loadRates();
+  if (!rates) fail(`요율표를 읽지 못했습니다: ${error}`);
+  const base = flags.base || highestOpus(Object.keys(rates));
+  if (!base || !rates[baseModel(base)]) fail(`기준 모델 ${base ?? '(Opus 없음)'}이 요율표에 없습니다. --base로 주세요.`);
+  const rows = readTsv(path.join(RECORDS_DIR, 'subagent-cost.tsv'), '날짜');
+  const r = routingSavings(rows, rates, base, flags.since || '');
+  if (flags.json) return console.log(JSON.stringify({ base, ...r }));
+  if (r.count === 0) return console.log('셀 서브에이전트 비용 기록이 없습니다.');
+  const pct = Math.round(r.ratio * 100);
+  console.log(`서브에이전트 ${r.count}건(${r.from}~${r.to}): 모두 ${base}로 보냈다면 든 비용보다 ${pct}% 덜 들었습니다(어림).`);
+  console.log(`모델별 건수: ${Object.entries(r.byModel).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', ')}`);
+  if (r.unknown) console.log(`요율표에 없는 모델 ${r.unknown}건은 셈에서 뺐습니다.`);
+  console.log('같은 토큰을 기준 모델 요율로 다시 셈한 값이라, 낮은 모델이 토큰을 더 쓴 몫과 품질 차이는 들지 않습니다. 메인 대화에서 아낀 몫도 들지 않습니다.');
+}
+
 async function devices(flags) {
   const now = Date.now();
   const days = number(flags, 'days', 30);
@@ -1514,6 +1568,7 @@ async function main() {
   if (cmd === 'score') return scoreCmd(flags);
   if (cmd === 'exp') return expCmd(sub, flags);
   if (cmd === 'devices') return devices(flags);
+  if (cmd === 'savings') return savingsCmd(flags);
   fail(USAGE);
 }
 
