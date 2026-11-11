@@ -58,7 +58,6 @@
     "subagent-system/docs/UI_REVIEW.md",
     "subagent-system/docs/UI_WORK.md",
     "subagent-system/hooks/answer-check.js",
-    "subagent-system/hooks/bashTargets.cjs",
     "subagent-system/hooks/churn-check.js",
     "subagent-system/hooks/foundation-check.js",
     "subagent-system/hooks/git/commit-msg.d/20-why-premise.cjs",

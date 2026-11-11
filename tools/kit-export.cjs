@@ -108,8 +108,10 @@ function danglingKitRefs({ kit, out, treeList, kitFiles }) {
     if (!inTree.has(b) && !NOT_KIT_DOCS.has(b)) names.add(b);
   }
   const ruleNames = new Set([...names].filter((n) => /^kit-.*\.md$/.test(n)).map((n) => n.replace(/\.md$/, '')));
+  // 대문자 문서는 「FEEDBACK 「절」」처럼 확장자 없이도 가리킨다. 확장자만 보면 이 꼴을 놓친다.
+  const docStems = new Set([...names].filter((n) => /^[A-Z][A-Z0-9_]+\.md$/.test(n)).map((n) => n.replace(/\.md$/, '')));
   const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const alts = [...names, ...ruleNames].sort((a, b) => b.length - a.length).map(esc);
+  const alts = [...names, ...ruleNames, ...docStems].sort((a, b) => b.length - a.length).map(esc);
   if (!alts.length) return [];
   const re = new RegExp(`(?<![A-Za-z0-9_-])(${alts.join('|')})(?![A-Za-z0-9_-])`);
   const found = [];

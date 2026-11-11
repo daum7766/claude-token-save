@@ -6,7 +6,6 @@
     "subagent-system/hooks/rm-guard.js",
     "subagent-system/hooks/git-discard-guard.js",
     "subagent-system/hooks/supabase-sql-guard.js",
-    "subagent-system/hooks/guardShared.cjs",
     "subagent-system/scripts/trash.js",
     "subagent-system/scripts/tests/safetyGuards.test.js",
     "subagent-system/scripts/tests/trash.test.js"

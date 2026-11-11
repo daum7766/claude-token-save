@@ -179,6 +179,12 @@ describe('공개판 문서의 끊긴 키트 문서 참조', { skip: SKIP }, () =
       'docs/skip.md 1줄: 공개판에 없는 키트 문서 B.md',
     ]);
   });
+  it('확장자 없이 쓴 대문자 문서 이름도 찾는다', () => {
+    const out = tmp('stem');
+    put(out, 'docs/A.md', 'UP_DOC 「절」을 따른다\nUP_DOC가 깔려 있으면 따른다\nUP_DOCS는 다른 낱말\n');
+    const got = danglingKitRefs({ kit: out, out, treeList: ['docs/A.md'], kitFiles: ['docs/A.md', 'docs/UP_DOC.md'] });
+    assert.deepEqual(got, ['docs/A.md 1줄: 공개판에 없는 키트 문서 UP_DOC']);
+  });
   it('내보내기가 끊긴 참조에서 멈추고 파일과 줄을 찍는다', () => {
     const kit = sampleKit();
     put(kit, 'subagent-system/skills/demo/SKILL.md', 'skill\n자세한 것은 kit-hidden.md 에 있다\n');

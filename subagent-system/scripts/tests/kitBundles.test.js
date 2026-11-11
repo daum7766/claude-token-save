@@ -75,6 +75,24 @@ describe('U1 묶음 정의', { skip: NOT_KIT_SOURCE }, () => {
     assert.equal(real.bundles.get('base').selectable, false);
   });
 
+  it('U1-15 훅이 부르는 같은 폴더의 파일은 같은 묶음이나 바닥이나 uses에 적은 묶음에 든다', { skip: WHOLE_KIT }, () => {
+    const owner = new Map();
+    for (const p of real.parts) for (const k of expandFiles(p)) owner.set(k, p.bundle);
+    // 그 묶음이 없으면 스스로 물러서게 짠 곳: ask-log는 라우팅이 깔렸는지 먼저 보고, rule-check는 지시 글만 읽는다.
+    const guarded = new Set(['subagent-system/hooks/ask-log.js -> retro-write-allow.js', 'subagent-system/hooks/rule-check.js -> brief-check.js']);
+    const bad = [];
+    for (const [key, bundle] of owner) {
+      if (!/^subagent-system\/hooks\/[^/]+\.c?js$/.test(key)) continue;
+      const allowed = new Set([bundle, 'base', ...(real.bundles.get(bundle).uses ?? []).map((u) => u.bundle)]);
+      const text = fs.readFileSync(path.join(KIT, key), 'utf8');
+      for (const m of text.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
+        const dep = `subagent-system/hooks/${m[1]}`;
+        if (guarded.has(`${key} -> ${m[1]}`)) continue;
+        if (!allowed.has(owner.get(dep))) bad.push(`${key}(${bundle}) -> ${dep}(${owner.get(dep) ?? '없음'})`);
+      }
+    }
+    assert.deepEqual(bad, [], '다른 묶음의 부품을 부르는 훅. 그 묶음 없이 깔리면 말없이 꺼진다');
+  });
   it('U1-2 두 조각이 같은 파일을 가지면 겹침 error 하나', () => {
     const root = copyKit();
     putJson(root, 'bundles/routing/dup.part.json', { bundle: 'routing', part: 'dup', files: ['subagent-system/rates.json'] });

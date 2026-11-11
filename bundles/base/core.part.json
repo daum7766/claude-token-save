@@ -16,6 +16,8 @@
     "subagent-system/scripts/userSettings.cjs",
     "subagent-system/scripts/package.json",
     "subagent-system/hooks/ask-log.js",
+    "subagent-system/hooks/guardShared.cjs",
+    "subagent-system/hooks/bashTargets.cjs",
     "subagent-system/hooks/package.json",
     "subagent-system/hooks/kit-hook.cjs",
     "subagent-system/hooks/git/commit-msg",
