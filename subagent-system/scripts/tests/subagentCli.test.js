@@ -1384,20 +1384,22 @@ describe('subagent-retro.js --check-fable 실행', () => {
   const verdict = (r) => /^판정: (.*)$/m.exec(r.stdout)?.[1];
   const def = (r) => /^사용 기록 --def: (.*)$/m.exec(r.stdout)?.[1];
 
-  it('모델 열에 claude-fable-5-1이 들어 있으면 공급자 꼴 ID여도 Fable 5.1이고 fable-high로 적는다', () => {
-    for (const model of ['claude-fable-5-1', 'us.anthropic.claude-fable-5-1-v1:0', 'claude-fable-5-1-20261001']) {
+  it('모델 열의 판이 요율표의 가장 높은 Fable이면 공급자 꼴 ID여도 그 판으로 적고 알릴 말이 없다', () => {
+    for (const model of ['claude-fable-5-2', 'us.anthropic.claude-fable-5-2-v1:0', 'claude-fable-5-2-20261101']) {
       const r = run(setup({ model }));
-      assert.equal(verdict(r), 'Fable 5.1', model);
+      assert.equal(verdict(r), 'Fable 5.2', model);
       assert.equal(def(r), 'fable-high');
       assert.doesNotMatch(r.stdout, /사용자에게 알릴 말/);
     }
   });
 
-  it('claude-fable-5만 들어 있으면 Fable 5로 돈 것을 알리고 fable-high로 적는다', () => {
-    const r = run(setup({ model: 'claude-fable-5' }));
-    assert.equal(verdict(r), 'Fable 5');
-    assert.equal(def(r), 'fable-high');
-    assert.match(r.stdout, /Fable 5\.1이 아니라 Fable 5로 돌았다/);
+  it('요율표의 가장 높은 Fable보다 낮은 판으로 돌았으면 그 판을 알리고 fable-high로 적는다', () => {
+    for (const [model, label] of [['claude-fable-5-1', 'Fable 5.1'], ['claude-fable-5', 'Fable 5']]) {
+      const r = run(setup({ model }));
+      assert.equal(verdict(r), label, model);
+      assert.equal(def(r), 'fable-high');
+      assert.match(r.stdout, new RegExp(`가장 높은 Fable 5\\.2가 아니라 ${label.replace('.', '\\.')}로 돌았다`));
+    }
   });
 
   it('다른 모델이면 opus-xhigh로 적고 메모에 agentId 뒤 실제 모델을 남기라고 한다', () => {
@@ -1414,9 +1416,9 @@ describe('subagent-retro.js --check-fable 실행', () => {
     assert.match(r.stdout, /확인하지 못했다/);
   });
 
-  it('modelOverrides가 Fable 모델 ID 키를 모델 열의 값에 대응시키면 키로 5.1과 5를 가른다', () => {
+  it('modelOverrides가 Fable 모델 ID 키를 모델 열의 값에 대응시키면 키로 판을 가른다', () => {
     const arn = 'arn:aws:bedrock:us-east-1:1:inference-profile/x';
-    assert.equal(verdict(run(setup({ model: arn, user: { modelOverrides: { 'claude-fable-5-1': arn } } }))), 'Fable 5.1');
+    assert.equal(verdict(run(setup({ model: arn, user: { modelOverrides: { 'claude-fable-5-2': arn } } }))), 'Fable 5.2');
     const five = run(setup({ model: arn, user: { modelOverrides: { 'claude-fable-5': arn } } }));
     assert.equal(verdict(five), 'Fable 5');
     assert.equal(def(five), 'fable-high');

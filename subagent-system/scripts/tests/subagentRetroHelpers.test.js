@@ -62,6 +62,8 @@ import {
   askKinds,
   FABLE_VERDICT_NOTES,
   judgeFableModel,
+  latestFableVersion,
+  fableVersion,
   normalizeShape,
   isExcludedRepeat,
   rankRepeats,
@@ -2120,16 +2122,22 @@ describe('정정 이름표 목록에 합치기', () => {
 
 describe('Fable 판정별 뜻', () => {
   it('--check-fable의 판정마다 사용자에게 알릴 뜻이 있다', () => {
-    const labels = [
-      judgeFableModel({ model: 'claude-fable-5-1' }),
-      judgeFableModel({ model: 'claude-fable-5' }),
+    const kinds = [
+      judgeFableModel({ model: 'claude-fable-5-2', latest: [5, 2] }),
+      judgeFableModel({ model: 'claude-fable-5-1', latest: [5, 2] }),
       judgeFableModel({ model: 'x', defaultFableModel: 'x' }),
       judgeFableModel({ model: 'claude-opus-5-5' }),
       judgeFableModel({ model: 'arn:aws:bedrock:x' }),
       judgeFableModel({ model: null }),
-    ].map((v) => v.label);
-    assert.equal(new Set(labels).size, 6);
-    for (const label of labels) assert.ok(FABLE_VERDICT_NOTES[label], label);
+    ].map((v) => v.kind);
+    assert.equal(new Set(kinds).size, 6);
+    for (const kind of kinds) assert.ok(FABLE_VERDICT_NOTES[kind], kind);
+  });
+  it('요율표 키에서 가장 높은 Fable 판을 읽고 날짜가 붙은 ID의 판도 읽는다', () => {
+    assert.deepEqual(latestFableVersion(['claude-opus-5-5', 'claude-fable-5-1', 'claude-fable-5-2', 'claude-fable-5']), [5, 2]);
+    assert.equal(latestFableVersion(['claude-opus-5-5']), null);
+    assert.deepEqual(fableVersion('claude-fable-5-1-20261001'), [5, 1]);
+    assert.deepEqual(fableVersion('claude-fable-5-20261001'), [5, 0]);
   });
 });
 

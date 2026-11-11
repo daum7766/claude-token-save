@@ -28,7 +28,7 @@
  *   node scripts/subagent-retro.js --remove-def "<정의 이름>"          회고가 지운 정의 이름을 config.json의 removedDefs(배열)에 더함. 이미 있으면 그대로. 다른 키는 그대로, 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --restore-def "<정의 이름>"         정의를 다시 만들 때 그 이름을 removedDefs에서 뺌(비면 키를 지움). 다른 키는 그대로
  *   node scripts/subagent-retro.js --shortfalls                       지난 회고 메모와, 마지막 회고 뒤 사용 기록 메모의 `모자람:`과 `모자람(<태그>):` 줄을 찍음(아무것도 쓰지 않음)
- *   node scripts/subagent-retro.js --check-fable <agentId> [--project <폴더>]  Fable 5.1로 보낸 에이전트의 비용 기록 모델 열을 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견줘 Fable 여부, 그 판정의 뜻, 사용 기록에 쓸 --def, 사용자에게 알릴 말을 찍음. --project는 세션을 연 폴더(기본은 지금 폴더). 아무것도 쓰지 않음. `--check-fable --help`는 언제 돌리고 어떻게 읽는지 전부 찍음
+ *   node scripts/subagent-retro.js --check-fable <agentId> [--project <폴더>]  Fable로 보낸 에이전트의 비용 기록 모델 열을 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견줘 Fable 여부, 그 판정의 뜻, 사용 기록에 쓸 --def, 사용자에게 알릴 말을 찍음. --project는 세션을 연 폴더(기본은 지금 폴더). 아무것도 쓰지 않음. `--check-fable --help`는 언제 돌리고 어떻게 읽는지 전부 찍음
  *   node scripts/subagent-retro.js --record-kit-hashes                키트가 통째로 바꾸는 설치본 파일(스크립트 폴더 전체, RETRO.md, GUIDE의 사용자 구역 밖, 정의의 description과 글쓰기 줄 밖, /retro 스킬)의 sha256을 config.json의 kitFileHashes에 적음(전체를 새로 씀). 설정 파일이 없거나 깨졌으면 쓰지 않고 종료 코드 1
  *   node scripts/subagent-retro.js --check-kit-hashes [--kit <키트 폴더>]  설치본 파일을 kitFileHashes와 견줘 기록과 다른 파일(손으로 고쳤을 수 있음)과 없어진 파일을 찍음. removedDefs에 든 정의가 없는 것은 회고가 지운 것이라 따로 찍음. --kit을 주면 다른 파일 가운데 그 키트 폴더(subagent-system이 든 폴더)의 새 키트와 같은 파일에 표시를 붙임(업데이트가 이미 놓은 파일. 스킬은 $HOME/.claude를 절대 경로로 풀어 쓴 꼴도 같게 봄). 기록이 없으면 그렇다고 찍음. 아무것도 쓰지 않고 항상 종료 코드 0
  *   node scripts/subagent-retro.js --check                           표와 실제 배정이 어긋난 곳을 찍음(다른 정의로 보낸 기록, 정의 description과 표 칸의 차이, 정의 파일 없는 칸, removedDefs에 든 정의인데 표 칸에 일이 있는 칸). 문제가 있으면 종료 코드 1
@@ -58,7 +58,7 @@ import { locateTranscript } from './subagent-usage.js';
 import { claudeMdVerdict } from './claudeMdTidy.js';
 import { CLAUDE_DIR, RECORDS_DIR, GUIDE_FILE, AGENTS_DIR, CONFIG_FILE, PROJECTS_ROOT, listSessions, readJsonl, sessionCwd, projectRoot, localDate, retentionDays, printTable, appendWithHeader, splitLines } from './claudeProjectPaths.js';
 import { appendHistory, healthHistoryFile, totalGate, totalsHistory } from './docHealth.js';
-import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, pendingTitles, staleProposals, staleProposalsText, proposalApplyRatio, PROPOSAL_STALE_DAYS, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, mergedLabelRows, isAbsolutePath, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
+import { parseUsage, parseCost, parseCorrections, summarize, downCandidates, upCandidates, resendsOf, lastLineByAgent, extractMessages, extractSince, parseLabels, agentsFromCell, repeatedLabels, findLaterBoundary, parseRoutingTable, tableKindSet, pinnedCellSet, unknownKindGroups, unknownKindNames, unknownModelSummary, checkRouting, descriptionOf, usageLineFromArgs, retroDue, periodSnoozeLossDate, retentionLossDate, retroLine, retroStage, floorMap, tableTrials, tableSnapshot, trialVerdict, costFailHistory, downFailHistory, floorProposals, DOWN_FAIL_LIMIT, isRetrial, mixedCells, retrialHistory, retrialPlan, undecidedRuns, undecidedKey, MIXED_MIN_FAILS, MIXED_MIN_OKS, RETRIAL_START, COST_SIMILAR_RATIO, COST_TRIAL_MIN, COST_TRIAL_MAX, UNDECIDED_LIMIT, snoozeLine, unloggedCostSince, upPiles, parseConfig, claudeMdSummary, extractSkillUses, docReviewTargets, configTextWithDocHashes, DOC_REVIEW_MAX, configTextWithMode, configTextWithFailures, configTextWithoutKeptLines, configTextWithKeptLines, configTextWithRemovedKinds, configTextWithKitHashes, judgeFableModel, latestFableVersion, kitFileHashesOf, diffKitHashes, guideTextOutsideZones, definitionTextForHash, sha256, KIT_DEF_NAMES, kindNameOf, RETRO_FAIL_LIMIT, RETRO_MODES, lockState, countPending, pendingTitles, staleProposals, staleProposalsText, proposalApplyRatio, PROPOSAL_STALE_DAYS, dueHead, LOCK_STALE_MS, STABLE_RETROS, UP_MIN_COUNT, UP_MIN_RATIO, extractRepeatItems, rankRepeats, REPEAT_KINDS, REPEAT_MIN_COUNT, REPEAT_MIN_SESSIONS, REPEAT_TOP, hasShortfall, memoMarks, similarTags, tagUniverse, parseFixes, mergedLabelRows, isAbsolutePath, FABLE_VERDICT_NOTES, REPEATS_PERIOD_DAYS, daysBetweenDates, configTextWithRepeatsDate } from './subagentRetroHelpers.js';
 
 const requireCjs = createRequire(import.meta.url);
 const USAGE_FILE = path.join(RECORDS_DIR, 'subagent-usage.tsv');
@@ -968,8 +968,8 @@ function fableSettingFiles(cwd) {
 // 설정 파일은 위 우선순위로 읽어 ANTHROPIC_DEFAULT_FABLE_MODEL은 먼저 나온 값을, modelOverrides는 Fable 모델 ID 키마다 먼저 나온 대응을 쓴다.
 //   env가 파일 사이에서 변수마다 합쳐지는 것과 같게 본 것이고, 일반 설정 파일 사이에서 modelOverrides를 키별로 합치는지는 공식 문서로 확인되지 않았다.
 // 전제: 조직 관리 설정의 modelOverrides는 읽지 못해 ID에 claude-가 없는 값이 설정에서 대응을 못 찾으면 Fable이 아니라고 단정하지 않고 「Fable 확인 못함」으로 알린다.
-//   claude-fable-5-1이 없고 claude-fable-5만 든 것을 Fable 계열로 보는 것은 fable 별칭이 게이트웨이나 허용 목록 때문에 Fable 5로 풀릴 수 있어서다.
-//   modelOverrides는 키가 모델 ID라 5.1과 5를 가르고 ANTHROPIC_DEFAULT_FABLE_MODEL은 버전을 알 수 없다. rates.json에 Fable 5 요율이 없어 그 비용은 ?로 남는다.
+//   fable 별칭은 게이트웨이나 허용 목록 때문에 낮은 판으로 풀릴 수 있어, 요율표의 가장 높은 Fable보다 낮은 판이면 알린다.
+//   modelOverrides는 키가 모델 ID라 판을 알고 ANTHROPIC_DEFAULT_FABLE_MODEL은 판을 알 수 없다. 요율표에 없는 판의 비용은 ?로 남는다.
 function checkFable(agentId, projectArg) {
   if (agentId === undefined || agentId.startsWith('--')) fail('--check-fable에는 agentId가 필요합니다: --check-fable <agentId> [--project <폴더>]');
   const entry = readCost().get(agentId);
@@ -977,14 +977,20 @@ function checkFable(agentId, projectArg) {
   const settings = files.map((f) => readJsonObject(f) ?? {});
   const overrides = {};
   for (const s of [...settings].reverse()) {
-    for (const [key, value] of Object.entries(s.modelOverrides ?? {})) if (key.startsWith('claude-fable-5') && typeof value === 'string') overrides[key] = value;
+    for (const [key, value] of Object.entries(s.modelOverrides ?? {})) if (key.startsWith('claude-fable-') && typeof value === 'string') overrides[key] = value;
   }
   const defaultFableModel = settings.map((s) => s.env?.ANTHROPIC_DEFAULT_FABLE_MODEL).find((v) => typeof v === 'string' && v) ?? process.env.ANTHROPIC_DEFAULT_FABLE_MODEL ?? null;
-  const v = judgeFableModel({ model: entry ? entry.model : null, defaultFableModel, overrides });
+  let rateKeys = [];
+  try {
+    rateKeys = Object.keys(JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'rates.json'), 'utf8')));
+  } catch {
+    // 요율표를 못 읽으면 낮은 판 알림만 빠진다
+  }
+  const v = judgeFableModel({ model: entry ? entry.model : null, defaultFableModel, overrides, latest: latestFableVersion(rateKeys) });
   console.log(`모델 열: ${entry ? entry.model || '(빈 값)' : '(비용 기록에 그 agentId 줄이 없음)'}`);
   console.log(`읽은 설정: ${files.length ? files.join(', ') : '(없음)'}`);
   console.log(`판정: ${v.label}`);
-  console.log(`뜻과 할 일: ${FABLE_VERDICT_NOTES[v.label]}`);
+  console.log(`뜻과 할 일: ${FABLE_VERDICT_NOTES[v.kind]}`);
   console.log(`사용 기록 --def: ${v.def}`);
   if (v.memoNote) console.log(`사용 기록 --memo: ${agentId} ${v.memoNote}`);
   if (v.notice) console.log(`사용자에게 알릴 말: ${v.notice}`);
@@ -995,12 +1001,13 @@ const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FABLE_HELP = [
   '--check-fable <agentId> [--project <세션을 연 폴더>]',
   '',
-  'Fable 5.1로 보낸 에이전트가 정말 Fable로 돌았는지 비용 기록으로 확인한다.',
+  'Fable로 보낸 에이전트가 정말 Fable로 돌았는지, 몇 판으로 돌았는지 비용 기록으로 확인한다.',
   '언제 돌리나: 실패하지 않고 끝났어도 다른 모델로 돌았을 수 있어서 Fable로 보낸 에이전트가 끝나면 매번 돌린다.',
   '  다른 모델로 도는 경우: 조직이 Fable을 막았을 때, CLAUDE_CODE_SUBAGENT_MODEL_FORCE가 켜져 있을 때, 보안이나 생물 관련 요청이 안전 분류기에 걸려 다른 모델로 다시 돌 때,',
   '  fallbackModel 사슬로 다른 모델에서 이어 돌 때, 사용 크레딧 동의 창에서 기본 모델로 바꾸거나 창을 닫았을 때(이 창이 서브에이전트 호출에도 뜰 수 있다고 보지만 공식 문서로 확인되지 않았다).',
   '무엇을 보나: 기록 폴더 subagent-cost.tsv에서 그 에이전트 줄의 모델 열을 찾아 설정(modelOverrides, ANTHROPIC_DEFAULT_FABLE_MODEL)과 견준다.',
-  '  모델 열에 claude-fable-5-1이나 claude-fable-5가 들어 있는지로 보고(공급자 꼴 ID도 알아본다), 아니면 설정의 modelOverrides 값이나 ANTHROPIC_DEFAULT_FABLE_MODEL 값과 같은지로 본다.',
+  '  모델 열에 claude-fable-<판>이 들어 있는지로 판을 읽고(공급자 꼴 ID도 알아본다), 아니면 설정의 modelOverrides 값이나 ANTHROPIC_DEFAULT_FABLE_MODEL 값과 같은지로 본다.',
+  '  요율표(rates.json)의 가장 높은 Fable보다 낮은 판으로 돌았으면 알린다. 판 번호는 요율표에서만 읽는다.',
   '  모델 열은 그 에이전트의 마지막 요청 모델이라 중간에만 바뀐 것은 알 수 없다.',
   '--project: 세션을 연 폴더. 지금 폴더가 세션을 연 폴더와 다르면 붙인다. CLAUDE_CONFIG_DIR을 쓰는 컴퓨터는 스크립트 경로의 $HOME/.claude를 그 폴더로 바꿔 넣는다.',
   '출력: 모델 열, 읽은 설정, 판정, 뜻과 할 일, 사용 기록 --def(그대로 적는다), --memo에 덧붙일 말(있을 때), 사용자에게 알릴 말(있을 때, 그대로 알린다).',

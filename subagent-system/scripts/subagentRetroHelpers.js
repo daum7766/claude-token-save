@@ -1714,30 +1714,52 @@ export function dueHead(d, { mode = 'ask', lockLive = false } = {}) {
   return mode === 'auto' ? 'auto' : 'ask';
 }
 
-const FABLE_ID = 'claude-fable-5';
-const FABLE_51_ID = 'claude-fable-5-1';
+const FABLE_PREFIX = 'claude-fable-';
+const FABLE_VERSION_RE = /claude-fable-(\d+)(?:-(\d{1,2})(?!\d))?/;
 
-// 올리기 마지막 단계(Fable 5.1)로 보낸 에이전트의 모델 열로 Fable로 돌았는지 가른다. model이 null이면 비용 기록에 그 agentId 줄이 없는 것이다.
-// 공급자 꼴 ID(Bedrock, Vertex, 날짜가 붙은 ID)도 알아보려고 값이 같은지가 아니라 ID가 들어 있는지로 본다.
-// overrides는 설정의 modelOverrides 가운데 Fable 모델 ID 키만 우선순위대로 합친 것이고, 값이 ID 꼴이 아닐 수 있어(추론 프로필 ARN) 모델 열과 같은지로 본다.
-// 둘 다 Fable로 알아보는 조건이면 버전을 아는 modelOverrides를 먼저 본다.
-export function judgeFableModel({ model, defaultFableModel = null, overrides = {} }) {
-  const fable = (label, notice = null) => ({ label, def: 'fable-high', notice, memoNote: null });
-  if (model === null || model === undefined) return { label: '줄 없음', def: 'fable-high', notice: '모델을 확인하지 못했다', memoNote: '모델 미확인' };
-  if (model.includes(FABLE_51_ID)) return fable('Fable 5.1');
-  if (model.includes(FABLE_ID)) return fable('Fable 5', 'Fable 5.1이 아니라 Fable 5로 돌았다');
-  const hit = Object.entries(overrides).find(([key, value]) => key.startsWith(FABLE_ID) && value === model);
-  if (hit) return hit[0].startsWith(FABLE_51_ID) ? fable('Fable 5.1') : fable('Fable 5', 'Fable 5.1이 아니라 Fable 5로 돌았다');
-  if (defaultFableModel && model === defaultFableModel) return fable('Fable(버전 미확인)', 'Fable(버전 미확인)으로 돌았다');
-  const other = { def: 'opus-xhigh', memoNote: model };
-  if (!model.includes('claude-')) return { ...other, label: 'Fable 확인 못함', notice: 'Fable인지 확인하지 못했다(조직 관리 설정의 modelOverrides는 읽지 못함)' };
-  return { ...other, label: 'Fable 아님', notice: 'Fable 결과가 아니다' };
+// 모델 ID에서 Fable 판을 읽는다('claude-fable-5-2' -> [5, 2], 'claude-fable-5' -> [5, 0]). 공급자 꼴과 날짜가 붙은 ID도 읽는다. Fable이 아니면 null.
+export function fableVersion(id) {
+  const m = FABLE_VERSION_RE.exec(String(id ?? ''));
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
+}
+const versionText = ([major, minor]) => (minor ? `${major}.${minor}` : `${major}`);
+const older = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+
+// 요율표 키 가운데 가장 높은 Fable 판. 판정이 「가장 높은 판보다 낮은 판으로 돌았다」를 알리는 기준이다. 없으면 null.
+export function latestFableVersion(rateKeys) {
+  let best = null;
+  for (const key of rateKeys) {
+    const v = key.startsWith(FABLE_PREFIX) ? fableVersion(key) : null;
+    if (v && (!best || older(best, v))) best = v;
+  }
+  return best;
 }
 
-// judgeFableModel의 label마다 메인이 할 일. --check-fable이 판정 아래에 찍고, GUIDE에는 이 설명을 두지 않는다.
+// 올리기 마지막 단계(Fable)로 보낸 에이전트의 모델 열로 Fable로 돌았는지 가른다. model이 null이면 비용 기록에 그 agentId 줄이 없는 것이다.
+// 공급자 꼴 ID(Bedrock, Vertex, 날짜가 붙은 ID)도 알아보려고 값이 같은지가 아니라 ID가 들어 있는지로 본다.
+// overrides는 설정의 modelOverrides 가운데 Fable 모델 ID 키만 우선순위대로 합친 것이고, 값이 ID 꼴이 아닐 수 있어(추론 프로필 ARN) 모델 열과 같은지로 본다.
+// 둘 다 Fable로 알아보는 조건이면 버전을 아는 modelOverrides를 먼저 본다. latest(요율표의 가장 높은 판)보다 낮은 판이면 알린다. 판 번호는 박아 두지 않는다: 새 판이 나오면 요율표만 바뀌어야 한다.
+export function judgeFableModel({ model, defaultFableModel = null, overrides = {}, latest = null }) {
+  const byVersion = (v) => {
+    const label = `Fable ${versionText(v)}`;
+    if (latest && older(v, latest)) return { kind: '낮은 판', label, def: 'fable-high', notice: `가장 높은 Fable ${versionText(latest)}가 아니라 ${label}로 돌았다`, memoNote: null };
+    return { kind: 'Fable', label, def: 'fable-high', notice: null, memoNote: null };
+  };
+  if (model === null || model === undefined) return { kind: '줄 없음', label: '줄 없음', def: 'fable-high', notice: '모델을 확인하지 못했다', memoNote: '모델 미확인' };
+  const own = fableVersion(model);
+  if (own) return byVersion(own);
+  const hit = Object.entries(overrides).find(([key, value]) => key.startsWith(FABLE_PREFIX) && value === model);
+  if (hit && fableVersion(hit[0])) return byVersion(fableVersion(hit[0]));
+  if (defaultFableModel && model === defaultFableModel) return { kind: 'Fable(버전 미확인)', label: 'Fable(버전 미확인)', def: 'fable-high', notice: 'Fable(버전 미확인)으로 돌았다', memoNote: null };
+  const other = { def: 'opus-xhigh', memoNote: model };
+  if (!model.includes('claude-')) return { ...other, kind: 'Fable 확인 못함', label: 'Fable 확인 못함', notice: 'Fable인지 확인하지 못했다(조직 관리 설정의 modelOverrides는 읽지 못함)' };
+  return { ...other, kind: 'Fable 아님', label: 'Fable 아님', notice: 'Fable 결과가 아니다' };
+}
+
+// judgeFableModel의 kind마다 메인이 할 일. --check-fable이 판정 아래에 찍고, GUIDE에는 이 설명을 두지 않는다.
 export const FABLE_VERDICT_NOTES = {
-  'Fable 5.1': 'Fable 5.1 결과입니다. 사용자에게 따로 알릴 것은 없습니다.',
-  'Fable 5': 'Fable 계열로 돈 것입니다. 사용자에게 알릴 말을 그대로 알립니다. rates.json에는 Fable 5 요율이 없어 비용은 ?로 남습니다.',
+  Fable: 'Fable의 가장 높은 판(요율표 기준) 결과입니다. 사용자에게 따로 알릴 것은 없습니다.',
+  '낮은 판': 'Fable 계열이지만 요율표의 가장 높은 판보다 낮은 판으로 돈 것입니다. 사용자에게 알릴 말을 그대로 알립니다. 요율표에 그 판 요율이 없으면 비용은 ?로 남습니다.',
   'Fable(버전 미확인)': 'ANTHROPIC_DEFAULT_FABLE_MODEL로 Fable임은 알았지만 버전은 알 수 없습니다. 사용자에게 알릴 말을 그대로 알립니다.',
   'Fable 아님': '적어도 끝부분은 Fable이 아니었습니다. 다시 시도하지 않고 사용자에게 알릴 말을 그대로 알립니다.',
   'Fable 확인 못함': '모델 열이 공급자 ARN이나 배포 이름이고 설정에서 대응을 찾지 못한 것입니다. 조직 관리 설정의 modelOverrides는 읽지 못하므로 사용자에게 알릴 말을 그대로 알립니다.',

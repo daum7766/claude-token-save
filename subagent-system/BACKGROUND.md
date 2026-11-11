@@ -11,7 +11,7 @@
 | Haiku 5.5 | 「summarization」, 「subagent tasks」, 「short tool tasks」 | 0.1 / 0.5 | 39.2% | medium / medium |
 | Sonnet 5.5 | 「Code generation, data analysis, content creation」, 「creating polished documents, slides, and spreadsheets」 | 2 / 10 | 70.6%(effort 표기 없음) | high / medium |
 | Opus 5.5 | 「complex work requiring careful judgment」 | 4 / 20 | 66.4%(xhigh) | medium / medium |
-| Fable 5.1 | 「If your evals at `xhigh` or `max` effort still fall short on demanding reasoning or long-horizon agentic work, move to Claude Fable 5.1」 | 10 / 50 | 55.8% | high / high |
+| Fable 5.2 | 「If your evals at `xhigh` or `max` effort still fall short on demanding reasoning or long-horizon agentic work, move to Claude Fable 5.2」 | 8 / 40 | 확인 못 함(5.1은 55.8%) | high / 확인 못 함(5.1은 high) |
 
 - Haiku 5.5는 「It pairs well with Opus 5.5 and Sonnet 5.5 as a subagent on coding work」이지만 「Sonnet 5.5 and Opus 5.5 remain better choices for complex agentic coding tasks」라고 합니다. Haiku는 프롬프트가 10만 토큰을 넘는 요청에 입력 0.5, 출력 2.5를 씁니다(`rates.json`의 `longPrompt`).
 - Terminal-Bench 4.0에서는 Sonnet이 Opus보다 높아서, 터미널 중심 코딩은 Sonnet으로 충분할 수 있습니다.
@@ -22,13 +22,13 @@
 - Haiku 5.5 https://www.anthropic.com/claude-haiku-5-5, https://platform.claude.com/docs/en/about-claude/models/choosing-a-model
 - Sonnet 5.5 https://www.anthropic.com/claude-sonnet-5-5, https://platform.claude.com/docs/en/about-claude/models/choosing-a-model
 - Opus 5.5 https://www.anthropic.com/claude-sonnet-5-5 (권장 용도. Opus 5.5 페이지에는 권장 용도 문장이 없고, Sonnet 5.5 페이지가 「Where Opus 5.5 is built for complex work requiring careful judgment」로 Opus 5.5를 설명합니다), https://www.anthropic.com/claude-opus-5-5(Terminal-Bench)
-- Fable 5.1 https://platform.claude.com/docs/en/about-claude/models/choosing-a-model
+- Fable 5.2 https://platform.claude.com/docs/en/about-claude/models/choosing-a-model (2026-11-11 확인. 같은 페이지의 「On Claude Fable 5.2, … start with the default (`high`)」가 API 기본 effort의 근거이고, Claude Code 기본 effort와 Terminal-Bench 수치는 찾지 못했습니다)
 - 요율 https://platform.claude.com/docs/en/about-claude/pricing
-- 기본 effort https://platform.claude.com/docs/en/build-with-claude/effort (API), https://code.claude.com/docs/en/model-config (Claude Code. 「`high` on every model that supports effort, except that Opus 5.5, Sonnet 5.5, and Haiku 5.5 default to `medium`」라서 Fable 5.1은 high)
+- 기본 effort https://platform.claude.com/docs/en/build-with-claude/effort (API), https://code.claude.com/docs/en/model-config (Claude Code. 「`high` on every model that supports effort, except that Opus 5.5, Sonnet 5.5, and Haiku 5.5 default to `medium`」라서 Fable 5.1은 high였습니다. 2026-11-11에는 이 문장을 원문으로 다시 확인하지 못했습니다)
 
 ## 서브에이전트를 부르는 법
 
-- Agent 도구에는 호출마다 effort를 덮어쓰는 `effort` 인자가 있습니다(Claude Code v2.1.292 이상, fork에는 쓸 수 없음, 2026-10-13 공식 문서 확인). 키트는 정의의 effort를 따르게 하려고 이 인자를 빼고 부릅니다(마지막 올리기 단계인 Fable 5.1과 사용자나 `CLAUDE.md`가 effort를 명시한 때는 넘깁니다).
+- Agent 도구에는 호출마다 effort를 덮어쓰는 `effort` 인자가 있습니다(Claude Code v2.1.292 이상, fork에는 쓸 수 없음, 2026-10-13 공식 문서 확인). 키트는 정의의 effort를 따르게 하려고 이 인자를 빼고 부릅니다(마지막 올리기 단계인 Fable과 사용자나 `CLAUDE.md`가 effort를 명시한 때는 넘깁니다).
 - 정의 없이 부르면 메인 대화의 모델과 effort를 물려받습니다. 모델은 호출의 `model`, 정의의 `model`, 환경변수 `CLAUDE_CODE_SUBAGENT_MODEL`, 메인 대화 모델 순서로 정해집니다(https://code.claude.com/docs/en/sub-agents 「Choose a model」).
 - 정의의 `model`은 별칭(`opus`, `sonnet`, `haiku`)입니다. 메인 대화의 모델이 같은 계열이면 서브에이전트는 메인 모델 그대로(`[1m]` 꼬리가 있으면 그것까지) 돌고, 아니면 Claude Code가 그 별칭이 가리키는 모델로 정합니다(https://code.claude.com/docs/en/sub-agents 「Choose a model」). 새 모델이 나와도 정의를 고치지 않아도 되지만, Bedrock, Google Cloud(Vertex), Foundry, Claude Platform on AWS에서는 `opus`, `sonnet`, `haiku`가 effort를 일부만 지원하거나 지원하지 않는 이전 모델로 풀려 같은 모델의 effort 칸이 같은 동작이 될 수 있습니다(https://code.claude.com/docs/en/model-config 의 공급자별 별칭 표와 「Customize pinned model display and capabilities」. `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`로 고정할 수 있고, 고정한 ID를 Claude Code가 알아보지 못하면 `ANTHROPIC_DEFAULT_<계열>_MODEL_SUPPORTED_CAPABILITIES`에 `effort`를 적어야 effort가 켜짐).
 - 요율표에 없는 새 모델이 쓰이면 비용이 `?`로 보이고, 회고 6단계에서 요율을 더합니다.
@@ -48,7 +48,7 @@
 - 테스트, 로그, 출처로 잘못이 드러나는 일을 낮게 보내는 근거는 Opus 5.5에서 잰 공식 측정입니다. 모두 low로 돌리고 실패만 high로 다시 돌렸더니 통과율은 조금 높았고 비용은 약 58%였습니다(https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence). 대신 실패한 일은 두 번 돌아 그만큼 늦게 끝납니다. 실패를 알아챌 신호가 있어야 통하는 방식이라고 문서에 적혀 있어, 신호가 없는 일은 high로 보냅니다.
 - 오래 걸리는 일을 low에 두지 않는 것은 low가 긴 일에서 일찍 멈추거나 되묻는 일이 늘기 때문입니다. low에서는 검색이나 고친 뒤 확인을 건너뛰기 쉬워(Haiku 공식 안내), low 정의 본문에는 확인하고 끝내라는 문단이 있습니다.
 - xhigh는 Opus 5.5 코딩 측정에서 high보다 1.4점 높고 비용은 2.5배였습니다. 그래서 high로 안 풀린다는 기록이 쌓여 표의 xhigh 칸에 든 일과 다시 보내는 일에만 쓰고, max는 쓰지 않습니다.
-- Opus xhigh로도 안 풀리면 마지막으로 Fable 5.1에 보냅니다. 요율표에서 가장 비싸고 요금제에 따라 사용 크레딧(추가 요금)으로 청구될 수 있어(model-config 의 「Fable and usage credits」) 올리기 전에 사용자에게 묻습니다.
+- Opus xhigh로도 안 풀리면 마지막으로 Fable에 보냅니다. 요율표에서 가장 비싸고 요금제에 따라 사용 크레딧(추가 요금)으로 청구될 수 있어(model-config 의 「Fable and usage credits」) 올리기 전에 사용자에게 묻습니다.
 - Fable로 보낸 호출이 다른 모델로 돌 수 있는 경로는 다섯입니다. 어느 쪽이든 호출은 실패하지 않아 다른 모델의 결과를 Fable 결과로 보고할 수 있습니다.
   - 조직의 `availableModels`가 Fable을 막으면 다른 모델로 돕니다(https://code.claude.com/docs/en/model-config 의 「Restrict model selection」).
   - `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`가 켜져 있으면 호출에서 모델을 넘길 수 없습니다(https://code.claude.com/docs/en/sub-agents 의 「Run every subagent on one model」).
