@@ -52,8 +52,8 @@ describe('readUserSettings', () => {
 
   it('U4-4 아무것도 없으면 기본값', () => {
     const r = us.readUserSettings(cfgWith());
-    assert.deepEqual(r.values, { callName: '사용자', choiceForm: '질문 창', lang: 'ko', profileLine: '회사용' });
-    assert.deepEqual(r.sources, { callName: 'default', choiceForm: 'default', lang: 'default', profileLine: 'default', raiseKinds: 'default' });
+    assert.deepEqual(r.values, { callName: '사용자', choiceForm: '질문 창', lang: 'ko', profileLine: '회사용', phoneNotify: '끔' });
+    assert.deepEqual(r.sources, { callName: 'default', choiceForm: 'default', lang: 'default', profileLine: 'default', phoneNotify: 'default', raiseKinds: 'default' });
   });
 
   it('U4-5 쌍점 없는 값 줄은 기본값으로 읽고 problems에 한 줄', () => {
@@ -66,7 +66,7 @@ describe('readUserSettings', () => {
 
   it('값 읽기: 선택지 받는 꼴, 언어, 사용 방식은 설정 문서에서, 잘못된 값은 기본값과 problems', () => {
     const ok = us.readUserSettings(cfgWith({ settings: SETTINGS('- 선택지 받는 꼴: 본문\n- 답할 언어: en\n- 사용 방식: 개인용 <!-- kit-setup이 씀 -->'), config: { profile: 'company' } }));
-    assert.deepEqual(ok.values, { callName: '사용자', choiceForm: '본문', lang: 'en', profileLine: '개인용' });
+    assert.deepEqual(ok.values, { callName: '사용자', choiceForm: '본문', lang: 'en', profileLine: '개인용', phoneNotify: '끔' });
     assert.equal(ok.sources.profileLine, 'settings');
 
     const fromConfig = us.readUserSettings(cfgWith({ config: { profile: 'personal' } }));
@@ -79,6 +79,23 @@ describe('readUserSettings', () => {
     assert.equal(bad.problems.length, 2);
   });
 
+  it('휴대폰 알림: 값 줄이 있으면 그 값, 없거나 비었으면 config의 사용 방식(개인용 켬, 회사용과 config 없음 끔), 잘못된 값은 기본값과 problems', () => {
+    const on = (c) => us.phoneNotifyOn(c);
+    assert.equal(on(cfgWith({ settings: SETTINGS('- 휴대폰 알림: 켬'), config: { profile: 'company' } })), true);
+    assert.equal(on(cfgWith({ settings: SETTINGS('- 휴대폰 알림: 끔'), config: { profile: 'personal' } })), false);
+    assert.equal(on(cfgWith({ settings: SETTINGS('- 호칭: 팀장'), config: { profile: 'personal' } })), true);
+    assert.equal(on(cfgWith({ settings: SETTINGS('- 호칭: 팀장'), config: { profile: 'company' } })), false);
+    assert.equal(on(cfgWith({ settings: SETTINGS('- 휴대폰 알림: <!-- 비움 -->'), config: { profile: 'personal' } })), true);
+    assert.equal(on(cfgWith({ config: { profile: 'personal' } })), true);
+    assert.equal(on(cfgWith({ config: { profile: 'company' } })), false);
+    assert.equal(on(cfgWith({})), false);
+    const bad = us.readUserSettings(cfgWith({ settings: SETTINGS('- 휴대폰 알림: 가끔'), config: { profile: 'personal' } }));
+    assert.equal(bad.values.phoneNotify, '켬');
+    assert.equal(bad.problems.length, 1);
+    // 사용 방식을 바꾸면 따로 정하지 않은 값은 따라 바뀐다
+    assert.equal(us.readUserSettings(cfgWith({ config: { profile: 'personal' } })).sources.phoneNotify, 'default');
+  });
+
   it('주석만 있는 빈 값은 설정하지 않은 것으로 읽는다(견본 그대로)', { skip: NOT_KIT_SOURCE }, () => {
     const template = fs.readFileSync(path.join(KIT, 'bundles', 'base', 'user-settings.template.md'), 'utf8');
     const r = us.readUserSettings(cfgWith({ settings: template, config: { profile: 'personal' } }));
@@ -88,6 +105,8 @@ describe('readUserSettings', () => {
     assert.equal(r.values.lang, 'ko');
     assert.equal(r.values.profileLine, '개인용');
     assert.equal(r.sources.profileLine, 'config');
+    assert.equal(r.values.phoneNotify, '켬');
+    assert.equal(r.sources.phoneNotify, 'default');
     assert.deepEqual(r.raiseKinds, ['돈', '되돌리기 어려운 일', '정책', '목표로 못 가르는 트레이드오프']);
     assert.equal(r.sources.raiseKinds, 'settings');
   });

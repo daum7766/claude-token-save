@@ -740,4 +740,18 @@ describe('장치 층 ⑤', () => {
     assert.match(s.out, /합계 100, 하루 평균 (\d+) \(/);
     assert.ok(Number(s.out.match(/하루 평균 (\d+)/)[1]) > 1000, s.out.match(/하루 평균 \d+[^\n]*/)[0]);
   });
+
+  it('기록 시각의 날짜(UTC)와 로컬 날짜가 달라도 구간 시작을 로컬 날짜로 잡고 --since보다 앞당기지 않는다(시간대마다 자식 프로세스로)', () => {
+    // 기록 2026-11-10T16:30Z = 한국 11-11 01:30. 한국은 11-11, UTC는 11-10부터다.
+    const label = (tz, since) => {
+      const env = setup();
+      layer(env, { output: false });
+      fs.writeFileSync(path.join(env.records, 'hook-output.tsv'), lines([['2026-11-10T16:30:00.000Z', 'talker', '100']]));
+      return env.run(['waste', '--since', since, '--repo', env.root], { TZ: tz }).out.match(/\((\d{4}-\d{2}-\d{2}[^)]*)부터 [\d.]+일\)/)?.[1];
+    };
+    assert.equal(label('Asia/Seoul', '2026-11-09T12:00:00Z'), '2026-11-11');
+    assert.equal(label('UTC', '2026-11-09T12:00:00Z'), '2026-11-10');
+    // 구간 시작이 --since보다 늦지 않으면(기록이 그 안에서 시작) 앞당기지 않는다.
+    assert.equal(label('Asia/Seoul', '2026-11-10T16:00:00Z'), '2026-11-10T16:00:00Z');
+  });
 });

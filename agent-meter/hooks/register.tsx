@@ -33,12 +33,13 @@ const IDLE_COMPACT_GUARD_MS = 50 * 60_000
 // 임계 자동 압축은 막지 않는다. 대화가 그 기준의 이 비율에 못 미칠 때만 유휴 압축을 건너뛴다
 const COMPACT_LIMIT_MARGIN = 0.9
 
-// 2026-10 Anthropic 가격표(platform.claude.com/docs/en/about-claude/pricing) 기준, 100만 토큰당 달러.
+// 2026-11 Anthropic 가격표(platform.claude.com/docs/en/about-claude/pricing) 기준, 100만 토큰당 달러.
 // 캐시 쓰기는 5분 1.25배, 1시간 2배. 캐시 읽기 배율은 모델마다 달라 표의 값을 그대로 옮긴다.
 // 설치된 subagent-system/rates.json을 못 읽을 때만 쓰는 값이고, 읽으면 그 파일이 이 표를 대신한다.
 type Rate = { input: number; write5m: number; write1h: number; read: number; output: number }
 type RateTable = Record<string, Rate & { longPrompt?: Rate & { over: number } }>
 const BUILTIN_RATES: RateTable = {
+  'claude-fable-5-2': { input: 8, write5m: 10, write1h: 16, read: 0.2, output: 40 },
   'claude-fable-5-1': { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 },
   'claude-opus-5-5': { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 },
   'claude-sonnet-5-5': { input: 2, write5m: 2.5, write1h: 4, read: 0.1, output: 10 },
@@ -130,8 +131,38 @@ const DEFAULT_WINDOW = 1_000_000
 
 const baseModel = (model: string) => model.replace(/\[.*\]$/, '').replace(/-\d{8}$/, '')
 
+// 표에 없는 모델은 id의 claude-<계열>- 부분이 같은 모델 가운데 가장 높은 버전의 요율로 어림한다.
+// 계열을 못 읽거나 같은 계열이 표에 없으면 비운다.
+function familyOf(model: string): { family: string; version: number[] } | null {
+  const m = /^claude-([a-z]+)-(\d+(?:-\d+)*)$/.exec(baseModel(model))
+  return m ? { family: m[1] as string, version: (m[2] as string).split('-').map(Number) } : null
+}
+
+const isNewer = (a: number[], b: number[]) => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  return false
+}
+
+function estimatedRate(model: string): Rate & { longPrompt?: Rate & { over: number } } | null {
+  const want = familyOf(model)
+  if (!want) return null
+  let best: { version: number[]; key: string } | null = null
+  for (const key of Object.keys(RATES)) {
+    const got = familyOf(key)
+    if (got && got.family === want.family && (!best || isNewer(got.version, best.version))) best = { version: got.version, key }
+  }
+  return best ? (RATES[best.key] ?? null) : null
+}
+
+// 표에 없어 같은 계열 요율로 어림한 모델이면 true
+const isEstimated = (model: string) => !RATES[baseModel(model)] && estimatedRate(model) !== null
+const approx = (model: string, text: string) => (isEstimated(model) && text !== '?' ? `≈${text}` : text)
+
 function rateFor(model: string, prompt: number): Rate | null {
-  const base = RATES[baseModel(model)]
+  const base = RATES[baseModel(model)] ?? estimatedRate(model)
   if (!base) return null
   return base.longPrompt && prompt > base.longPrompt.over ? base.longPrompt : base
 }
@@ -261,10 +292,64 @@ async function settingsEffort($: EngineInterface, model: string): Promise<string
   return capEffort(value, entry?.maxEffortLevel ?? settings.maxEffortLevel)
 }
 
+// classic 훅은 Team 계정에서 건너뛰어져 경고가 뜨므로 쓰지 않는다.
+// 대화 기록 파일은 세션 id로 찾고, 권한 모드는 그 파일의 마지막 permission-mode 줄에서 읽는다.
+// 파일을 못 찾으면 아무것도 바꾸지 않아 이 값이 없을 때와 같이 동작한다.
+async function configRoot($: EngineInterface): Promise<string | null> {
+  const trim = (dir: string) => dir.replace(/[\\/]+$/, '')
+  const configDir = (await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined))?.trim()
+  if (configDir) return trim(configDir)
+  const home = (await $.env.get('HOME').catch(() => undefined)) || (await $.env.get('USERPROFILE').catch(() => undefined))
+  return home ? `${trim(home)}/.claude` : null
+}
+
+async function findTranscript($: EngineInterface, sessionId: string): Promise<string | null> {
+  const root = await configRoot($)
+  if (!root || !sessionId) return null
+  const base = `${root}/projects`
+  const dirs = await $.fs.list(base).catch(() => [])
+  for (const d of dirs) {
+    if (d.kind !== 'dir') continue
+    const file = `${base}/${d.name}/${sessionId}.jsonl`
+    if (await $.fs.exists(file).catch(() => false)) return file
+  }
+  return null
+}
+
+let permissionFile = ''
+let permissionMtime = -1
+
+async function syncTranscript($: EngineInterface): Promise<void> {
+  const id = await $.session.id().catch(() => '')
+  if (!id) return
+  let path = await read($, transcript)
+  if (!path || !path.endsWith(`/${id}.jsonl`)) {
+    const found = await findTranscript($, id)
+    if (!found) return
+    path = found
+    await update($, transcript, () => found)
+    // 새로 연 세션은 기록 파일이 비어 있어 되살릴 것이 없다
+    if (!(await read($, loops))[MAIN]) void restoreMain($, found).catch(() => undefined)
+  }
+  // 권한 모드는 shift+tab으로 바뀌어도 알림이 없어서, 기록 파일이 바뀐 때마다 마지막 줄을 다시 읽는다
+  const stat = await $.fs.stat(path).catch(() => undefined)
+  if (!stat || (permissionFile === path && stat.mtimeMs === permissionMtime)) return
+  const r = await $.process.run(['sh', '-c', 'grep -a \'"type":"permission-mode"\' "$1" | tail -n 1', 'sh', path])
+  permissionFile = path
+  permissionMtime = stat.mtimeMs
+  if (r.exitCode !== 0) return
+  let mode = ''
+  try {
+    mode = (JSON.parse(r.stdout.trim()) as { permissionMode?: string }).permissionMode ?? ''
+  } catch {}
+  if (mode && mode !== (await read($, permissionMode))) await update($, permissionMode, () => mode)
+}
+
 async function refreshSession($: EngineInterface): Promise<void> {
   // /clear와 /resume으로 세션이 끝나면 엔진이 플러그인 상태를 모두 비우고 session.start를 다시 부르지 않는다.
   // 비워진 권한 모드를 여기서 다시 채워야 표가 권한 모드 표시 폭만큼 밀리지 않는다.
   await seedPermissionMode($).catch(() => undefined)
+  await syncTranscript($).catch(() => undefined)
   await refreshRates($).catch(() => undefined)
   const usage = await $.session.usage().catch(() => null)
   const model = await $.session.model().catch(() => '')
@@ -706,13 +791,13 @@ function buildTable(s: Session, all: Record<string, Loop>, at: number, width: nu
         return { text: c.text, color: c.isWarm ? 'green' : 'yellow' }
       },
     },
-    { head: '재캐시', width: 6, cell: l => ({ text: blankUntilUsed(l, money(recacheCost(l))) }) },
+    { head: '재캐시', width: 6, cell: l => ({ text: blankUntilUsed(l, approx(l.model, money(recacheCost(l)))) }) },
     {
       head: '캐시만료',
       width: 10,
       cell: l => {
         const n = l.expiries ?? 0
-        const text = n === 0 ? '0회' : `${n}회 ${money(l.expiryCost ?? 0)}`
+        const text = n === 0 ? '0회' : `${n}회 ${approx(l.model, money(l.expiryCost ?? 0))}`
         return { text: blankUntilUsed(l, text), color: n > 0 ? 'yellow' : undefined }
       },
     },
@@ -720,7 +805,7 @@ function buildTable(s: Session, all: Record<string, Loop>, at: number, width: nu
     { head: '출력', width: 6, isWideOnly: true, isToken: true, cell: l => ({ text: blankUntilUsed(l, tokens(l.output)) }) },
     { head: '캐시읽기', width: 8, isWideOnly: true, isToken: true, cell: l => ({ text: blankUntilUsed(l, tokens(l.read)) }) },
     { head: '캐시쓰기', width: 8, isWideOnly: true, isToken: true, cell: l => ({ text: blankUntilUsed(l, tokens(l.write)) }) },
-    { head: '비용', width: 6, cell: l => ({ text: blankUntilUsed(l, money(l.cost)) }) },
+    { head: '비용', width: 6, cell: l => ({ text: blankUntilUsed(l, approx(l.model, money(l.cost))) }) },
   ]
 
   const columns = allColumns.filter(c => showTokens || !c.isToken)
@@ -815,6 +900,8 @@ async function skipIdleCompact($: EngineInterface, e: { agentId?: string; trigge
 
 // 거절과 정지 표시는 세션 단위다. /clear와 resume은 register를 다시 부르지 않으므로 session.end에서도 부른다
 function resetSessionState(): void {
+  permissionFile = ''
+  permissionMtime = -1
   isKeepAliveStopped = false
   failedWarms = 0
   isSkipNotified = false
@@ -879,23 +966,6 @@ export const register: Register = (on, options) => {
     await update($, isHidden, () => hidden)
 
     return { text: hidden ? '사용량 표를 숨겼습니다.' : '사용량 표를 켰습니다.' }
-  })
-
-  // 권한 모드는 shift+tab으로 바뀌어도 알림이 없어서, 오는 모든 훅 이벤트에서 다시 읽는다
-  on('classic.*', async ($, e, next) => {
-    // PreToolUse만 봉투 모양이 달라 공통 필드를 직접 꺼낸다
-    const base = e as { transcript_path?: string; permission_mode?: string; agent_id?: string }
-    const path = base.transcript_path
-    if (path && !base.agent_id && path !== (await read($, transcript))) {
-      await update($, transcript, () => path)
-      // 새로 연 세션은 기록 파일이 비어 있어 되살릴 것이 없다
-      if (!(await read($, loops))[MAIN]) void restoreMain($, path).catch(() => undefined)
-    }
-    if (base.permission_mode && base.permission_mode !== (await read($, permissionMode))) {
-      await update($, permissionMode, () => base.permission_mode ?? '')
-    }
-
-    return next(e)
   })
 
   on('session.end', async ($, e, next) => {

@@ -55,6 +55,7 @@
       "subagent-system/scripts/speed-review.js",
       "subagent-system/hooks/brief-check.js",
       "subagent-system/hooks/stall-check.js",
+      "subagent-system/hooks/wait-loop-guard.js",
       "subagent-system/hooks/usage-autolog.js"
     ],
     "proactive-fix": [

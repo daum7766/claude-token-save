@@ -826,6 +826,28 @@ describe('kit-setup.js update', () => {
     assert.equal(exists(cfg, 'subagent-system/scripts/old2.js'), true);
   });
 
+  it('이름표 없는 사용자 훅이 부르는 파일이 키트에서 빠져도 지우지 않고 남겨 알린다(update, dry-run 포함)', () => {
+    const { kit, cfg } = installed();
+    kitSet(kit, 'subagent-system/scripts/bash-guard.js', 'a\n');
+    kitPartFiles(kit, 'base', { add: ['subagent-system/scripts/bash-guard.js'] });
+    update(kit, cfg);
+    const sf = path.join(cfg, 'settings.json');
+    const st = JSON.parse(fs.readFileSync(sf, 'utf8'));
+    st.hooks ??= {};
+    st.hooks.PreToolUse = [...(st.hooks.PreToolUse ?? []), { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${path.join(cfg, 'subagent-system/scripts/bash-guard.js')}"` }] }];
+    fs.writeFileSync(sf, JSON.stringify(st));
+    fs.rmSync(path.join(kit, 'subagent-system/scripts/bash-guard.js'));
+    kitPartFiles(kit, 'base', { remove: ['subagent-system/scripts/bash-guard.js'] });
+    const dry = update(kit, cfg, '--dry-run');
+    assert.ok(!dry.orphansRemoved.includes('subagent-system/scripts/bash-guard.js'));
+    assert.ok(dry.orphansKept.includes('subagent-system/scripts/bash-guard.js'));
+    assert.equal(dry.keptForUserHooks[0].key, 'subagent-system/scripts/bash-guard.js');
+    const r = update(kit, cfg);
+    assert.ok(!r.orphansRemoved.includes('subagent-system/scripts/bash-guard.js'));
+    assert.equal(exists(cfg, 'subagent-system/scripts/bash-guard.js'), true);
+    assert.ok(r.notes.some((n) => n.startsWith('사용자 훅이 부르는 키트 파일 1개') && n.includes('bash-guard.js')));
+  });
+
   it('묶음 일부만 내보낸 키트(bundles/omitted.json)로 갱신하면 키트에서 빠진 파일을 지우지 않고 남겨 알린다', () => {
     const { kit, cfg } = installed();
     kitSet(kit, 'subagent-system/scripts/old.js', 'a\n');

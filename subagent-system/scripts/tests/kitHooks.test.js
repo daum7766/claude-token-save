@@ -57,7 +57,7 @@ const EXPECTED = [
   'base/ask-log|PermissionRequest',
   'demo-local/demo-check|PreToolUse', 'demo-local/demo-check|Stop', 'demo-local/demo-check|UserPromptSubmit',
   'demo-local/demo-guard|PreToolUse', 'demo-local/demo-guard-b|PreToolUse',
-  'routing/brief-check|PreToolUse', 'routing/handoff-check|PreToolUse', 'routing/retro-write-allow|PermissionRequest', 'routing/stall-check|Stop', 'routing/subagent-usage|SubagentStop', 'routing/usage-autolog|SubagentStop',
+  'routing/brief-check|PreToolUse', 'routing/handoff-check|PreToolUse', 'routing/retro-write-allow|PermissionRequest', 'routing/stall-check|Stop', 'routing/subagent-usage|SubagentStop', 'routing/usage-autolog|SubagentStop', 'routing/wait-loop-guard|PreToolUse',
 ].sort();
 const emptyChanges = (c) => ['added', 'removed', 'replaced', 'unknownKept', 'warnings'].every((k) => c[k].length === 0);
 
@@ -70,8 +70,8 @@ describe('syncHooks', { skip: NOT_KIT_SOURCE }, () => {
     const { settings, changes } = sync(input, ctx);
     assert.deepEqual(ids(settings), EXPECTED);
     assert.equal(changes.replaced.length, 11, '옛 꼴 열한 개가 모두 갈아 끼움');
-    // 옛 꼴 견본에 없던 넘김 검사만 새로 더해진다.
-    assert.deepEqual(changes.added.map((x) => x.label), ['routing/handoff-check']);
+    // 옛 꼴 견본에 없던 넘김 검사와 기다리는 반복문 막기만 새로 더해진다.
+    assert.deepEqual(changes.added.map((x) => x.label).sort(), ['routing/handoff-check', 'routing/wait-loop-guard']);
     // 이름표 없는 명령은 사용자 훅 넷(sample 둘, user-guard, user2)뿐이고 글자가 바이트로 같다.
     const userAfter = unlabelled(settings);
     assert.equal(userAfter.length, 4);
@@ -275,8 +275,8 @@ describe('compareHooks', { skip: NOT_KIT_SOURCE }, () => {
     const ctx = setup();
     const old = oldSettings();
     const labelledForm = sync(old, ctx).settings;
-    // 옛 꼴 견본에 없는 새 훅(넘김 검사)은 견줄 짝이 없으니 이름표 꼴에서 뺀다.
-    for (const g of labelledForm.hooks.PreToolUse) g.hooks = g.hooks.filter((h) => !h.command.includes('routing/handoff-check'));
+    // 옛 꼴 견본에 없는 새 훅(넘김 검사, 기다리는 반복문 막기)은 견줄 짝이 없으니 이름표 꼴에서 뺀다.
+    for (const g of labelledForm.hooks.PreToolUse) g.hooks = g.hooks.filter((h) => !/routing\/(?:handoff-check|wait-loop-guard)/.test(h.command));
     labelledForm.hooks.PreToolUse = labelledForm.hooks.PreToolUse.filter((g) => g.hooks.length);
     // 옛 꼴 쪽에서 brief-check의 matcher는 Agent|Edit|Write|Bash라 키트 견본 Agent와 다르다. 같은 내용으로 맞춰 견준다.
     old.hooks.PreToolUse.find((g) => g.matcher === 'Agent|Edit|Write|Bash').matcher = 'Agent';

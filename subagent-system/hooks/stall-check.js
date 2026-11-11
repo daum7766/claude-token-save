@@ -10,6 +10,7 @@
  *  - 이어 하기: 답 끝 「다음」에 AI 할 일이 남았고 사용자 몫이 없고 도는 일도 없으면, 멈추지 말고 이어 하게 한다.
  *    사용자 몫이 push나 배포 지시뿐이면 AI 할 일을 막지 않는 따로 기다림이라 몫이 없는 것으로 본다.
  *  - 결정 알림: 답에 ②정할 것이나 ⑦선택지가 새로 생겼는데 이번 차례에 PushNotification을 부르지 않았으면, 한 번 막아 휴대폰 알림을 보내게 한다.
+ *    사용자 설정의 휴대폰 알림이 끔이면(회사용 기본) 막지 않는다. 회사용은 휴대폰 알림을 보낼 일이 없어 알림을 요구하면 헛막음이다(대표 2026-11-11).
  *    논의 잠금과 상관없이 본다(결정은 물음 차례에도 생겨서). 같은 결정은 한 번만 조른다.
  *  - 결정 대기 중 이어 하기: 정할 것을 올린 답은 「다음」 AI 줄을 `AI(답과 별개)`와 `AI(답 뒤)`로 나눠 적게 하고, 답과 별개 줄이 남았으면 멈추지 않고 이어 하게 한다.
  *  - 열린 칸 대조: 이번 세션이 고친 진행 기록(기본 `docs/plan/work/`, 설정 `progressDirs`로 더한 폴더)의 AI 몫 남은 일(열린 칸 `- [ ]`와 「남은 물음」, 「남은 일」, 「남은 것」 절 항목)이 최종 보고의 「다음」 칸에 하나도 안 보이면 한 번 막는다.
@@ -739,6 +740,11 @@ function sameOpen(st, text, sig) {
   } catch { return false; }
 }
 
+// 사용자 설정의 휴대폰 알림. 읽지 못하면 지금까지처럼 켬으로 본다(훅이 모듈 하나 때문에 막음을 잃지 않게. 설정 모듈이 있는 설치에서만 끔이 일어난다).
+function phoneNotifyOn() {
+  try { return require('../scripts/userSettings.cjs').phoneNotifyOn(cfgDirOf()); } catch { return true; }
+}
+
 function check(input, now = new Date()) {
   const sid = input.session_id;
   const again = input.stop_hook_active === true;
@@ -755,7 +761,7 @@ function check(input, now = new Date()) {
   const decisions = decisionItems(text);
   const fresh0 = [...new Set(decisions.map((d) => hashOf(decisionKey(d))))].filter((h) => !(st.told || []).includes(h));
   if (fresh0.length) {
-    if (pushedThisTurn(input.transcript_path) || fresh0.every((h) => (st.asked || []).includes(h))) {
+    if (!phoneNotifyOn() || pushedThisTurn(input.transcript_path) || fresh0.every((h) => (st.asked || []).includes(h))) {
       // 보냈거나, 한 번 조른 뒤에도 안 보냈으면 알린 것으로 넘긴다. 같은 결정으로 거듭 막지 않게.
       (st.told ||= []).push(...fresh0);
     } else {

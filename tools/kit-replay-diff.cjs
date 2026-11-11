@@ -109,6 +109,7 @@ const UNSEEN_WHY = {
   'git-discard-guard': { blocks: true, why: '되돌릴 수 없는 일을 막는 훅이라 막는 판정을 바꾸지 않기로 했고(대표 몫), 그때 작업 트리의 미커밋 변경이 필요해 되돌릴 수 없다' },
   'supabase-sql-guard': { blocks: true, why: '되돌릴 수 없는 일을 막는 훅이라 막는 판정을 바꾸지 않기로 했고(대표 몫), 승인 창을 묻는 ask라 막음 기록에도 들지 않는다' },
   'rule-check': { blocks: true, why: '실무자 끝 기록(agent_transcript_path)과 묶음 파일이 필요한데 이 도구가 되살리는 대화 기록은 메인 줄기뿐이다. 지난 실무자 기록에서 센 막음 수는 커밋 점검: 줄에 따로 적는다' },
+  'wait-loop-guard': { blocks: true, why: '서브에이전트 호출(훅 입력의 agent_id)만 보는데 이 도구가 되살리는 대화 기록은 메인 줄기뿐이라 막을 호출이 없다. 지난 실무자 기록에서 센 막음 수는 커밋 점검: 줄에 따로 적는다' },
   'ask-log': { blocks: false, why: '승인 창을 기록만 한다(막지 않음)' },
   'retro-write-allow': { blocks: false, why: '허용 판정만 낸다(막지 않음)' },
   'subagent-usage': { blocks: false, why: '실무자 사용 기록만 쓴다(막지 않음)' },

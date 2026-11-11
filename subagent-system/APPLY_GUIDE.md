@@ -76,6 +76,7 @@ Q1 앞에 한 메시지로 알린다. 이 컴퓨터의 `~/.claude`에 바닥(설
 - 호칭: `<kit-setup> name-candidates`가 내는 후보(git 사용자 이름, OS 사용자 이름, 기본 후보)와 「비워 두기」를 보이고 고르게 한다.
 - 선택지 받는 꼴: 창(질문 창으로 고르기)이나 본문(a/b/c로 쓰기) 중 하나.
 - 답할 언어: 기본 `ko`.
+- 휴대폰 알림: 묻지 않는다. 비워 두면 사용 방식을 따라 개인용은 켬, 회사용은 끔이고, 켜고 끄려면 `--phone-notify 켬|끔|기본`(기본은 값을 비워 사용 방식을 다시 따르게 함)이다. 끔이면 결정이 생겨도 휴대폰 알림을 보내지 않고 멈춤 검사도 알림을 요구하지 않는다.
 - 쓰기: `<kit-setup> settings-init --name "<호칭>" --choice 창|본문 --lang ko`. 호칭을 주면 설정의 `decisionWords`와 `personalMarkers`에도 함께 더해진다. 설정 문서를 사용자 `CLAUDE.md`가 불러오게 하는 줄은 보이고 묻고 백업한 뒤 더한다. 이미 있으면 건너뛴다. 거절하면 목적과 올릴 것의 답은 사용자 `CLAUDE.md`에 칸으로 적는다. `## 값`은 거절해도 설정 문서에 쓴다(훅이 직접 읽는다).
 
 ### 3. 설치 실행
@@ -166,7 +167,7 @@ node "$HOME/.claude/subagent-system/scripts/claudeMdTidy.js" --model <지금 세
 
 1. 전제 확인을 한다. 다른 세션이 서브에이전트를 돌리고 있으면 끝날 때까지 기다리자고 한다. 기록 파일을 여러 세션이 동시에 쓰기 때문이다.
 2. `<kit-setup> update --dry-run`을 돌려 보인다. `fromVersion`에서 `toVersion` 사이 `CHANGES.md` 항목을 함께 보인다.
-   파일 수(`counts`), 충돌 파일(`conflictFiles`), 사용자가 고쳐 키트 것으로 덮일 스크립트와 훅(`files`의 `overwritten-modified`), 키트에 새로 생긴 묶음과 고를 항목(`newBundles`, `newOptions`), 지워질 파일(`orphansRemoved`), 공개판처럼 묶음 일부만 든 키트라 지우지 않고 남길 파일(`orphansLeft`), 바뀔 훅 등록(`settings.hooks`)을 짚는다. 남길 파일은 파일 이름 목록을 사용자에게 그대로 보이고, 쓰지 않으면 설정 폴더에서 지우면 된다고 알린다(더는 갱신되지 않는 옛 판이다). 내용은 같고 git 훅의 실행 권한만 빠졌던 파일은 `files`에 `execRestored`로 나오며 권한만 되살린 것이다. 설치본이 키트보다 새로우면 거절하고 `--allow-older`로만 덮는다.
+   파일 수(`counts`), 충돌 파일(`conflictFiles`), 사용자가 고쳐 키트 것으로 덮일 스크립트와 훅(`files`의 `overwritten-modified`), 키트에 새로 생긴 묶음과 고를 항목(`newBundles`, `newOptions`), 지워질 파일(`orphansRemoved`), 공개판처럼 묶음 일부만 든 키트라 지우지 않고 남길 파일(`orphansLeft`), 이름표 없는 사용자 훅이 아직 불러 지우지 않은 파일(`keptForUserHooks`, 그 훅을 고치거나 빼면 다음 업데이트가 지움), 바뀔 훅 등록(`settings.hooks`)을 짚는다. 남길 파일은 파일 이름 목록을 사용자에게 그대로 보이고, 쓰지 않으면 설정 폴더에서 지우면 된다고 알린다(더는 갱신되지 않는 옛 판이다). 내용은 같고 git 훅의 실행 권한만 빠졌던 파일은 `files`에 `execRestored`로 나오며 권한만 되살린 것이다. 설치본이 키트보다 새로우면 거절하고 `--allow-older`로만 덮는다.
    - `needsProfile`이 `true`이고 종료 코드가 2이면 `config.json`에 `profile`이 없는 업데이트 전 설치본이라 `update`가 파일을 하나도 바꾸지 않고 멈춘 것이다. 짐작해 채우지 않는 까닭은 「개인용과 회사용」에 있다. Q1의 표를 보이고 사용자에게 개인용인지 회사용인지 고르게 한 뒤 `<kit-setup> set-profile personal|company`를 돌리고 `update --dry-run`을 다시 돌린다. `set-profile`이 바꾸는 것은 `profile`, 이전 profile의 기본값 그대로인 `retroMode`, 회사용으로 갈 때의 `retroWriteAllow`(켜져 있으면 끄고 훅 등록도 뺌), 설정 문서의 사용 방식 줄뿐이다. 그 밖의 권한과 보호 스위치는 값이 새 profile의 기본값과 달라도 바꾸지 않고 `notes`로 알린다.
 3. 사용자가 진행하라고 하면 `<kit-setup> update`를 돌린다. 고친 파일 옆에 `.bak-update-…` 백업이 남는다(그 파일이 git 저장소의 추적 파일이고 변경이 없으면 git이 되돌릴 길이라 만들지 않고, 같은 파일의 앞 백업은 휴지통으로 옮겨 가장 새것 하나만 남는다). 사용자 파일(`user-file`)은 건드리지 않았다고 `notes`로 알린다. `config.json`의 사용자 값과 고르지 않은 묶음은 건드리지 않고, 묶음의 사용자 파일을 다루는 법은 그 묶음 `install.md`의 `## 업데이트`에 있다. `permissions.ask`는 줄이지 않고, `--git-ask`를 줄 때만 없는 항목을 더한다.
 4. **충돌 파일**은 `<<<<<<< 설치본`, `=======`, `>>>>>>> 새 키트` 표시가 들어 있고 고치기 전 파일이 옆에 백업돼 있다. 표시가 남은 파일은 다음 `update`가 건드리지 않는다.
@@ -204,7 +205,7 @@ node "$HOME/.claude/subagent-system/scripts/claudeMdTidy.js" --model <지금 세
 - 원칙은 「명령은 보호를 느슨하게 바꾸지 않는다」이다. 권한과 보호 스위치(`retroWriteAllow`, `commitCheck`, 이 둘이 거는 훅)는 키트의 어떤 명령(`install`, `update`, `set-profile`, `--config-unset`)도 느슨한 쪽으로 바꾸지 않는다. 푸는 것은 사용자가 답한 뒤 `--config-set`으로만 하고, `retroWriteAllow`는 그때 `settings.json`의 훅 등록도 함께 맞춘다(`--config-unset`은 훅 등록을 뺀다). 조이는 쪽은 명령이 하고 `notes`로 알린다: 회사용으로 가는 `set-profile company`와 VERSION이 없는 끊긴 설치를 다른 profile로 다시 돌린 `install`은 `retroWriteAllow`를 끄고 훅 등록을 빼며 `retroMode`를 `ask`로 한다. 개인용으로 갈 때와 `commitCheck`(사용자 커밋에 걸리는 장치)는 두고 `notes`로 알린다. 키가 없으면 위 안전한 쪽으로 본다. 까닭: 보호를 푸는 것은 사용자 승인 몫이고 조이는 것은 승인이 필요 없는데, 둘을 가르지 않고 조합마다 따로 막으면 조합 막음이 회차마다 새로 나왔다.
 - 두 쪽 같은 것: 사용자 커밋에 걸리는 커밋 메시지 검사를 푸는 것은 늘 승인(사용자 작업에 걸리는 장치라서), 새 외부 모델과 유료 도구도 늘 승인(돈이 나가서). `commitCheck`가 키를 비워 둔 설치(깨진 경우)는 늘 검사다.
 - 남는 키 하나만 바꾸려면 `<kit-setup> --config-set "$HOME/.claude/subagent-system/config.json" <키> <JSON 값>`이고, `set-profile`은 `retroMode`와 회사용으로 갈 때의 `retroWriteAllow`만 따라 바꾼다.
-- 개인용인데 전역 `permissions.ask`에 commit, merge, rebase, push 확인이 남아 있으면 `update`와 개인용으로 가는 `set-profile`의 출력에서 `settings.gitAsk.keptCommitAsks`가 비어 있지 않게 나온다(처음부터 전역에 둔 경우와 회사용에서 바꾼 경우 모두. `set-profile`은 보기만 하고 `settings.json`을 쓰지 않는다). 그 목록을 보이고, 남기면 프로젝트별 허용이 이 확인을 이기지 못한다는 까닭(`git-work` 스킬의 `PROJECT_PERMISSIONS.md`)과 함께 뺄지 묻는다. 빼기로 하면 `<kit-setup> --backup-file "$HOME/.claude/settings.json" git-ask`로 백업한 뒤 고른 항목만 `permissions.ask`에서 빼고 `--check-json`으로 읽히는지 본다. 키트 스크립트는 이 항목을 빼지 않는다. 사용자 `settings.json`의 확인 창을 사용자 몰래 줄이지 않으려는 것이다.
+- 개인용인데 전역 `permissions.ask`에 commit, merge, rebase, push 확인이 남아 있으면 `update`와 개인용으로 가는 `set-profile`의 출력에서 `settings.gitAsk.keptCommitAsks`가 비어 있지 않게 나온다(처음부터 전역에 둔 경우와 회사용에서 바꾼 경우 모두. `set-profile`은 보기만 하고 `settings.json`을 쓰지 않는다). 그 목록을 보이고, 남기면 프로젝트별 허용이 이 확인을 이기지 못한다는 까닭(`git-work` 스킬이 깔려 있으면 그 `PROJECT_PERMISSIONS.md`)과 함께 뺄지 묻는다. 빼기로 하면 `<kit-setup> --backup-file "$HOME/.claude/settings.json" git-ask`로 백업한 뒤 고른 항목만 `permissions.ask`에서 빼고 `--check-json`으로 읽히는지 본다. 키트 스크립트는 이 항목을 빼지 않는다. 사용자 `settings.json`의 확인 창을 사용자 몰래 줄이지 않으려는 것이다.
 - 어느 쪽이든 사용자 `CLAUDE.md`와 프로젝트 규칙이 먼저이고 키트 규칙은 그 아래에 놓인다.
 
 ## 제거

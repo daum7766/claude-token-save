@@ -1,5 +1,24 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+// classic 훅 없이 세션 id로 기록 파일을 찾는 길을 시험에 깐다. 권한 모드는 그 파일의 마지막 permission-mode 줄에서 온다
+const CFG = '/cfg'
+const SESSION_ID = 's1'
+const TRANSCRIPT = `${CFG}/projects/p1/${SESSION_ID}.jsonl`
+type Handlers = Parameters<Parameters<typeof test>[2]>[1]
+function wireSession(on: Handlers, id: string = SESSION_ID, files: string[] = [TRANSCRIPT], mtime: () => number = () => 1) {
+  on('session.id', () => ({ value: id }) as never)
+  on('fs.list', (_$, e) => ((e as { path?: string }).path === `${CFG}/projects` ? { value: [{ name: 'p1', kind: 'dir', size: 0, isLink: false }] } : { deny: 'ENOENT' }) as never)
+  on('fs.exists', (_$, e) => ({ value: files.includes((e as { path: string }).path) }) as never)
+  on('fs.stat', (_$, e) => (files.includes((e as { path: string }).path) ? { value: { kind: 'file', size: 1, mtimeMs: mtime(), isLink: false } } : { deny: 'ENOENT' }) as never)
+}
+const configDirEnv = (_$: unknown, e: unknown) => ({ value: (e as { name?: string }).name === 'CLAUDE_CONFIG_DIR' ? CFG : undefined }) as never
+// 기록 파일의 permission-mode 줄을 읽는 sh -c grep 호출에 답한다. 다른 호출이면 undefined
+function permRun(e: { argv: string[] }, mode = 'bypassPermissions') {
+  if (e.argv[0] !== 'sh' || !e.argv[2]?.includes('permission-mode')) return undefined
+  const line = JSON.stringify({ type: 'permission-mode', permissionMode: mode, sessionId: SESSION_ID })
+  return { value: { exitCode: 0, stdout: `${line}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+}
+
 const usage = (model: string) => ({
   model,
   input_tokens: 1000,
@@ -17,7 +36,7 @@ test('입력창 아래 힌트 줄과 함께 메인 줄을 늘 그리고, 요청 
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: { effortLevel: 'xhigh', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } } }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', (_$, e) => ({
+  on('process.run', (_$, e) => permRun(e) ?? ({
     value: { exitCode: e.argv[0] === 'git' ? 0 : 1, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.status', () => ({ value: undefined }))
@@ -33,7 +52,8 @@ test('입력창 아래 힌트 줄과 함께 메인 줄을 늘 그리고, 요청 
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
+  on('env.get', configDirEnv)
   let isCold = false
   on('turn.step', async function* (_$, e) {
     await clock.advance(2000)
@@ -69,7 +89,6 @@ test('입력창 아래 힌트 줄과 함께 메인 줄을 늘 그리고, 요청 
   const has = async (re: RegExp) => expect((await lines()).filter(l => re.test(l))).toHaveLength(1)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
   await clock.advance(1000)
   await has(/^⏵⏵ bypass permissions on \(shift\+tab to cycle\)$/)
   // 첫 요청 전: effort는 설정 파일의 모델별 값, 경과는 비어 있다
@@ -134,19 +153,18 @@ for (const [name, envEffort, settings, label] of [
   test(`첫 요청 전 메인 줄의 effort는 ${name}`, { timeoutMs: 30_000 }, async ($, on) => {
     const clock = mock.clock(on)
     on('agent.list', () => ({ value: [] }))
-    on('env.get', (_$, e) => ({ value: (e as { name?: string }).name === 'CLAUDE_CODE_EFFORT_LEVEL' ? envEffort : undefined }) as never)
+    on('env.get', (_$, e) => ({ value: (e as { name?: string }).name === 'CLAUDE_CODE_EFFORT_LEVEL' ? envEffort : (e as { name?: string }).name === 'CLAUDE_CONFIG_DIR' ? CFG : undefined }) as never)
     on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
     on('settings.read', () => ({ value: settings }) as never)
     on('session.cwd', () => ({ value: '/repo' }))
-    on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
     on('ui.status', () => ({ value: undefined }))
     on('ui.render', () => null as never)
     on('command.register', () => ({ value: {} }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
-    on('classic.SessionStart', () => ({}) as never)
+    wireSession(on)
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-    await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
     await clock.advance(1000)
     const texts = (await (await mountHint($)).findAll({ type: 'Text' })).map(t => t.text)
     const re = new RegExp(`^\\s*main\\s+opus 5\\.5\\s+${label ? `${label}\\s+` : ''}38%\\s*$`)
@@ -171,7 +189,7 @@ test('resume한 세션은 기록 파일에서 메인 줄을 되살린다', { tim
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', (_$, e) => ({
+  on('process.run', (_$, e) => permRun(e) ?? ({
     value: { exitCode: 0, stdout: e.argv[0] === 'jq' ? jqOut : 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.status', () => ({ value: undefined }))
@@ -184,10 +202,10 @@ test('resume한 세션은 기록 파일에서 메인 줄을 되살린다', { tim
   on('ui.render', () => null as never)
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
+  on('env.get', configDirEnv)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'resume', transcript_path: '/t/s.jsonl' } as never)
   await clock.advance(1000)
   const hint = await $.ui.mount({
     plugin: 'agent-meter',
@@ -342,12 +360,12 @@ for (const [name, options, isWarmed] of [
     const toasts: string[] = []
     let forks = 0
     on('agent.list', () => ({ value: [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] }))
-    on('env.get', () => ({ value: undefined }) as never)
+    on('env.get', configDirEnv)
     on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
     on('settings.read', () => ({ value: {} }) as never)
     on('session.cwd', () => ({ value: '/repo' }))
-    on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
     on('ui.status', () => ({ value: undefined }))
     on('ui.toast', (_$, e) => {
       toasts.push(e.text)
@@ -362,14 +380,13 @@ for (const [name, options, isWarmed] of [
     on('command.register', () => ({ value: {} }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('turn.complete', () => ({ text: '' }))
-    on('classic.SessionStart', () => ({}) as never)
+    wireSession(on)
     on('turn.step', async function* (_$, e) {
       await clock.advance(2000)
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
     })
 
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-    await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
     await clock.advance(1000)
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
     }
@@ -387,12 +404,12 @@ async function startFiveMinuteMain($: Parameters<Parameters<typeof test>[2]>[0],
   const toasts: string[] = []
   const state = { forks: 0 }
   on('agent.list', () => ({ value: opts.isAgentRunning ? [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] : [] }))
-  on('env.get', () => ({ value: undefined }) as never)
+  on('env.get', configDirEnv)
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', (_$, e) => ({
+  on('process.run', (_$, e) => permRun(e) ?? ({
     value: { exitCode: e.argv.some(a => a.includes('ephemeral_5m')) ? 0 : 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.status', () => ({ value: undefined }))
@@ -410,13 +427,12 @@ async function startFiveMinuteMain($: Parameters<Parameters<typeof test>[2]>[0],
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
   on('turn.step', async function* (_$, e) {
     await clock.advance(2000)
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions', transcript_path: '/t/s.jsonl' } as never)
   await clock.advance(1000)
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
   }
@@ -468,7 +484,7 @@ test('연장 요청이 캐시를 읽지 못하면 그 요청의 비용을 메인
 })
 
 // 엔진이 /clear 뒤 상태를 비우는 것과 같은 상황을 만들려고, 상태를 직접 비우는 대신 권한 모드가 아직 없는 채로 시작한다
-function baseHandlers(on: Parameters<Parameters<typeof test>[2]>[1], extra: { defaultMode?: () => string | undefined; env?: Record<string, string> } = {}) {
+function baseHandlers(on: Parameters<Parameters<typeof test>[2]>[1], extra: { defaultMode?: () => string | undefined; env?: Record<string, string>; mode?: () => string } = {}) {
   const clock = mock.clock(on)
   on('agent.list', () => ({ value: [] }))
   on('env.get', (_$, e) => {
@@ -479,7 +495,7 @@ function baseHandlers(on: Parameters<Parameters<typeof test>[2]>[1], extra: { de
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: extra.defaultMode?.() ? { permissions: { defaultMode: extra.defaultMode() } } : {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => permRun(e, extra.mode?.()) ?? ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.status', () => ({ value: undefined }))
   // 표를 그리지 않고 next(e)로 넘기면 여기까지 와서 이 표시가 그려진다
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['표시 숨김'] }) as never)
@@ -596,7 +612,7 @@ const doubledOpus = { 'claude-opus-5-5': { input: 8, write5m: 10, write1h: 16, c
 
 type RatesFile = { text: string; mtimeMs: number } | null
 
-async function mainCost($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], file: () => RatesFile, env: Record<string, string> = { CLAUDE_CONFIG_DIR: RATES_DIR }, path = RATES_FILE) {
+async function mainCost($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], file: () => RatesFile, env: Record<string, string> = { CLAUDE_CONFIG_DIR: RATES_DIR }, path = RATES_FILE, model = 'claude-opus-5-5') {
   const clock = baseHandlers(on, { env })
   const reads: string[] = []
   on('fs.stat', (_$, e) => {
@@ -609,15 +625,15 @@ async function mainCost($: Parameters<Parameters<typeof test>[2]>[0], on: Parame
     return (f ? { value: f.text } : { deny: 'ENOENT' }) as never
   })
   on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage(model) }
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const step = async (turnId: string) => {
-    for await (const _ of $.turn.step({ turnId, index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
+    for await (const _ of $.turn.step({ turnId, index: 0, model, effort: 'medium', messageCount: 1 })) {
     }
     await clock.advance(1000)
     const texts = (await (await mountHint($)).findAll({ type: 'Text' })).map(t => t.text)
-    return /\s(\$[\d.]+|\?)\s*$/.exec(texts.find(t => /^\s*main\s/.test(t)) ?? '')?.[1]
+    return /\s(≈?\$[\d.]+|\?)\s*$/.exec(texts.find(t => /^\s*main\s/.test(t)) ?? '')?.[1]
   }
   return { clock, reads, step }
 }
@@ -685,7 +701,7 @@ for (const [model, label, percentText, answeredModel = model] of [
     on('session.model', () => ({ value: 'claude-opus-5-5' }))
     on('settings.read', () => ({ value: {} }) as never)
     on('session.cwd', () => ({ value: '/repo' }))
-    on('process.run', (_$, e) => ({
+    on('process.run', (_$, e) => permRun(e) ?? ({
       value: { exitCode: e.argv[0] === 'git' ? 0 : 1, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
     }))
     on('ui.status', () => ({ value: undefined }))
@@ -695,7 +711,7 @@ for (const [model, label, percentText, answeredModel = model] of [
     on('command.register', () => ({ value: {} }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('turn.complete', () => ({ text: '' }))
-    on('classic.SessionStart', () => ({}) as never)
+    wireSession(on)
     on('turn.step', async function* (_$, e) {
       return {
         turnId: e.turnId,
@@ -707,7 +723,6 @@ for (const [model, label, percentText, answeredModel = model] of [
       }
     })
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-    await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model, effort: 'low', messageCount: 1, agentId: 'a1' })) {
     }
     await clock.advance(1000)
@@ -741,14 +756,14 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
     state.agentListCalls += 1
     return { value: state.isAgentRunning ? [{ id: 'a1', type: 'sonnet-medium', description: '문서 검수', status: 'running' as const }] : [] }
   })
-  on('env.get', () => ({ value: undefined }) as never)
+  on('env.get', configDirEnv)
   on('session.usage', () => ({
     value: { startedAt: 0, context: { window: 1_000_000, tokens: hasTokens, percent: 30, ...(breakdown ? { breakdown } : {}) }, rateLimits: [], cost: { usd: 1.5 } },
   }) as never)
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
@@ -766,7 +781,7 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
   on('turn.step', async function* (_$, e) {
     await clock.advance(2000)
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
@@ -774,7 +789,6 @@ async function compactAfterIdle($: Parameters<Parameters<typeof test>[2]>[0], on
   on('session.compact', () => ({ messages: [{ role: 'user', text: 'kept', toolUses: [] }] }) as never)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
   await clock.advance(1000)
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
   }
@@ -900,25 +914,24 @@ test('시계, 타이머, 명령 등록, 상태줄 호출이 거절돼도 훅이 
     throw new Error('blocked')
   })
   on('agent.list', () => ({ value: [] }))
-  on('env.get', () => ({ value: undefined }) as never)
+  on('env.get', configDirEnv)
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
   on('ui.render', () => null as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
   })
   on('session.compact', () => ({ messages: [{ role: 'user', text: 'kept', toolUses: [] }] }) as never)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'startup', permission_mode: 'bypassPermissions' } as never)
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) {
   }
   const compact = await ($.session.compact as (input: unknown) => Promise<{ skip?: string }>)({ trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] })
@@ -960,16 +973,16 @@ test('거절돼 켜진 시계 표시도 /clear로 세션이 끝나면 지워진�
   on('command.register', () => ({ value: {} }) as never)
   on('ui.status', () => ({ value: undefined }))
   on('agent.list', () => ({ value: [] }))
-  on('env.get', () => ({ value: undefined }) as never)
+  on('env.get', configDirEnv)
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, percent: 38 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.render', () => null as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 's1' }) as never)
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-opus-5-5') }
   })
@@ -1005,7 +1018,7 @@ test('차례를 끝내고 뒤 작업을 기다리는 서브에이전트는 표�
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('settings.read', () => ({ value: {} }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => permRun(e) ?? ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }) as never)
@@ -1014,7 +1027,8 @@ test('차례를 끝내고 뒤 작업을 기다리는 서브에이전트는 표�
   on('command.register', () => ({ value: {} }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
-  on('classic.SessionStart', () => ({}) as never)
+  wireSession(on)
+  on('env.get', configDirEnv)
   on('turn.step', async function* (_$, e) {
     await clock.advance(1000)
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] as never, stopReason: 'end_turn', usage: usage('claude-sonnet-5-5') }
@@ -1032,7 +1046,6 @@ test('차례를 끝내고 뒤 작업을 기다리는 서브에이전트는 표�
   const agentRows = async () => (await lines()).filter(l => /^\s*문서 검수\s/.test(l))
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.classic.SessionStart({ source: 'startup', permission_mode: 'default' } as never)
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1, agentId: 'a1' })) {
   }
   await clock.advance(1000)
@@ -1052,4 +1065,59 @@ test('차례를 끝내고 뒤 작업을 기다리는 서브에이전트는 표�
   status = 'completed'
   await clock.advance(1000)
   expect(await agentRows()).toHaveLength(0)
+})
+
+test('classic 훅 없이 세션 id로 찾은 기록 파일의 마지막 permission-mode 줄로 표를 권한 모드 표시 폭(-27)만큼 당긴다', { timeoutMs: 30_000 }, async ($, on) => {
+  baseHandlers(on, { env: { CLAUDE_CONFIG_DIR: CFG }, mode: () => 'bypassPermissions' })
+  wireSession(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const margins = (await (await mountHint($)).findAll({ type: 'Box' })).map(b => (b.props as { marginLeft?: number }).marginLeft)
+  expect(margins).toContain(-27)
+})
+
+test('세션 id의 기록 파일이 어느 프로젝트 폴더에도 없으면 권한 모드를 비워 두고 표는 그대로 그린다', { timeoutMs: 30_000 }, async ($, on) => {
+  baseHandlers(on, { env: { CLAUDE_CONFIG_DIR: CFG }, mode: () => 'bypassPermissions' })
+  wireSession(on, SESSION_ID, [])
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const m = await mountHint($)
+  expect((await m.findAll({ type: 'Box' })).map(b => (b.props as { marginLeft?: number }).marginLeft)).not.toContain(-27)
+  expect((await m.findAll({ type: 'Text' })).length).toBeGreaterThan(0)
+})
+
+test('기록 파일의 권한 모드가 shift+tab으로 바뀌면 다음 갱신에 따라간다', { timeoutMs: 30_000 }, async ($, on) => {
+  let mode = 'bypassPermissions'
+  let mtimeMs = 1
+  const clock = baseHandlers(on, { env: { CLAUDE_CONFIG_DIR: CFG }, mode: () => mode })
+  wireSession(on, SESSION_ID, [TRANSCRIPT], () => mtimeMs)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const margin = async () => (await (await mountHint($)).findAll({ type: 'Box' })).map(b => (b.props as { marginLeft?: number }).marginLeft)
+  expect(await margin()).toContain(-27)
+  mode = 'plan'
+  mtimeMs = 2
+  await clock.advance(6000)
+  const planMargin = -(('⏸ plan mode on · ').length)
+  expect(await margin()).toContain(planMargin)
+})
+
+test('claude-fable-5-2는 내장 요율로 계산하고 어림 표시가 없다', { timeoutMs: 30_000 }, async ($, on) => {
+  const { step } = await mainCost($, on, () => null, undefined, undefined, 'claude-fable-5-2')
+  expect(await step('t1')).toBe('$0.27')
+})
+
+test('표에 없는 모델은 같은 계열에서 가장 높은 버전의 요율로 어림하고 ≈를 붙인다', { timeoutMs: 30_000 }, async ($, on) => {
+  const file = { text: JSON.stringify({ 'claude-opus-5-5': doubledOpus['claude-opus-5-5'], 'claude-opus-6-0': { input: 1, write5m: 1, write1h: 1, cacheRead: 1, output: 1 } }), mtimeMs: 1 }
+  const { step } = await mainCost($, on, () => file, undefined, undefined, 'claude-opus-6-1')
+  // 가장 높은 6.0 요율(모두 1): 1000+10000+100000+2000 = 113000 → $0.11
+  expect(await step('t1')).toBe('≈$0.11')
+})
+
+test('계열을 아는 모델이 표에 없고 새 모델 id여도 내장 표의 같은 계열 요율로 어림한다', { timeoutMs: 30_000 }, async ($, on) => {
+  const { step } = await mainCost($, on, () => null, undefined, undefined, 'claude-sonnet-5-9')
+  // sonnet 5.5: 2000+40000+10000+20000 = 72000
+  expect(await step('t1')).toBe('≈$0.07')
+})
+
+test('계열도 모르는 모델은 어림하지 않고 ?로 비운다', { timeoutMs: 30_000 }, async ($, on) => {
+  const { step } = await mainCost($, on, () => null, undefined, undefined, 'claude-zeta-1-0')
+  expect(await step('t1')).toBe('?')
 })

@@ -1,6 +1,6 @@
 'use strict';
 
-// 사용자 설정 값(호칭, 선택지 받는 꼴, 답할 언어, 사용 방식, 올릴 것 갈래)을 읽는 모듈이다. CJS 훅과 ESM 스크립트가 함께 쓰려고 .cjs로 두고, 파일 맨 위에서 비동기로 기다리지 않는다.
+// 사용자 설정 값(호칭, 선택지 받는 꼴, 답할 언어, 사용 방식, 휴대폰 알림, 올릴 것 갈래)을 읽는 모듈이다. CJS 훅과 ESM 스크립트가 함께 쓰려고 .cjs로 두고, 파일 맨 위에서 비동기로 기다리지 않는다.
 // 값마다 「설정 문서(<설정 폴더>/USER_SETTINGS.md의 `## 값`) → 설정 폴더 CLAUDE.md의 같은 꼴 줄 → config.json → 기본값」 차례로 읽고 읽은 자리를 함께 돌려준다.
 // 기계가 읽는 것은 `## 값`의 `- 이름: 값` 줄과 `## 올릴 것`의 줄머리(첫 쌍점 앞)뿐이다. 나머지는 Claude가 읽는 글이다.
 // 설정 문서가 없거나 못 읽어도 던지지 않고 다음 자리로 넘어간다. 훅이 이 모듈 때문에 꺼지지 않게 하려는 것이다.
@@ -17,7 +17,8 @@ const DEFAULT_CALL_NAME = '사용자';
 // 올릴 것 갈래의 기본. 회고의 묻기 종류 앞 넷과 같다.
 const DEFAULT_RAISE_KINDS = ['돈', '되돌리기 어려운 일', '정책', '목표로 못 가르는 트레이드오프'];
 const PROFILE_LINES = { personal: '개인용', company: '회사용' };
-const LABELS = { callName: '호칭', choiceForm: '선택지 받는 꼴', lang: '답할 언어', profileLine: '사용 방식' };
+const PHONE_NOTIFY = ['켬', '끔'];
+const LABELS = { callName: '호칭', choiceForm: '선택지 받는 꼴', lang: '답할 언어', profileLine: '사용 방식', phoneNotify: '휴대폰 알림' };
 
 const defaultConfigDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 
@@ -97,6 +98,7 @@ const PARSERS = {
   choiceForm: (raw) => (CHOICE_FORMS.includes(raw) ? { value: raw } : { problem: `선택지 받는 꼴은 ${CHOICE_FORMS.join(' 또는 ')}이어야 합니다: ${raw}` }),
   lang: (raw) => (/^[a-z]{2,3}(-[A-Za-z0-9]+)*$/.test(raw) ? { value: raw } : { problem: `답할 언어 값이 언어 코드가 아닙니다: ${raw}` }),
   profileLine: (raw) => (Object.values(PROFILE_LINES).includes(raw) ? { value: raw } : { problem: `사용 방식은 개인용 또는 회사용이어야 합니다: ${raw}` }),
+  phoneNotify: (raw) => (PHONE_NOTIFY.includes(raw) ? { value: raw } : { problem: `휴대폰 알림은 ${PHONE_NOTIFY.join(' 또는 ')}이어야 합니다: ${raw}` }),
 };
 
 function readUserSettings(configDir = defaultConfigDir()) {
@@ -111,7 +113,8 @@ function readUserSettings(configDir = defaultConfigDir()) {
     callName: Array.isArray(config.decisionWords) && typeof config.decisionWords[0] === 'string' && config.decisionWords[0] ? config.decisionWords[0] : null,
     profileLine: PROFILE_LINES[config.profile] ?? null,
   };
-  const defaults = { callName: DEFAULT_CALL_NAME, choiceForm: DEFAULT_CHOICE_FORM, lang: DEFAULT_LANG, profileLine: PROFILE_LINES.company };
+  // 휴대폰 알림의 기본은 config의 사용 방식이 정한다(개인용 켬, 그 밖은 끔). 값 줄이 없는 옛 설치본과 사용 방식을 바꾼 뒤에도 따로 정하지 않았으면 따라간다.
+  const defaults = { callName: DEFAULT_CALL_NAME, choiceForm: DEFAULT_CHOICE_FORM, lang: DEFAULT_LANG, profileLine: PROFILE_LINES.company, phoneNotify: config.profile === 'personal' ? '켬' : '끔' };
 
   const values = {};
   const sources = {};
@@ -184,6 +187,9 @@ function josa(word, pair) {
   return hangul && (code - 0xac00) % 28 !== 0 ? forms[0] : forms[1];
 }
 
+// 휴대폰 알림(PushNotification)을 쓰는 설정인가. 읽지 못하면 사용 방식의 기본을 따르고, 그것도 못 읽으면 끔이다.
+const phoneNotifyOn = (configDir) => readUserSettings(configDir).values.phoneNotify === '켬';
+
 const raiseKinds = (configDir) => readUserSettings(configDir).raiseKinds;
 
 // 사용 방식이 정하는 「애매할 때」 문턱 줄. profile이 개인용이 아니면(없거나 모르는 값 포함) 회사용으로 본다(kitProfile.js profileOf, askFirstOf와 같은 규칙).
@@ -192,4 +198,4 @@ function ambiguityLine(config) {
   return `애매할 때: ${askFirst ? '되돌리는 비용이 거의 없는 것만 하고 나머지는 묻기' : '작으면 하고 알림'} (profile이 정함)`;
 }
 
-module.exports = { SETTINGS_FILE, DEFAULT_RAISE_KINDS, readConfig, readUserSettings, callName, decisionWords, decidedByPattern, josa, raiseKinds, ambiguityLine };
+module.exports = { SETTINGS_FILE, DEFAULT_RAISE_KINDS, readConfig, readUserSettings, callName, phoneNotifyOn, decisionWords, decidedByPattern, josa, raiseKinds, ambiguityLine };

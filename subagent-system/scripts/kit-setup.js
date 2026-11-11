@@ -24,7 +24,7 @@
  *   check-staged                                                 pre-commit 조각이 부르는 검사. 설치 저장소에서 올린 키트 파일이 원본 HEAD와 다르고 설치 값 자리 밖이면 종료 코드 1. KIT_DRIFT_SKIP=1이면 건너뜀
  *   bundles [--json]                                             찾은 묶음과 조각, 고를 항목, 기댐, 깔렸는지, 설치 안내(install.md) 경로를 보임
  *   settings [--json]                                            사용자 설정 문서(USER_SETTINGS.md)의 값과 어디서 읽었는지를 보임
- *   settings-init [--name 호칭] [--choice 창|본문] [--lang ko] [--dry-run]   설정 문서를 만들거나 값을 고침. 호칭은 decisionWords와 personalMarkers에도 더함
+ *   settings-init [--name 호칭] [--choice 창|본문] [--lang ko] [--phone-notify 켬|끔|기본] [--dry-run]   설정 문서를 만들거나 값을 고침(휴대폰 알림 기본은 사용 방식이 정함, 기본을 주면 값 줄을 비움). 호칭은 decisionWords와 personalMarkers에도 더함
  *   name-candidates                                              호칭 후보(git 사용자 이름, OS 사용자 이름, 기본 후보)
  *   hook-off|hook-on <묶음>/<이름>                               훅 하나를 settings에서 빼거나 다시 걺(config의 disabledHooks)
  *   hooks --compare <settings 가> <settings 나>                  두 settings의 훅 등록을 정규화해 견줌
@@ -649,7 +649,7 @@ function listFiles(dir, rel = '') {
 }
 
 function parseOptions(args) {
-  const valueOpts = ['--kit', '--profile', '--bundles', '--options', '--command-name', '--roles', '--records', '--name', '--choice', '--lang'];
+  const valueOpts = ['--kit', '--profile', '--bundles', '--options', '--command-name', '--roles', '--records', '--name', '--choice', '--lang', '--phone-notify'];
   const boolOpts = ['--dry-run', '--git-ask', '--no-git-ask', '--allow-older', '--json', '--compare', '--mark'];
   const o = { positional: [] };
   for (let i = 0; i < args.length; i += 1) {
@@ -1229,7 +1229,15 @@ function omittedKeep(ctx) {
 }
 
 // 키트에서 빠진 파일은 설치본이 손대지 않은 것만 지운다. 설치 값 자리(정의 description 등)만 고친 것은 손대지 않은 것으로 본다.
-function dropOrphans(ctx, entries, recorded, report) {
+// 이름표 없는 훅(사용자 훅)이 부르는 명령 목록. remove와 고아 지우기가 같이 쓴다.
+function userHookCommandsOf(plan) {
+  return Object.values(plan?.next?.hooks ?? {}).flatMap((groups) => (Array.isArray(groups) ? groups : []))
+    .flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).map((h) => String(h?.command ?? '')).filter((c) => c && !labelOf(c));
+}
+
+function dropOrphans(ctx, entries, recorded, report, plan = null) {
+  const userCommands = userHookCommandsOf(plan);
+  const keptForHooks = [];
   const baseRoot = path.join(ctx.sub, '.kit-base');
   // 옛 해시 기록(--record-kit-hashes)은 설치본 스크립트 폴더 전체를 적어 설치본에서 더한 스크립트도 들어간다. 기준본(.kit-base)이 있는 설치는 그것으로만 가린다. 기록까지 보면 설치본 전용 스크립트를 키트에서 빠진 것으로 보고 지운다(2026-11-03 설치본 전용 검사 훅이 기대는 스크립트가 지워짐).
   const legacy = !fs.existsSync(baseRoot);
@@ -1261,10 +1269,21 @@ function dropOrphans(ctx, entries, recorded, report) {
         (report.orphansLeft ??= []).push(key);
         continue;
       }
+      // 옛 판이 이름표 없이 등록한 훅 파일이 새 판에서 빠지면 등록은 사용자 훅으로 남는다. 파일만 지우면 도구 호출마다 훅 오류가 난다.
+      const useHook = userCommands.find((c) => slash(c).includes(key));
+      if (useHook) {
+        keptForHooks.push({ key, command: useHook });
+        report.orphansKept.push(key);
+        continue;
+      }
       if (!ctx.dry) fs.rmSync(dest);
       report.orphansRemoved.push(key);
     }
     if (!ctx.dry && base !== null) fs.rmSync(path.join(baseRoot, ...key.split('/')));
+  }
+  if (keptForHooks.length) {
+    report.keptForUserHooks = keptForHooks;
+    (report.notes ??= []).push(`사용자 훅이 부르는 키트 파일 ${keptForHooks.length}개는 지우지 않았습니다: ${keptForHooks.map((x) => x.key).join(', ')}. 키트에서는 빠진 파일입니다. 훅을 먼저 고치거나 빼세요`);
   }
   if (report.orphansLeft?.length && Array.isArray(report.notes)) {
     const left = report.orphansLeft;
@@ -1576,7 +1595,7 @@ function runSync(mode, rawArgs) {
   const userKept = report.files.filter((f) => f.status === 'user-file').map((f) => f.key);
   if (userKept.length) report.notes.push(`사용자가 둔 같은 이름 파일 ${userKept.length}건은 키트 파일이 아니라 건드리지 않았습니다: ${userKept.join(', ')}. 키트 판을 쓰려면 그 파일을 지우고 update를 다시 돌립니다`);
   carryUserFiles(lock2, oldLock, report.files);
-  dropOrphans(ctx, kitEntries, recorded, report);
+  dropOrphans(ctx, kitEntries, recorded, report, plan);
   if (mode === 'install') dropUnchosen(ctx, defs, kitEntries, command, report);
   // 공개판처럼 묶음 일부만 있는 키트로 갱신하면, commit-msg 이어 부르기는 깔려 있고 commitCheck도 검사로 남는데 검사 조각이 하나도 없어 소리 없이 꺼질 수 있다. 있던 검사가 이 갱신으로 꺼질 때만 알린다(다음 갱신에는 이미 조각이 없던 상태라 되풀이되지 않는다).
   if (hadCommitCheck && ctx.src.exists('bundles/omitted.json') && fs.existsSync(path.join(ctx.sub, 'hooks', 'git', 'commit-msg'))) {
@@ -1911,8 +1930,7 @@ function removeCommand(rawArgs) {
   const lock2 = lockApi.mergeLock(lock, { command: 'remove', bundles: names });
   const plan = planHooks(ctx, { defs, lock: lock2, config, entries: rest });
   // 사용자 훅(이름표 없는 명령)이 지울 파일을 부르면 그 파일은 지우지 않는다.
-  const userCommands = Object.values(plan.next.hooks ?? {}).flatMap((groups) => (Array.isArray(groups) ? groups : []))
-    .flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).map((h) => String(h?.command ?? '')).filter((c) => c && !labelOf(c));
+  const userCommands = userHookCommandsOf(plan);
 
   const kept = readKeptValues(ctx);
   const baseRoot = path.join(ctx.sub, '.kit-base');
@@ -2183,7 +2201,7 @@ function syncCommand(rawArgs) {
     if (row.status !== 'unchanged') report.files.push(row);
   }
   // 키트에서 지운 파일도 치운다. 덮어쓰기만 하면 지운 규칙과 스크립트가 설치본에 남아 계속 읽히고 돈다(설치본 검수 6회차 5번).
-  dropOrphans(ctx, all, null, report);
+  dropOrphans(ctx, all, null, report, plan);
   if (lock2) {
     carryUserFiles(lock2, ctx.lock, report.files);
     if (!ctx.dry) lockApi.writeLock(ctx.cfg, lock2);
@@ -2366,7 +2384,7 @@ function settingsCommand(rawArgs) {
   const config = readConfigAt(cfg);
   const result = { configDir: cfg, values: r.values, sources: r.sources, raiseKinds: r.raiseKinds, ambiguity: userSettingsApi.ambiguityLine(config), decisionWords: userSettingsApi.decisionWords(cfg), problems: r.problems };
   if (opts.json) return console.log(JSON.stringify(result, null, 2));
-  const label = { callName: '호칭', choiceForm: '선택지 받는 꼴', lang: '답할 언어', profileLine: '사용 방식' };
+  const label = { callName: '호칭', choiceForm: '선택지 받는 꼴', lang: '답할 언어', profileLine: '사용 방식', phoneNotify: '휴대폰 알림' };
   const source = { settings: '설정 문서', 'claude-md': 'CLAUDE.md', config: 'config', default: '기본값' };
   console.log([
     ...Object.keys(label).map((k) => `${label[k]}: ${r.values[k]}  (${source[r.sources[k]]})`),
@@ -2377,6 +2395,8 @@ function settingsCommand(rawArgs) {
 }
 
 const trimHonorific = (s) => (s.length > 1 && s.endsWith('님') ? s.slice(0, -1) : s);
+
+const PHONE_COMMENT = '<!-- 켬 또는 끔. 비우면 사용 방식을 따름(개인용 켬, 회사용 끔) -->';
 
 // 설정 문서의 `## 값` 줄 하나를 정한다. 줄이 없으면 값 절 끝에 더한다.
 function setValueLine(text, label, value, comment = '') {
@@ -2415,7 +2435,10 @@ function settingsInitCommand(rawArgs) {
     text = readText(tmpl);
     if (text === null) throw new Error(`설정 문서 견본을 찾지 못했습니다: ${tmpl}. 키트 폴더에서 돌리거나 --kit으로 알려 주세요`);
   }
+  const phoneMap = { 켬: '켬', 끔: '끔', on: '켬', off: '끔', 기본: '' };
+  if (opts.phoneNotify !== undefined && phoneMap[opts.phoneNotify] === undefined) throw new Error('--phone-notify는 켬, 끔, 기본 가운데 하나여야 합니다');
   const config = readConfigAt(cfg);
+  if (opts.phoneNotify !== undefined) text = setValueLine(text, '휴대폰 알림', phoneMap[opts.phoneNotify], phoneMap[opts.phoneNotify] ? '' : PHONE_COMMENT);
   if (opts.name !== undefined) text = setValueLine(text, '호칭', opts.name.trim());
   if (opts.choice !== undefined) text = setValueLine(text, '선택지 받는 꼴', choiceMap[opts.choice]);
   text = setValueLine(text, '답할 언어', opts.lang ?? (created ? 'ko' : userSettingsApi.readUserSettings(cfg).values.lang));

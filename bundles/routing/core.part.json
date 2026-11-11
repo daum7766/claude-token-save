@@ -28,6 +28,7 @@
     "subagent-system/hooks/usage-autolog.js",
     "subagent-system/hooks/retro-write-allow.js",
     "subagent-system/hooks/stall-check.js",
+    "subagent-system/hooks/wait-loop-guard.js",
     "subagent-system/hooks/lib/shellWrites.cjs",
     "subagent-system/hooks/git/pre-commit.d/20-moved-refs.cjs",
     "subagent-system/scripts/tests/agentCostTime.test.js",
@@ -48,6 +49,7 @@
     "subagent-system/scripts/tests/docHealth.test.js",
     "subagent-system/scripts/tests/retroWriteAllow.test.js",
     "subagent-system/scripts/tests/stallCheck.test.js",
+    "subagent-system/scripts/tests/waitLoopGuard.test.js",
     "subagent-system/scripts/tests/shellWrites.test.js"
   ],
   "kinds": {
@@ -85,6 +87,13 @@
       "event": "PreToolUse",
       "matcher": "SendMessage",
       "command": "node \"$HOME/.claude/subagent-system/hooks/brief-check.js\"",
+      "timeout": 10
+    },
+    {
+      "name": "wait-loop-guard",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "command": "node \"$HOME/.claude/subagent-system/hooks/wait-loop-guard.js\"",
       "timeout": 10
     },
     {

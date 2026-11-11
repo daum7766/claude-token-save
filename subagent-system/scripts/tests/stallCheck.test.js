@@ -10,6 +10,13 @@ const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-state-'));
 process.env.TMPDIR = STATE_DIR;
 after(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
 
+// 결정 알림은 사용자 설정의 휴대폰 알림이 켬일 때만 막는다. 실제 설정 폴더 값에 시험이 흔들리지 않게 개인용(켬) 설정 폴더를 기본으로 둔다.
+const CFG = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-cfg-'));
+fs.mkdirSync(path.join(CFG, 'subagent-system'));
+fs.writeFileSync(path.join(CFG, 'subagent-system', 'config.json'), JSON.stringify({ profile: 'personal' }));
+process.env.CLAUDE_CONFIG_DIR = CFG;
+after(() => fs.rmSync(CFG, { recursive: true, force: true }));
+
 const require = createRequire(import.meta.url);
 const { workScanCount, check, bgLeft, leftoverWork, oneShotIn, delivered, decisionItems, decisionCount, taskNotes, openBoxes, stopNotes, progressDirs, shellWorkFiles } = require('../../hooks/stall-check.js');
 
@@ -350,6 +357,25 @@ describe('stall-check 결정 알림과 결정 대기 중 이어 하기', () => {
     assert.match(check({ ...stop(), session_id: sid, transcript_path: f, last_assistant_message: DECIDE }).reason, /결정 알림: .*「결정 1건/);
     assert.equal(check({ ...stop(), session_id: sid, transcript_path: f, last_assistant_message: DECIDE, stop_hook_active: true }), null);
     assert.equal(check({ ...stop(), session_id: sid, transcript_path: f, last_assistant_message: DECIDE }), null);
+  });
+  it('휴대폰 알림이 끔(설정 값, 또는 회사용 값 없음)이면 알림을 안 보내도 막지 않고, 켬(개인용 값 없음 포함)이면 막는다', () => {
+    const f = transcript('phone-cfg', [userSay('정해야 할 것 있어?')]);
+    const run = (name, settings, profile) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-phone-'));
+      fs.mkdirSync(path.join(dir, 'subagent-system'));
+      fs.writeFileSync(path.join(dir, 'subagent-system', 'config.json'), JSON.stringify({ profile }));
+      if (settings !== null) fs.writeFileSync(path.join(dir, 'USER_SETTINGS.md'), `## 값\n${settings}\n`);
+      const prev = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = dir;
+      try { return check({ ...stop(), session_id: `stall-test-${process.pid}-phone-${name}`, transcript_path: f, last_assistant_message: DECIDE }); } finally {
+        if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prev;
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    assert.match(run('on', '- 휴대폰 알림: 켬', 'company').reason, /결정 알림/);
+    assert.equal(run('off', '- 휴대폰 알림: 끔', 'personal'), null);
+    assert.match(run('pers', null, 'personal').reason, /결정 알림/);
+    assert.equal(run('comp', null, 'company'), null);
   });
   it('열린 결정을 괄호 덧말이나 꼬리만 바꿔 다시 적으면 새 결정으로 보지 않고, 다른 결정은 새로 본다(바퀴 13 막음 1)', () => {
     const sid = `stall-test-${process.pid}-rekey`;

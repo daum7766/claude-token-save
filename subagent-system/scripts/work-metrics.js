@@ -1085,9 +1085,12 @@ function deviceLayer({ sinceLabel, since, now, caught, narrow, record }) {
   } else {
     const first = rows.reduce((a, c) => (c[0] < a ? c[0] : a), rows[0][0]);
     // 기록은 첫 줄부터 믿을 수 있으므로 판정 기간은 그날부터다.
-    if (first.slice(0, 10) > sinceLabel.slice(0, 10)) {
-      windowLabel = first.slice(0, 10);
-      windowStart = Date.parse(`${windowLabel}T00:00:00`);
+    // 시각 값끼리 견준다. 기록 시각은 UTC ISO라 날짜 글자를 로컬 자정으로 붙이면 한국 시간대에서 구간 시작이 하루 앞당겨진다.
+    const firstDay = localDate(Date.parse(first));
+    const firstMidnight = Date.parse(`${firstDay}T00:00:00`);
+    if (firstMidnight > since) {
+      windowLabel = firstDay;
+      windowStart = firstMidnight;
     }
     const by = outputByHook(rows);
     const total = [...by.values()].reduce((a, e) => a + e.chars, 0);

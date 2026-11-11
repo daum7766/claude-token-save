@@ -86,6 +86,46 @@ function readmeLeaks(readme, list, omittedTitles) {
   });
   return found;
 }
+// 조건 말: 같은 줄에 이 말이 있으면 「그 묶음이 없으면 건너뛴다」는 뜻이라 끊긴 참조로 보지 않는다. 목록은 여기 한곳에만 둔다.
+const CONDITION_WORDS = ['깔려 있으면', '깔려 있을 때', '깔려 있지 않', '깔려 있다면', '깔린 설치', '묶음이 없', '묶음이 깔리지'];
+// 키트 문서 이름이 아닌데 파일 이름 꼴이라 오탐이 나는 것(사용자나 프로젝트 쪽 파일).
+const NOT_KIT_DOCS = new Set(['CLAUDE.md', 'MEMORY.md', 'USER_SETTINGS.md', 'SKILL.md', 'README.md', 'CHANGES.md', 'AGENTS.md']);
+
+// 설치되지 않고 키트 관리자만 읽는 문서(base의 kitOnly)는 검사에서 뺀다. 이 문서의 시나리오 줄은 모든 묶음의 규칙 이름을 센다.
+const SCAN_SKIP = new Set(['subagent-system/docs/TEST_SCENARIOS.md']);
+
+/**
+ * 공개판 트리의 문서(md)와 규칙이 트리에 없는 키트 문서를 조건 없이 가리키는 줄을 찾는다.
+ * 왜: 공개판에 없는 묶음의 문서를 가리키는 줄이 그대로 나가, 공개판만 깐 사람의 Claude가 없는 문서를 찾아 헤맸다(리뷰 2026-11-11).
+ * 전제: 「키트 문서」는 키트 원본 안의 md 파일 이름과 rules/kit-*.md 이름이고, 트리에 같은 이름이 없는 것만 끊긴 것으로 본다. 같은 줄에 CONDITION_WORDS가 있으면 통과한다.
+ */
+function danglingKitRefs({ kit, out, treeList, kitFiles }) {
+  const inTree = new Set(treeList.map((f) => path.posix.basename(f)));
+  const names = new Set();
+  for (const f of kitFiles) {
+    if (!f.endsWith('.md') || f.startsWith('extras/') || f.startsWith('bundles/')) continue;
+    const b = path.posix.basename(f);
+    if (!inTree.has(b) && !NOT_KIT_DOCS.has(b)) names.add(b);
+  }
+  const ruleNames = new Set([...names].filter((n) => /^kit-.*\.md$/.test(n)).map((n) => n.replace(/\.md$/, '')));
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const alts = [...names, ...ruleNames].sort((a, b) => b.length - a.length).map(esc);
+  if (!alts.length) return [];
+  const re = new RegExp(`(?<![A-Za-z0-9_-])(${alts.join('|')})(?![A-Za-z0-9_-])`);
+  const found = [];
+  for (const f of treeList) {
+    const isRule = /(^|\/)rules\/[^/]+\.md$/.test(f);
+    if (!f.endsWith('.md') && !isRule) continue;
+    if (f.startsWith('bundles/') || path.posix.basename(f) === 'CHANGES.md' || SCAN_SKIP.has(f)) continue;
+    const file = path.join(out, ...f.split('/'));
+    if (!fs.existsSync(file)) continue;
+    fs.readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      const m = re.exec(line);
+      if (m && !CONDITION_WORDS.some((w) => line.includes(w))) found.push(`${f} ${i + 1}줄: 공개판에 없는 키트 문서 ${m[1]}`);
+    });
+  }
+  return found;
+}
 const DEFAULT_BUNDLES = ['base', 'routing', 'safety']; // 일하는 노하우 묶음은 비공개 저장소 권한으로만 나눈다(11-08 대표)
 const CHANGES_SRC = 'subagent-system/CHANGES.public.md';
 const CHANGES_OUT = 'subagent-system/CHANGES.md';
@@ -226,6 +266,8 @@ async function buildTree({ kit, out, bundles, tracked }) {
     copyOne(kit, out, f);
   }
   fs.writeFileSync(path.join(out, 'README.md'), readme);
+  const dangling = danglingKitRefs({ kit, out, treeList: [...list, 'bundles/omitted.json'], kitFiles: tracked ? [...tracked] : walk(kit) });
+  if (dangling.length) stop(`공개판 문서가 트리에 없는 키트 문서를 조건 없이 가리킵니다. 줄에 「깔려 있으면」 같은 조건을 붙이거나 공개판에 있는 자리로 고칩니다:\n${dangling.map((l) => `  ${l}`).join('\n')}`);
   // 뺀 묶음 조각의 파일을 설치본 키로 펼친 목록. 설치 쪽이 이 키만 고아로 남기고, 그 밖에 키트에서 빠진 파일(base, routing이 지우거나 이름 바꾼 것)은 지운다.
   const keep = new Set();
   for (const p of defs.parts) if (!bundles.includes(p.bundle) && p.origin !== 'local') for (const k of mod.expandFiles(p)) keep.add(k);
@@ -518,4 +560,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { PUBLIC_EXTRA, publicReadme, readmeLeaks, buildTree, writeChanges, privateNameCheck, putInto, guardPublicRepo, mkTmp, cleanTemps, main };
+module.exports = { PUBLIC_EXTRA, CONDITION_WORDS, publicReadme, readmeLeaks, danglingKitRefs, buildTree, writeChanges, privateNameCheck, putInto, guardPublicRepo, mkTmp, cleanTemps, main };

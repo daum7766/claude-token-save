@@ -164,6 +164,36 @@ describe('공개판 README 뽑기', { skip: SKIP }, () => {
   });
 });
 
+describe('공개판 문서의 끊긴 키트 문서 참조', { skip: SKIP }, () => {
+  const { danglingKitRefs } = createRequire(import.meta.url)(TOOL);
+  it('트리에 없는 키트 문서를 조건 없이 가리키는 줄만 찾는다', () => {
+    const out = tmp('dang');
+    put(out, 'docs/A.md', '`B.md`를 본다\n`B.md`가 깔려 있으면 본다\n`kit-hidden`을 따른다\n`kit-demo`는 있다\nCLAUDE.md는 사용자 파일\n');
+    put(out, 'rules/kit-demo.md', 'kit-hidden.md 참조');
+    put(out, 'docs/skip.md', 'B.md');
+    const got = danglingKitRefs({ kit: out, out, treeList: ['docs/A.md', 'rules/kit-demo.md', 'docs/skip.md'], kitFiles: ['docs/A.md', 'docs/B.md', 'docs/skip.md', 'rules/kit-demo.md', 'rules/kit-hidden.md', 'CLAUDE.md'] });
+    assert.deepEqual(got, [
+      'docs/A.md 1줄: 공개판에 없는 키트 문서 B.md',
+      'docs/A.md 3줄: 공개판에 없는 키트 문서 kit-hidden',
+      'rules/kit-demo.md 1줄: 공개판에 없는 키트 문서 kit-hidden.md',
+      'docs/skip.md 1줄: 공개판에 없는 키트 문서 B.md',
+    ]);
+  });
+  it('내보내기가 끊긴 참조에서 멈추고 파일과 줄을 찍는다', () => {
+    const kit = sampleKit();
+    put(kit, 'subagent-system/skills/demo/SKILL.md', 'skill\n자세한 것은 kit-hidden.md 에 있다\n');
+    const r = exportKit(kit, ['--out', path.join(tmp('out'), 'tree')]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /skills\/demo\/SKILL\.md 2줄: 공개판에 없는 키트 문서 kit-hidden\.md/);
+  });
+  it('같은 줄에 조건 말이 있으면 통과한다', () => {
+    const kit = sampleKit();
+    put(kit, 'subagent-system/skills/demo/SKILL.md', 'skill\nhidden 묶음이 깔려 있으면 kit-hidden.md 에 있다\n');
+    const r = exportKit(kit, ['--out', path.join(tmp('out'), 'tree')]);
+    assert.equal(r.status, 0, r.stderr);
+  });
+});
+
 describe('비공개 이름 검사', { skip: SKIP }, () => {
   it('내보낸 트리가 어떤 저장소의 무시 폴더 안에 있어도 폴더를 직접 훑어 잡는다', () => {
     const kit = sampleKit();
